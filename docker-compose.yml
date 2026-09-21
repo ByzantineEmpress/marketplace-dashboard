@@ -1,0 +1,50 @@
+version: "3.8"
+
+services:
+  # ---- Web app (FastAPI) ----
+  web:
+    build: .
+    container_name: marketplace-dashboard
+    restart: unless-stopped
+    volumes:
+      - .:/app
+      # Persist SQLite database outside the container
+      - db-data:/app
+    environment:
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      - DATABASE_URL=sqlite:///./marketplace.db
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme123}
+      - EBUY_CLIENT_ID=${EBUY_CLIENT_ID:-}
+      - EBUY_CLIENT_SECRET=${EBUY_CLIENT_SECRET:-}
+      - ESY_API_KEY=${ESY_API_KEY:-}
+      - ESY_API_SECRET=${ESY_API_SECRET:-}
+      - ALLOWED_ORIGINS=http://localhost,https://your-domain.com
+      - REQUIRE_HTTPS=true
+    expose:
+      - "8000"
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+    #   interval: 30s
+    #   timeout: 5s
+    #   retries: 3
+
+  # ---- Nginx reverse proxy ----
+  nginx:
+    image: nginx:alpine
+    container_name: marketplace-dashboard-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro  # self-signed or Let's Encrypt certs
+    depends_on:
+      - web
+    # Only expose if SSL certs exist
+    # command: ["nginx", "-g", "daemon off;"]
+
+volumes:
+  db-data:

@@ -1,0 +1,35 @@
+# Environment Variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.eggs/
+*.egg-info/
+.venv/
+venv/
+env/
+ENV/
+
+# Docker
+*.pid
+*.db
+*.db-shm
+*.db-wal
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log

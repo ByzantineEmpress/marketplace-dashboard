@@ -1,0 +1,69 @@
+{# Dashboard page — the main listing view.
+
+   Displays a grid of listing cards with filtering, search, and pagination. #}
+{% extends "base.html" %}
+
+{% block content %}
+<div class="dashboard">
+    <!-- Stats bar -->
+    <div class="stats-bar" id="stats-bar">
+        <div class="stat stat--active">
+            <span class="stat-number" id="stat-active">—</span>
+            <span class="stat-label">Active</span>
+        </div>
+        <div class="stat stat--sold">
+            <span class="stat-number" id="stat-sold">—</span>
+            <span class="stat-label">Sold</span>
+        </div>
+        <div class="stat stat--value">
+            <span class="stat-number" id="stat-value">$—</span>
+            <span class="stat-label">Value</span>
+        </div>
+        <div class="stat stat--total">
+            <span class="stat-number" id="stat-total">—</span>
+            <span class="stat-label">Total</span>
+        </div>
+    </div>
+
+    <!-- Search & filters -->
+    <div class="toolbar">
+        <div class="toolbar-left">
+            <input type="text" id="search-input" class="search-input" placeholder="Search listings...">
+            <select id="filter-platform" class="filter-select">
+                <option value="">All Platforms</option>
+                <option value="ebay">eBay</option>
+                <option value="etsy">Etsy</option>
+            </select>
+            <select id="filter-status" class="filter-select">
+                <option value="">All Status</option>
+                <option value="active">Active</option>
+                <option value="sold">Sold</option>
+                <option value="draft">Draft</option>
+            </select>
+            <!-- Shown by JS only when the user belongs to 2+ teams -->
+            <select id="filter-team" class="filter-select" style="display:none">
+                <option value="">All My Teams</option>
+            </select>
+        </div>
+        <div class="toolbar-right">
+            <button class="btn btn--sm btn--primary" id="refresh-btn">⟳ Refresh</button>
+        </div>
+    </div>
+
+    <!-- Listing grid -->
+    <div class="listing-grid" id="listing-grid">
+        <!-- Cards are injected by JS -->
+    </div>
+
+    <!-- Pagination -->
+    <div class="pagination" id="pagination">
+        <button class="btn btn--sm" id="prev-page" disabled>‹ Previous</button>
+        <span class="pagination-info" id="page-info">Page 1</span>
+        <button class="btn btn--sm" id="next-page">Next ›</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/dashboard.js"></script>
+{% endblock %}

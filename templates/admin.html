@@ -1,0 +1,153 @@
+{# Admin page — manage API keys and manually trigger syncs.
+
+   Each platform gets its own card where you can:
+   - View connection status
+   - Get an authorisation URL (for OAuth)
+   - Manually trigger a sync
+
+   Buttons use ids (wired up in /static/js/admin.js) rather than
+   inline onclick attributes, because the Content-Security-Policy
+   blocks inline scripts. #}
+{% extends "base.html" %}
+
+{% block content %}
+<div class="admin-page">
+    <h1>Admin Settings</h1>
+
+    <!-- Marketplace Accounts -->
+    <section class="admin-section">
+        <h2>Marketplace Accounts</h2>
+
+        <div class="account-cards" id="account-cards">
+            <!-- Cards injected by JS -->
+            <div class="account-card account-card--disconnected">
+                <div class="account-header">
+                    <span class="account-platform">eBay</span>
+                    <span class="account-status">Not Connected</span>
+                </div>
+                <div class="account-body">
+                    <p class="account-desc">Connect your eBay seller account to sync listings.</p>
+                    <button class="btn btn--sm btn--primary" id="connect-ebay">Connect eBay</button>
+                </div>
+            </div>
+
+            <div class="account-card account-card--disconnected">
+                <div class="account-header">
+                    <span class="account-platform">Etsy</span>
+                    <span class="account-status">Not Connected</span>
+                </div>
+                <div class="account-body">
+                    <p class="account-desc">Connect your Etsy shop to sync listings.</p>
+                    <button class="btn btn--sm btn--primary" id="connect-etsy">Connect Etsy</button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Manual Sync -->
+    <section class="admin-section">
+        <h2>Manual Sync</h2>
+        <div class="sync-buttons">
+            <button class="btn btn--primary" id="sync-ebay">Sync eBay Listings</button>
+            <button class="btn btn--primary" id="sync-etsy">Sync Etsy Listings</button>
+        </div>
+        <div class="sync-log" id="sync-log">
+            <!-- Sync messages appear here -->
+        </div>
+    </section>
+
+    <!-- API Keys -->
+    <section class="admin-section">
+        <h2>API Configuration</h2>
+        <div class="api-config">
+            <p>Set your marketplace API credentials in <code>.env</code> (see <code>setup.md</code> for instructions).</p>
+
+            <h3>eBay API</h3>
+            <p>
+                <a href="https://developer.ebay.com/" target="_blank" rel="noopener">eBay Developer Portal →</a>
+                Create an app, then set:
+            </p>
+            <pre>EBAY_CLIENT_ID=your_client_id
+EBAY_CLIENT_SECRET=your_client_secret</pre>
+
+            <h3>Etsy API</h3>
+            <p>
+                <a href="https://www.etsy.com/developers" target="_blank" rel="noopener">Etsy Developer Portal →</a>
+                Create a Seller App, then set:
+            </p>
+            <pre>ETSY_API_KEY=your_keystring
+ETSY_API_SECRET=your_shared_secret</pre>
+        </div>
+    </section>
+
+    <!-- Google Sign-In -->
+    <section class="admin-section">
+        <h2>Google Sign-In</h2>
+        <div class="settings-form" id="google-settings">
+            <p>
+                Sign in to this dashboard with a Google account.
+                Create the OAuth client at
+                <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console →</a>
+            </p>
+            <ol class="settings-steps">
+                <li>In Google Cloud Console, pick (or create) a project.</li>
+                <li>Under <em>APIs &amp; Services → OAuth consent screen</em>: set an app name and your support email. Status “Testing” is fine for personal use.</li>
+                <li>Under <em>APIs &amp; Services → Credentials → Create credentials → OAuth client ID</em>, choose <strong>Web application</strong>, leave the JS origins empty, and add the redirect URI shown below.</li>
+                <li>Copy the Client ID and Client Secret into the fields below, then save.</li>
+            </ol>
+            <div class="form-group">
+                <label for="google-redirect-uri">Authorised redirect URI (must match Google Cloud exactly)</label>
+                <input type="text" id="google-redirect-uri" class="input-mono" readonly>
+            </div>
+            <div class="form-group">
+                <label for="google-client-id">Client ID</label>
+                <input type="text" id="google-client-id" class="input-mono" placeholder="1234567890-abcdef.apps.googleusercontent.com" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="google-client-secret">Client Secret</label>
+                <input type="password" id="google-client-secret" class="input-mono" placeholder="GOCSPX-…" autocomplete="off">
+            </div>
+            <div class="form-group">
+                <label for="google-allowed-emails">Allowed emails <span class="label-hint">(optional — comma-separated; empty = any Google account may sign in)</span></label>
+                <input type="text" id="google-allowed-emails" placeholder="you@example.com" autocomplete="off">
+            </div>
+            <div class="settings-actions">
+                <button class="btn btn--primary" id="save-google-settings">Save Google Sign-In</button>
+                <span id="google-settings-status" class="settings-status"></span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Teams (shared inventory) -->
+    <section class="admin-section">
+        <h2>Teams</h2>
+        <p class="section-desc">
+            Teams share one inventory. Everyone you add here (by email) can sign in —
+            with Google — and see the same listings. New sign-ins join the
+            <em>Default Team</em> automatically, so sharing works out of the box.
+        </p>
+        <div id="teams-list">
+            <p>Loading teams...</p>
+        </div>
+        <div class="teams-actions">
+            <div class="form-group form-group--inline">
+                <input type="text" id="new-team-name" placeholder="New team name (e.g. 'Weekend Flips')">
+                <button class="btn btn--primary" id="create-team">Create Team</button>
+            </div>
+            <span id="teams-status" class="settings-status"></span>
+        </div>
+    </section>
+
+    <!-- Plugins -->
+    <section class="admin-section">
+        <h2>Plugins</h2>
+        <div id="plugin-list">
+            <p>Loading plugins...</p>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/admin.js"></script>
+{% endblock %}
