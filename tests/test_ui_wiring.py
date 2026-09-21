@@ -19,7 +19,7 @@ ids = set(re.findall(r'id="([^"]+)"', html))
 missing = []
 for js in ["app.js", "dashboard.js", "admin.js"]:
     src = (ROOT / "static/js" / js).read_text(encoding="utf-8")
-    refs = set(re.findall(r"getElementById\(['\"]?([\w-]+)", src))
+    refs = set(re.findall(r"getElementById\(['\"]([\w-]+)['\"]", src))
     for m in refs:
         if m not in ids:
             missing.append((js, m))
