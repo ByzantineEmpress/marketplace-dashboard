@@ -1470,3 +1470,45 @@ code {
 .listing-card {
     cursor: pointer;
 }
+
+/* Additional Button Variants */
+.btn--success {
+    background: #10b981;
+    color: #ffffff;
+    border-color: #059669;
+}
+.btn--success:hover {
+    background: #059669;
+}
+
+.btn--outline {
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+}
+.btn--outline:hover {
+    background: var(--bg-hover);
+    border-color: var(--text-muted);
+}
+
+/* Modal form controls */
+.modal-dialog input,
+.modal-dialog select,
+.modal-dialog textarea {
+    width: 100%;
+    padding: 9px 12px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+}
+
+.modal-dialog input:focus,
+.modal-dialog select:focus,
+.modal-dialog textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}

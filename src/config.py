@@ -57,6 +57,17 @@ class Config:
     ETSY_API_KEY: str = ""
     ETSY_API_SECRET: str = ""
 
+    # -- Poshmark integration --
+    POSHMARK_USERNAME: str = ""
+    POSHMARK_API_KEY: str = ""
+
+    # -- Amazon Seller Central (SP-API) --
+    AMAZON_SELLER_ID: str = ""
+    AMAZON_CLIENT_ID: str = ""
+    AMAZON_CLIENT_SECRET: str = ""
+    AMAZON_REFRESH_TOKEN: str = ""
+    AMAZON_MARKETPLACE_ID: str = "ATVPDKIKX0DER"  # Default US marketplace
+
     # Legacy aliases (backwards compatibility for previous AI generation)
     EBUY_CLIENT_ID: str = ""
     EBUY_CLIENT_SECRET: str = ""

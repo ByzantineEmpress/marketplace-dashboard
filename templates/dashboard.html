@@ -33,6 +33,9 @@
                 <option value="">All Platforms</option>
                 <option value="ebay">eBay</option>
                 <option value="etsy">Etsy</option>
+                <option value="poshmark">Poshmark</option>
+                <option value="amazon">Amazon</option>
+                <option value="local">Local Sales</option>
             </select>
             <select id="filter-status" class="filter-select">
                 <option value="">All Status</option>
@@ -45,7 +48,9 @@
                 <option value="">All My Teams</option>
             </select>
         </div>
-        <div class="toolbar-right">
+        <div class="toolbar-right" style="display: flex; gap: 8px;">
+            <button class="btn btn--sm btn--outline" id="open-teams-modal-btn">👥 Teams & Invites</button>
+            <button class="btn btn--sm btn--success" id="add-manual-listing-btn">+ Add Listing / Sale</button>
             <button class="btn btn--sm btn--primary" id="refresh-btn">⟳ Refresh</button>
         </div>
     </div>
@@ -60,6 +65,160 @@
         <button class="btn btn--sm" id="prev-page" disabled>‹ Previous</button>
         <span class="pagination-info" id="page-info">Page 1</span>
         <button class="btn btn--sm" id="next-page">Next ›</button>
+    </div>
+
+    <!-- Interactive listing details modal -->
+    <div id="listing-modal-backdrop" class="modal-backdrop" aria-hidden="true" role="dialog">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <div class="modal-header-left">
+                    <span id="modal-platform-icon"></span>
+                    <h2 class="modal-title" id="modal-title">Listing Details</h2>
+                </div>
+                <button type="button" class="modal-close" id="modal-close-btn" aria-label="Close dialog">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <!-- Content injected dynamically by JS -->
+            <div class="modal-footer" id="modal-footer">
+                <div class="modal-team-assignment">
+                    <label for="modal-team-dropdown" class="modal-detail-label">Team:</label>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <select id="modal-team-dropdown" class="filter-select"></select>
+                        <span id="modal-team-status" class="settings-status"></span>
+                    </div>
+                </div>
+                <div id="modal-action-wrap" style="display:flex;gap:8px;align-items:center;">
+                    <button type="button" class="btn btn--sm btn--success" id="modal-mark-sold-btn">✓ Mark Sold (Local)</button>
+                    <button type="button" class="btn btn--sm btn--danger" id="modal-delete-btn">🗑 Delete</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manual Listing / Local Sale Modal -->
+    <div id="manual-listing-modal" class="modal-backdrop" aria-hidden="true" style="display:none;">
+        <div class="modal-dialog" style="max-width: 520px;">
+            <div class="modal-header">
+                <h2 class="modal-title" id="manual-modal-title">Record Listing or Local Sale</h2>
+                <button type="button" class="modal-close" id="close-manual-modal-btn" aria-label="Close">&times;</button>
+            </div>
+            <form id="manual-listing-form">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="manual-title">Item Title *</label>
+                        <input type="text" id="manual-title" required placeholder="e.g. Vintage Denim Jacket, Sony Headphones, Pokémon Cards">
+                    </div>
+                    <div style="display: flex; gap: 12px;">
+                        <div class="form-group" style="flex: 1;">
+                            <label for="manual-price">Price ($ USD) *</label>
+                            <input type="number" step="0.01" min="0" id="manual-price" required placeholder="25.00">
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label for="manual-quantity">Quantity</label>
+                            <input type="number" min="0" id="manual-quantity" value="1">
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 12px;">
+                        <div class="form-group" style="flex: 1;">
+                            <label for="manual-platform">Sales Channel / Platform</label>
+                            <select id="manual-platform">
+                                <option value="local">Local / In-Person (Cash/Pickup)</option>
+                                <option value="facebook">Facebook Marketplace</option>
+                                <option value="craigslist">Craigslist / OfferUp</option>
+                                <option value="poshmark">Poshmark</option>
+                                <option value="amazon">Amazon</option>
+                                <option value="ebay">eBay</option>
+                                <option value="etsy">Etsy</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label for="manual-status">Status</label>
+                            <select id="manual-status">
+                                <option value="active">Active (Available for Sale)</option>
+                                <option value="sold">Sold (Completed Sale)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 12px;">
+                        <div class="form-group" style="flex: 1;">
+                            <label for="manual-sku">SKU / Custom ID (optional)</label>
+                            <input type="text" id="manual-sku" placeholder="e.g. LOC-001">
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label for="manual-team">Team Inventory</label>
+                            <select id="manual-team">
+                                <!-- Populated by JS -->
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="manual-desc">Notes / Description (optional)</label>
+                        <textarea id="manual-desc" rows="2" placeholder="e.g. Paid cash at yard sale; in great condition"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px;">
+                    <button type="button" class="btn" id="cancel-manual-modal-btn">Cancel</button>
+                    <button type="submit" class="btn btn--primary" id="save-manual-listing-btn">Save Item</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Teams & Invites Modal -->
+    <div id="teams-modal" class="modal-backdrop" aria-hidden="true" style="display:none;">
+        <div class="modal-dialog" style="max-width: 580px;">
+            <div class="modal-header">
+                <h2 class="modal-title">👥 Team Coordination & Invites</h2>
+                <button type="button" class="modal-close" id="close-teams-modal-btn" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="margin-bottom: 18px;">
+                    <label style="font-weight: 600; display: block; margin-bottom: 6px;">Your Active Teams</label>
+                    <div id="dashboard-teams-container">
+                        <p style="color: var(--text-muted);">Loading teams...</p>
+                    </div>
+                </div>
+
+                <hr style="border: 0; border-top: 1px solid var(--border); margin: 16px 0;">
+
+                <div id="team-share-link-section" style="margin-bottom: 18px;">
+                    <label style="font-weight: 600; display: block; margin-bottom: 4px;">Shareable Team Invite Link</label>
+                    <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 8px;">
+                        Anyone with this link can click and sign in with Google or their account to instantly join your team!
+                    </p>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="text" id="share-invite-url" readonly style="flex: 1; font-family: monospace; font-size: 12px; background: var(--bg); border: 1px solid var(--border); padding: 8px; border-radius: 4px;">
+                        <button type="button" class="btn btn--primary btn--sm" id="copy-invite-link-btn">📋 Copy Link</button>
+                    </div>
+                    <span id="copy-feedback" style="font-size: 12px; color: var(--success); display: none; margin-top: 4px;">✓ Link copied to clipboard!</span>
+                </div>
+
+                <hr style="border: 0; border-top: 1px solid var(--border); margin: 16px 0;">
+
+                <div style="margin-bottom: 18px;">
+                    <label style="font-weight: 600; display: block; margin-bottom: 4px;">Invite Collaborator by Email</label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="email" id="invite-email-input" placeholder="colleague@gmail.com" style="flex: 1;">
+                        <button type="button" class="btn btn--sm" id="send-email-invite-btn">Add to Team</button>
+                    </div>
+                    <span id="invite-email-status" style="font-size: 12px; margin-top: 4px; display: block;"></span>
+                </div>
+
+                <hr style="border: 0; border-top: 1px solid var(--border); margin: 16px 0;">
+
+                <div>
+                    <label style="font-weight: 600; display: block; margin-bottom: 4px;">Create a New Team</label>
+                    <div style="display: flex; gap: 8px;">
+                        <input type="text" id="dashboard-new-team-name" placeholder="e.g. Weekend Flips, Downtown Store" style="flex: 1;">
+                        <button type="button" class="btn btn--sm" id="dashboard-create-team-btn">+ Create Team</button>
+                    </div>
+                    <span id="dashboard-create-team-status" style="font-size: 12px; margin-top: 4px; display: block;"></span>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: flex-end;">
+                <button type="button" class="btn" id="close-teams-modal-footer-btn">Done</button>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}

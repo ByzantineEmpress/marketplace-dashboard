@@ -153,31 +153,66 @@ document.addEventListener("DOMContentLoaded", () => {
         } catch (e) { /* ignore */ }
     }
 
-    // Teams dropdown population
+    // Teams dropdown and modal population
     async function loadTeams() {
         const sel = document.getElementById("filter-team");
-        if (!sel) return;
+        const manualTeamSel = document.getElementById("manual-team");
+        const teamsContainer = document.getElementById("dashboard-teams-container");
+        const inviteUrlInput = document.getElementById("share-invite-url");
         try {
             const res = await fetch("/api/teams");
             if (!res.ok) return;
             const teams = await res.json();
             if (Array.isArray(teams)) {
                 loadedTeams = teams;
-                if (teams.length >= 2) {
-                    sel.innerHTML = '<option value="">All My Teams</option>';
+
+                if (sel) {
+                    if (teams.length >= 2) {
+                        sel.innerHTML = '<option value="">All My Teams</option>';
+                        teams.forEach(t => {
+                            const opt = document.createElement("option");
+                            opt.value = String(t.id);
+                            opt.textContent = t.name;
+                            if (state.team === String(t.id)) opt.selected = true;
+                            sel.appendChild(opt);
+                        });
+                        sel.style.display = "";
+                    } else {
+                        sel.style.display = "none";
+                    }
+                }
+
+                if (manualTeamSel) {
+                    manualTeamSel.innerHTML = "";
                     teams.forEach(t => {
                         const opt = document.createElement("option");
                         opt.value = String(t.id);
                         opt.textContent = t.name;
-                        sel.appendChild(opt);
+                        manualTeamSel.appendChild(opt);
                     });
-                    sel.style.display = "";
-                    sel.addEventListener("change", (e) => {
-                        state.team = e.target.value;
-                        state.page = 1;
-                        loadListings();
-                        loadStats();
-                    });
+                }
+
+                if (inviteUrlInput && teams.length > 0) {
+                    const activeTeam = teams.find(t => String(t.id) === state.team) || teams[0];
+                    inviteUrlInput.value = activeTeam.invite_url || "";
+                }
+
+                if (teamsContainer) {
+                    if (teams.length === 0) {
+                        teamsContainer.innerHTML = "<p style='color:var(--text-muted);'>No teams yet.</p>";
+                    } else {
+                        teamsContainer.innerHTML = teams.map(t => `
+                            <div class="team-card" style="padding: 10px 12px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg);">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                                    <strong>${escapeHtml(t.name)}</strong>
+                                    <span class="team-role-badge team-role-badge--${escapeHtml(t.role)}">${escapeHtml(t.role)}</span>
+                                </div>
+                                <div style="font-size: 12px; color: var(--text-muted);">
+                                    Members: ${t.members.map(m => escapeHtml(m.name || m.email)).join(", ")}
+                                </div>
+                            </div>
+                        `).join("");
+                    }
                 }
             }
         } catch (e) { /* single-team setups */ }
@@ -238,7 +273,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const teamSelect = document.getElementById("modal-team-dropdown");
         const statusSpan = document.getElementById("modal-team-status");
-        const actionWrap = document.getElementById("modal-action-wrap");
+        const markSoldBtn = document.getElementById("modal-mark-sold-btn");
+        const deleteBtn = document.getElementById("modal-delete-btn");
 
         if (teamSelect) {
             teamSelect.innerHTML = teamOptions;
@@ -246,12 +282,41 @@ document.addEventListener("DOMContentLoaded", () => {
         if (statusSpan) {
             statusSpan.textContent = "";
         }
-        if (actionWrap) {
-            actionWrap.innerHTML = listing.original_url ? `
-                <a href="${listing.original_url}" target="_blank" rel="noopener noreferrer" class="btn btn--sm btn--primary">
-                    View on ${listing.platform ? listing.platform.toUpperCase() : 'Marketplace'} ↗
-                </a>
-            ` : '';
+
+        if (markSoldBtn) {
+            markSoldBtn.style.display = listing.is_sold ? "none" : "";
+            markSoldBtn.onclick = async () => {
+                try {
+                    const res = await fetch(`/api/listings/${listing.id}/mark-sold`, { method: "POST" });
+                    const resData = await res.json();
+                    if (resData.ok) {
+                        listing.is_sold = true;
+                        listing.status = "sold";
+                        closeModal();
+                        loadListings();
+                        loadStats();
+                    }
+                } catch (err) {
+                    alert("Could not mark listing as sold: " + err.message);
+                }
+            };
+        }
+
+        if (deleteBtn) {
+            deleteBtn.onclick = async () => {
+                if (!confirm(`Delete listing "${listing.title}"?`)) return;
+                try {
+                    const res = await fetch(`/api/listings/${listing.id}`, { method: "DELETE" });
+                    const resData = await res.json();
+                    if (resData.ok) {
+                        closeModal();
+                        loadListings();
+                        loadStats();
+                    }
+                } catch (err) {
+                    alert("Could not delete listing: " + err.message);
+                }
+            };
         }
 
         // Wire team change in modal
@@ -279,7 +344,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 } catch (err) {
                     if (statusSpan) statusSpan.textContent = "✗ Network error";
                 }
-            });
+            };
         }
 
         modalBackdrop.classList.add("is-open");
@@ -298,9 +363,173 @@ document.addEventListener("DOMContentLoaded", () => {
             if (e.target === modalBackdrop) closeModal();
         });
     }
+
+    // --- Manual Listing Modal ---
+    const manualModal = document.getElementById("manual-listing-modal");
+    const openManualBtn = document.getElementById("add-manual-listing-btn");
+    const closeManualBtn = document.getElementById("close-manual-modal-btn");
+    const cancelManualBtn = document.getElementById("cancel-manual-modal-btn");
+    const manualForm = document.getElementById("manual-listing-form");
+
+    function openManualModal() {
+        if (!manualModal) return;
+        manualModal.style.display = "flex";
+        manualModal.classList.add("is-open");
+    }
+
+    function closeManualModal() {
+        if (!manualModal) return;
+        manualModal.style.display = "none";
+        manualModal.classList.remove("is-open");
+    }
+
+    if (openManualBtn) openManualBtn.addEventListener("click", openManualModal);
+    if (closeManualBtn) closeManualBtn.addEventListener("click", closeManualModal);
+    if (cancelManualBtn) cancelManualBtn.addEventListener("click", closeManualModal);
+
+    if (manualForm) {
+        manualForm.addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const payload = {
+                title: document.getElementById("manual-title").value.trim(),
+                price: parseFloat(document.getElementById("manual-price").value || 0),
+                quantity: parseInt(document.getElementById("manual-quantity").value || 1),
+                platform: document.getElementById("manual-platform").value,
+                status: document.getElementById("manual-status").value,
+                sku: document.getElementById("manual-sku").value.trim(),
+                team_id: document.getElementById("manual-team").value ? parseInt(document.getElementById("manual-team").value) : null,
+                description: document.getElementById("manual-desc").value.trim(),
+            };
+
+            try {
+                const res = await fetch("/api/listings/manual", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    manualForm.reset();
+                    closeManualModal();
+                    loadListings();
+                    loadStats();
+                } else {
+                    alert("Could not save listing: " + (data.error || "Unknown error"));
+                }
+            } catch (err) {
+                alert("Network error: " + err.message);
+            }
+        });
+    }
+
+    // --- Teams & Invites Modal ---
+    const teamsModal = document.getElementById("teams-modal");
+    const openTeamsBtn = document.getElementById("open-teams-modal-btn");
+    const closeTeamsBtn = document.getElementById("close-teams-modal-btn");
+    const closeTeamsFooterBtn = document.getElementById("close-teams-modal-footer-btn");
+    const copyInviteBtn = document.getElementById("copy-invite-link-btn");
+    const copyFeedback = document.getElementById("copy-feedback");
+    const sendInviteBtn = document.getElementById("send-email-invite-btn");
+    const inviteEmailInput = document.getElementById("invite-email-input");
+    const inviteEmailStatus = document.getElementById("invite-email-status");
+    const createTeamBtn = document.getElementById("dashboard-create-team-btn");
+    const newTeamNameInput = document.getElementById("dashboard-new-team-name");
+    const createTeamStatus = document.getElementById("dashboard-create-team-status");
+
+    function openTeamsModal() {
+        if (!teamsModal) return;
+        teamsModal.style.display = "flex";
+        teamsModal.classList.add("is-open");
+        loadTeams();
+    }
+
+    function closeTeamsModal() {
+        if (!teamsModal) return;
+        teamsModal.style.display = "none";
+        teamsModal.classList.remove("is-open");
+    }
+
+    if (openTeamsBtn) openTeamsBtn.addEventListener("click", openTeamsModal);
+    if (closeTeamsBtn) closeTeamsBtn.addEventListener("click", closeTeamsModal);
+    if (closeTeamsFooterBtn) closeTeamsFooterBtn.addEventListener("click", closeTeamsModal);
+
+    if (copyInviteBtn) {
+        copyInviteBtn.addEventListener("click", async () => {
+            const urlInput = document.getElementById("share-invite-url");
+            if (urlInput && urlInput.value) {
+                try {
+                    await navigator.clipboard.writeText(urlInput.value);
+                    if (copyFeedback) {
+                        copyFeedback.style.display = "inline-block";
+                        setTimeout(() => { copyFeedback.style.display = "none"; }, 2500);
+                    }
+                } catch (e) {
+                    urlInput.select();
+                    document.execCommand("copy");
+                }
+            }
+        });
+    }
+
+    if (sendInviteBtn) {
+        sendInviteBtn.addEventListener("click", async () => {
+            const email = (inviteEmailInput?.value || "").trim();
+            if (!email) return;
+            const teamId = state.team || (loadedTeams[0] ? loadedTeams[0].id : null);
+            if (!teamId) {
+                if (inviteEmailStatus) inviteEmailStatus.innerHTML = "<span class='flash flash--error flash--inline'>Create or select a team first.</span>";
+                return;
+            }
+            try {
+                const res = await fetch(`/api/teams/${teamId}/members`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email }),
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    if (inviteEmailInput) inviteEmailInput.value = "";
+                    if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--success flash--inline'>✓ Added ${escapeHtml(email)}!</span>`;
+                    loadTeams();
+                } else {
+                    if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(data.error || "Failed to add")}</span>`;
+                }
+            } catch (err) {
+                if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(err.message)}</span>`;
+            }
+        });
+    }
+
+    if (createTeamBtn) {
+        createTeamBtn.addEventListener("click", async () => {
+            const name = (newTeamNameInput?.value || "").trim();
+            if (!name) return;
+            try {
+                const res = await fetch("/api/teams", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name }),
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    if (newTeamNameInput) newTeamNameInput.value = "";
+                    if (createTeamStatus) createTeamStatus.innerHTML = `<span class='flash flash--success flash--inline'>✓ Team "${escapeHtml(name)}" created!</span>`;
+                    await loadTeams();
+                    loadListings();
+                } else {
+                    if (createTeamStatus) createTeamStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(data.error || "Failed")}</span>`;
+                }
+            } catch (err) {
+                if (createTeamStatus) createTeamStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(err.message)}</span>`;
+            }
+        });
+    }
+
     document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape" && modalBackdrop && modalBackdrop.classList.contains("is-open")) {
-            closeModal();
+        if (e.key === "Escape") {
+            if (modalBackdrop && modalBackdrop.classList.contains("is-open")) closeModal();
+            if (manualModal && manualModal.classList.contains("is-open")) closeManualModal();
+            if (teamsModal && teamsModal.classList.contains("is-open")) closeTeamsModal();
         }
     });
 
@@ -321,6 +550,17 @@ document.addEventListener("DOMContentLoaded", () => {
         state.page = 1;
         loadListings();
     });
+
+    // Event: team filter
+    const teamFilterEl = document.getElementById("filter-team");
+    if (teamFilterEl) {
+        teamFilterEl.addEventListener("change", (e) => {
+            state.team = e.target.value;
+            state.page = 1;
+            loadListings();
+            loadStats();
+        });
+    }
 
     // Event: status filter
     document.getElementById("filter-status").addEventListener("change", (e) => {
@@ -385,9 +625,15 @@ function renderCard(listing) {
 }
 
 function getPlatformIcon(platform) {
+    const p = (platform || '').toLowerCase();
     const icons = {
-        ebay: '<span class="platform-icon" style="color:#e53238;font-weight:bold">ebay</span>',
+        ebay: '<span class="platform-icon" style="color:#e53238;font-weight:bold">eBay</span>',
         etsy: '<span class="platform-icon" style="color:#F56400;font-weight:bold">Etsy</span>',
+        poshmark: '<span class="platform-icon" style="color:#8E1A34;font-weight:bold">Poshmark</span>',
+        amazon: '<span class="platform-icon" style="color:#FF9900;font-weight:bold">Amazon</span>',
+        local: '<span class="platform-icon" style="color:#10b981;font-weight:bold">Local</span>',
+        facebook: '<span class="platform-icon" style="color:#1877F2;font-weight:bold">FB Market</span>',
+        craigslist: '<span class="platform-icon" style="color:#795548;font-weight:bold">Craigslist</span>',
     };
-    return icons[platform] || `<span class="platform-icon">${escapeHtml(platform || '')}</span>`;
+    return icons[p] || `<span class="platform-icon">${escapeHtml(platform || '')}</span>`;
 }

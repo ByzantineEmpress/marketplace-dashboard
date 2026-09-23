@@ -10,6 +10,12 @@
         <h1>Marketplace Dashboard</h1>
         <p class="login-subtitle">Sign in to view your listings</p>
 
+        {% if invited_to %}
+        <div class="flash flash--success" style="margin-bottom: 16px;">
+            🎉 You have been invited to join <strong>{{ invited_to }}</strong>! Sign in below to accept.
+        </div>
+        {% endif %}
+
         {% if error %}
         <div class="flash flash--error">{{ error }}</div>
         {% endif %}

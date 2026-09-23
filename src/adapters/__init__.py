@@ -54,4 +54,16 @@ try:
 except ImportError:
     pass
 
+try:
+    from src.adapters.poshmark import PoshmarkAdapter
+    register_adapter("poshmark", PoshmarkAdapter)
+except ImportError:
+    pass
+
+try:
+    from src.adapters.amazon import AmazonAdapter
+    register_adapter("amazon", AmazonAdapter)
+except ImportError:
+    pass
+
 __all__ = ["register_adapter", "get_adapter", "list_registered_platforms"]

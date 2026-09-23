@@ -41,6 +41,28 @@
                     <button class="btn btn--sm btn--primary" id="connect-etsy">Connect Etsy</button>
                 </div>
             </div>
+
+            <div class="account-card account-card--disconnected">
+                <div class="account-header">
+                    <span class="account-platform">Poshmark</span>
+                    <span class="account-status">Not Connected</span>
+                </div>
+                <div class="account-body">
+                    <p class="account-desc">Connect your Poshmark closet to sync listings.</p>
+                    <button class="btn btn--sm btn--primary" id="connect-poshmark">Connect Poshmark</button>
+                </div>
+            </div>
+
+            <div class="account-card account-card--disconnected">
+                <div class="account-header">
+                    <span class="account-platform">Amazon</span>
+                    <span class="account-status">Not Connected</span>
+                </div>
+                <div class="account-body">
+                    <p class="account-desc">Connect your Amazon Seller Central (SP-API) account.</p>
+                    <button class="btn btn--sm btn--primary" id="connect-amazon">Connect Amazon</button>
+                </div>
+            </div>
         </div>
     </section>
 
@@ -50,6 +72,8 @@
         <div class="sync-buttons">
             <button class="btn btn--primary" id="sync-ebay">Sync eBay Listings</button>
             <button class="btn btn--primary" id="sync-etsy">Sync Etsy Listings</button>
+            <button class="btn btn--primary" id="sync-poshmark">Sync Poshmark</button>
+            <button class="btn btn--primary" id="sync-amazon">Sync Amazon</button>
         </div>
         <div class="sync-log" id="sync-log">
             <!-- Sync messages appear here -->
@@ -100,6 +124,54 @@
                         <input type="password" id="etsy-api-secret" class="input-mono" placeholder="Your-Etsy-Shared-Secret" autocomplete="off">
                     </div>
                 </div>
+
+                <!-- Poshmark Column -->
+                <div class="settings-col">
+                    <h3>Poshmark Closet</h3>
+                    <p class="section-desc">Configure your closet username and sync credentials.</p>
+                    <div class="form-group">
+                        <label for="poshmark-redirect-uri">OAuth / Callback URI</label>
+                        <input type="text" id="poshmark-redirect-uri" class="input-mono" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label for="poshmark-username">Poshmark Closet Username</label>
+                        <input type="text" id="poshmark-username" class="input-mono" placeholder="your_posh_closet" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="poshmark-api-key">API Token / Closet Key (optional)</label>
+                        <input type="password" id="poshmark-api-key" class="input-mono" placeholder="Optional token" autocomplete="off">
+                    </div>
+                </div>
+
+                <!-- Amazon Seller Central Column -->
+                <div class="settings-col">
+                    <h3>Amazon Seller Central (SP-API)</h3>
+                    <p class="section-desc">Selling Partner API app registered in Amazon Developer Console.</p>
+                    <div class="form-group">
+                        <label for="amazon-redirect-uri">OAuth Redirect URI</label>
+                        <input type="text" id="amazon-redirect-uri" class="input-mono" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label for="amazon-seller-id">Merchant Token / Seller ID</label>
+                        <input type="text" id="amazon-seller-id" class="input-mono" placeholder="A1BC2D3EF4GHIJ" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="amazon-client-id">LWA Client ID</label>
+                        <input type="text" id="amazon-client-id" class="input-mono" placeholder="amzn1.application-oa2-client.abc..." autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="amazon-client-secret">LWA Client Secret</label>
+                        <input type="password" id="amazon-client-secret" class="input-mono" placeholder="amzn1.oa2-cs.v1..." autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="amazon-refresh-token">LWA Refresh Token</label>
+                        <input type="password" id="amazon-refresh-token" class="input-mono" placeholder="Atzr|..." autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="amazon-marketplace-id">Marketplace ID</label>
+                        <input type="text" id="amazon-marketplace-id" class="input-mono" placeholder="ATVPDKIKX0DER" value="ATVPDKIKX0DER" autocomplete="off">
+                    </div>
+                </div>
             </div>
 
             <div class="settings-actions">
@@ -139,6 +211,12 @@
             <div class="form-group">
                 <label for="google-allowed-emails">Allowed emails <span class="label-hint">(optional — comma-separated; empty = any Google account may sign in)</span></label>
                 <input type="text" id="google-allowed-emails" placeholder="you@example.com" autocomplete="off">
+            </div>
+            <div class="form-group" style="margin-top: 10px;">
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="checkbox" id="google-dev-mode">
+                    <span>Enable Local Dev Simulator Mode <span class="label-hint">(bypasses Google Cloud for offline/local testing)</span></span>
+                </label>
             </div>
             <div class="settings-actions">
                 <button class="btn btn--primary" id="save-google-settings">Save Google Sign-In</button>

@@ -67,16 +67,23 @@ def _migrate_existing_db():
 
     # 1. listings.team_id column (missing on old DBs)
     with engine.begin() as conn:
+        # 1. listings.team_id column (missing on old DBs)
         cols = {row[1] for row in conn.execute(text("PRAGMA table_info(listings)"))}
         if "team_id" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN team_id INTEGER REFERENCES teams(id)"))
 
+        # 1b. teams.invite_code column (for shareable invite links)
+        team_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(teams)"))}
+        if "invite_code" not in team_cols:
+            conn.execute(text("ALTER TABLE teams ADD COLUMN invite_code VARCHAR(32)"))
+
     # 2. A default team that everything (and the local admin) belongs to
+    import secrets
     db = SessionLocal()
     try:
         default_team = db.query(Team).filter(Team.name == "Default Team").first()
         if default_team is None:
-            default_team = Team(name="Default Team")
+            default_team = Team(name="Default Team", invite_code=secrets.token_urlsafe(16))
             db.add(default_team)
             db.flush()
 
@@ -87,6 +94,10 @@ def _migrate_existing_db():
                 db.add(admin)
                 db.flush()
             db.add(TeamMembership(team_id=default_team.id, user_id=admin.id, role="owner"))
+
+        # Ensure all existing teams have an invite code
+        for t in db.query(Team).filter(Team.invite_code == None).all():  # noqa: E711
+            t.invite_code = secrets.token_urlsafe(16)
 
         # 3. Unassigned listings go to the default team (shared)
         db.query(Listing).filter(Listing.team_id == None).update(  # noqa: E711

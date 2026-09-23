@@ -317,10 +317,15 @@ class Team(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), unique=True, nullable=False)
+    invite_code = Column(String(32), unique=True, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def to_dict(self):
-        return {"id": self.id, "name": self.name}
+        return {
+            "id": self.id,
+            "name": self.name,
+            "invite_code": self.invite_code,
+        }
 
 
 class TeamMembership(Base):

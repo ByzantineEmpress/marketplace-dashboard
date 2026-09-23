@@ -90,7 +90,8 @@ def _ensure_default_team_membership(db: Session, user, role: str = "member"):
     """
     team = db.query(Team).filter(Team.name == "Default Team").first()
     if team is None:
-        team = Team(name="Default Team")
+        import secrets
+        team = Team(name="Default Team", invite_code=secrets.token_urlsafe(16))
         db.add(team)
         db.flush()
     already = (
@@ -107,6 +108,23 @@ def _ensure_default_team_membership(db: Session, user, role: str = "member"):
         )
         db.add(TeamMembership(team_id=team.id, user_id=user.id, role=role if not has_owner else "member"))
 
+
+def _process_pending_invite(db: Session, user, invite_code: str):
+    """If an invite_code is provided, add user to that team as a member."""
+    if not invite_code:
+        return None
+    team = db.query(Team).filter(Team.invite_code == invite_code).first()
+    if team:
+        exists = db.query(TeamMembership).filter(
+            TeamMembership.team_id == team.id,
+            TeamMembership.user_id == user.id,
+        ).first()
+        if not exists:
+            db.add(TeamMembership(team_id=team.id, user_id=user.id, role="member"))
+            db.flush()
+        return team
+    return None
+
 # ------------------------------------------------------------------ #
 #  PAGE ROUTER — HTML pages served by Jinja2 templates.
 # ------------------------------------------------------------------ #
@@ -117,14 +135,40 @@ page_router = APIRouter()
 async def login_page(request: Request):
     """Login page — POSTs to /api/auth/login."""
     error = request.query_params.get("error", "")
+    invited_to = request.query_params.get("invited_to", "")
     return templates.TemplateResponse(
         request=request,
         name="login.html",
         context={
             "error": error,
-            "google_enabled": bool(config.GOOGLE_CLIENT_ID),
+            "invited_to": invited_to,
+            "google_enabled": bool(config.GOOGLE_CLIENT_ID or config.GOOGLE_DEV_MODE),
         },
     )
+
+
+@page_router.get("/join/{invite_code}")
+async def join_team_page(invite_code: str, request: Request, db: Session = Depends(get_db)):
+    """Accept a shareable team invite link."""
+    team = db.query(Team).filter(Team.invite_code == invite_code).first()
+    if not team:
+        return RedirectResponse(url="/login?error=Invalid+or+expired+team+invite+link", status_code=302)
+
+    current_user = get_current_user(request)
+    if current_user:
+        exists = db.query(TeamMembership).filter(
+            TeamMembership.team_id == team.id,
+            TeamMembership.user_id == current_user["id"],
+        ).first()
+        if not exists:
+            db.add(TeamMembership(team_id=team.id, user_id=current_user["id"], role="member"))
+            db.commit()
+        return RedirectResponse(url=f"/dashboard?team={team.id}", status_code=302)
+
+    # User is not logged in: store invite in cookie and prompt sign in
+    response = RedirectResponse(url=f"/login?invited_to={quote(team.name)}", status_code=302)
+    response.set_cookie(key="pending_invite", value=invite_code, httponly=True, max_age=3600)
+    return response
 
 @page_router.get("/dashboard")
 async def dashboard_page(request: Request):
@@ -155,15 +199,19 @@ async def admin_page(request: Request):
 @page_router.get("/auth/google")
 async def google_login_start(request: Request):
     """Send the browser to Google's account-picker / consent screen."""
-    # Check if local test mode is active (explicit flag or dummy credentials)
-    is_dummy = "dummy" in (config.GOOGLE_CLIENT_ID or "").lower()
-    if config.GOOGLE_DEV_MODE or is_dummy:
+    force_live = request.query_params.get("live") == "1"
+    force_dev = request.query_params.get("dev") == "1"
+
+    if force_dev or (config.GOOGLE_DEV_MODE and not force_live):
         return RedirectResponse(url="/auth/google/dev-picker", status_code=302)
 
     if not config.GOOGLE_CLIENT_ID:
         return RedirectResponse(
             url="/login?error=Google+sign-in+is+not+configured+yet", status_code=302
         )
+
+    if not force_live and "dummy" in config.GOOGLE_CLIENT_ID.lower():
+        return RedirectResponse(url="/auth/google/dev-picker", status_code=302)
     import secrets
 
     # One-time random token: proves the callback came from our own redirect
@@ -230,12 +278,16 @@ async def google_dev_login(request: Request):
             if name:
                 user.name = name
         _ensure_default_team_membership(db, user, role="member")
+        pending_invite = request.cookies.get("pending_invite", "")
+        joined_team = _process_pending_invite(db, user, pending_invite)
+        joined_team_id = joined_team.id if joined_team else None
         db.add(AuthSession(token=token, user_id=user.id, expires_at=datetime.utcnow() + timedelta(days=7)))
         db.commit()
     finally:
         db.close()
 
-    response = RedirectResponse(url="/dashboard", status_code=303)
+    dest = f"/dashboard?team={joined_team_id}" if joined_team_id else "/dashboard"
+    response = RedirectResponse(url=dest, status_code=303)
     response.set_cookie(
         key="auth_token",
         value=token,
@@ -243,6 +295,8 @@ async def google_dev_login(request: Request):
         samesite="strict",
         max_age=86400 * 7,
     )
+    if request.cookies.get("pending_invite"):
+        response.delete_cookie("pending_invite")
     return response
 
 
@@ -331,16 +385,22 @@ async def google_login_callback(request: Request):
         else:
             user.name = name  # keep the display name up to date
         _ensure_default_team_membership(db, user, role="member")
+        pending_invite = request.cookies.get("pending_invite", "")
+        joined_team = _process_pending_invite(db, user, pending_invite)
+        joined_team_id = joined_team.id if joined_team else None
         db.add(AuthSession(token=token, user_id=user.id, expires_at=datetime.utcnow() + timedelta(days=7)))
         db.commit()
     finally:
         db.close()
-    response = RedirectResponse(url="/dashboard", status_code=303)
+    dest = f"/dashboard?team={joined_team_id}" if joined_team_id else "/dashboard"
+    response = RedirectResponse(url=dest, status_code=303)
     response.set_cookie(
         key="auth_token", value=token,
         httponly=True, samesite="strict", max_age=86400 * 7,
     )
     response.delete_cookie("google_oauth_state")
+    if request.cookies.get("pending_invite"):
+        response.delete_cookie("pending_invite")
     return response
 
 # ------------------------------------------------------------------ #
@@ -382,18 +442,18 @@ async def login(request: Request):
                 db.add(user)
                 db.flush()
             _ensure_default_team_membership(db, user, role="owner")
+            pending_invite = request.cookies.get("pending_invite", "")
+            joined_team = _process_pending_invite(db, user, pending_invite)
+            joined_team_id = joined_team.id if joined_team else None
             db.add(AuthSession(token=token, user_id=user.id, expires_at=datetime.utcnow() + timedelta(days=7)))
             db.commit()
         finally:
             db.close()
+        dest = f"/dashboard?team={joined_team_id}" if joined_team_id else "/dashboard"
         if not is_json:
-            # An HTML form POST should bounce to the dashboard,
-            # not show raw JSON in the browser.
-            response = RedirectResponse(url="/dashboard", status_code=303)
+            response = RedirectResponse(url=dest, status_code=303)
         else:
             response = JSONResponse(content={"ok": True, "token": token})
-        # The cookie must be set on WHICHEVER response we return — the
-        # redirect used to be built without it, so form logins had no session.
         response.set_cookie(
             key="auth_token",
             value=token,
@@ -401,6 +461,8 @@ async def login(request: Request):
             samesite="strict",
             max_age=86400 * 7,  # 7 days
         )
+        if request.cookies.get("pending_invite"):
+            response.delete_cookie("pending_invite")
         return response
 
     if not is_json:
@@ -478,12 +540,20 @@ SETTINGS_KEYS = (
     "GOOGLE_CLIENT_ID",
     "GOOGLE_CLIENT_SECRET",
     "GOOGLE_ALLOWED_EMAILS",
+    "GOOGLE_DEV_MODE",
     "APP_BASE_URL",
     "DEFAULT_REFRESH_INTERVAL_S",
     "EBAY_CLIENT_ID",
     "EBAY_CLIENT_SECRET",
     "ETSY_API_KEY",
     "ETSY_API_SECRET",
+    "POSHMARK_USERNAME",
+    "POSHMARK_API_KEY",
+    "AMAZON_SELLER_ID",
+    "AMAZON_CLIENT_ID",
+    "AMAZON_CLIENT_SECRET",
+    "AMAZON_REFRESH_TOKEN",
+    "AMAZON_MARKETPLACE_ID",
 )
 
 @api_router.get("/settings")
@@ -496,16 +566,26 @@ async def get_settings(_auth: bool = Depends(check_auth)):
             "GOOGLE_CLIENT_ID": config.GOOGLE_CLIENT_ID,
             "GOOGLE_CLIENT_SECRET": config.GOOGLE_CLIENT_SECRET,
             "GOOGLE_ALLOWED_EMAILS": ",".join(config.GOOGLE_ALLOWED_EMAILS),
+            "GOOGLE_DEV_MODE": config.GOOGLE_DEV_MODE,
             "APP_BASE_URL": config.APP_BASE_URL,
             "DEFAULT_REFRESH_INTERVAL_S": config.DEFAULT_REFRESH_INTERVAL_S,
             "EBAY_CLIENT_ID": config.EBAY_CLIENT_ID,
             "EBAY_CLIENT_SECRET": config.EBAY_CLIENT_SECRET,
             "ETSY_API_KEY": config.ETSY_API_KEY,
             "ETSY_API_SECRET": config.ETSY_API_SECRET,
+            "POSHMARK_USERNAME": config.POSHMARK_USERNAME,
+            "POSHMARK_API_KEY": config.POSHMARK_API_KEY,
+            "AMAZON_SELLER_ID": config.AMAZON_SELLER_ID,
+            "AMAZON_CLIENT_ID": config.AMAZON_CLIENT_ID,
+            "AMAZON_CLIENT_SECRET": config.AMAZON_CLIENT_SECRET,
+            "AMAZON_REFRESH_TOKEN": config.AMAZON_REFRESH_TOKEN,
+            "AMAZON_MARKETPLACE_ID": config.AMAZON_MARKETPLACE_ID,
         },
         "google_redirect_uri": f"{config.APP_BASE_URL}/auth/google/callback",
         "ebay_redirect_uri": f"{config.APP_BASE_URL}/api/auth/ebay/callback",
         "etsy_redirect_uri": f"{config.APP_BASE_URL}/api/auth/etsy/callback",
+        "poshmark_redirect_uri": f"{config.APP_BASE_URL}/api/auth/poshmark/callback",
+        "amazon_redirect_uri": f"{config.APP_BASE_URL}/api/auth/amazon/callback",
     }
 
 @api_router.post("/settings")
@@ -717,10 +797,14 @@ async def sync_account(body: dict, db: Session = Depends(get_db), _auth: bool = 
 
 @api_router.get("/teams")
 async def get_teams(db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
-    """The teams the current user belongs to, with each team's members."""
+    """The teams the current user belongs to, with each team's members and invite links."""
     teams = db.query(Team).filter(Team.id.in_(_user["team_ids"] or [0])).all()
+    import secrets
     result = []
     for t in teams:
+        if not t.invite_code:
+            t.invite_code = secrets.token_urlsafe(16)
+            db.commit()
         roles = {
             m.user_id: m.role
             for m in db.query(TeamMembership).filter(TeamMembership.team_id == t.id)
@@ -735,6 +819,8 @@ async def get_teams(db: Session = Depends(get_db), _user: dict = Depends(check_a
         result.append({
             "id": t.id,
             "name": t.name,
+            "invite_code": t.invite_code,
+            "invite_url": f"{config.APP_BASE_URL}/join/{t.invite_code}",
             "role": roles.get(_user["id"], "member"),
             "members": [
                 {**u.to_dict(), "role": roles.get(u.id, "member")}
@@ -752,12 +838,16 @@ async def create_team(body: dict, db: Session = Depends(get_db), _user: dict = D
         return JSONResponse(status_code=400, content={"ok": False, "error": "Team name is required"})
     if db.query(Team).filter(Team.name == name).first():
         return JSONResponse(status_code=400, content={"ok": False, "error": f"Team '{name}' already exists"})
-    team = Team(name=name)
+    import secrets
+    invite_code = secrets.token_urlsafe(16)
+    team = Team(name=name, invite_code=invite_code)
     db.add(team)
     db.flush()
     db.add(TeamMembership(team_id=team.id, user_id=_user["id"], role="owner"))
     db.commit()
-    return {"ok": True, "team": team.to_dict()}
+    t_dict = team.to_dict()
+    t_dict["invite_url"] = f"{config.APP_BASE_URL}/join/{team.invite_code}"
+    return {"ok": True, "team": t_dict}
 
 
 @api_router.post("/teams/{team_id}/members")
@@ -811,6 +901,147 @@ async def remove_team_member(team_id: int, user_id: int, db: Session = Depends(g
         if owner_count <= 1:
             return JSONResponse(status_code=400, content={"ok": False, "error": "Cannot remove the last owner"})
     db.delete(membership)
+    db.commit()
+    return {"ok": True}
+
+
+@api_router.post("/teams/{team_id}/invite-code")
+async def regenerate_invite_code(team_id: int, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
+    """Regenerate the shareable invite link for a team (owner only)."""
+    if team_id not in _user["team_ids"]:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Team not found"})
+    membership = db.query(TeamMembership).filter(
+        TeamMembership.team_id == team_id,
+        TeamMembership.user_id == _user["id"],
+    ).first()
+    if not membership or membership.role != "owner":
+        return JSONResponse(status_code=403, content={"ok": False, "error": "Only team owners can regenerate invite links"})
+    import secrets
+    team = db.get(Team, team_id)
+    team.invite_code = secrets.token_urlsafe(16)
+    db.commit()
+    return {
+        "ok": True,
+        "invite_code": team.invite_code,
+        "invite_url": f"{config.APP_BASE_URL}/join/{team.invite_code}",
+    }
+
+
+@api_router.post("/teams/join")
+async def join_team_api(body: dict, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
+    """Join a team via invite code."""
+    code = (body.get("invite_code") or "").strip()
+    if not code:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Invite code is required"})
+    team = db.query(Team).filter(Team.invite_code == code).first()
+    if not team:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Invalid team invite code"})
+    exists = db.query(TeamMembership).filter(
+        TeamMembership.team_id == team.id,
+        TeamMembership.user_id == _user["id"],
+    ).first()
+    if exists:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Already a member of this team"})
+    db.add(TeamMembership(team_id=team.id, user_id=_user["id"], role="member"))
+    db.commit()
+    return {"ok": True, "team": team.to_dict()}
+
+
+# -- Listings (creation, update, delete, local sales) --
+
+@api_router.post("/listings/manual")
+async def create_manual_listing(body: dict, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
+    """Create a manual listing or local sale entry directly in the dashboard."""
+    import secrets
+    title = (body.get("title") or "").strip()
+    if not title:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Title is required"})
+
+    price_cents = body.get("price_cents")
+    if price_cents is None:
+        try:
+            price_val = float(body.get("price") or body.get("price_usd") or 0)
+            price_cents = int(round(price_val * 100))
+        except (ValueError, TypeError):
+            price_cents = 0
+
+    currency = (body.get("currency") or "USD").upper().strip()
+    platform = (body.get("platform") or "local").lower().strip()
+    status = (body.get("status") or "active").lower().strip()
+    is_sold = status == "sold" or bool(body.get("is_sold"))
+    quantity = int(body.get("quantity") or (0 if is_sold else 1))
+
+    team_id = body.get("team_id")
+    if team_id:
+        try:
+            team_id = int(team_id)
+            if team_id not in _user["team_ids"]:
+                return JSONResponse(status_code=404, content={"ok": False, "error": "Team not found"})
+        except (ValueError, TypeError):
+            team_id = None
+    if not team_id and _user["team_ids"]:
+        team_id = _user["team_ids"][0]
+
+    sku = (body.get("sku") or "").strip()
+    description = (body.get("description") or "").strip()
+    category = (body.get("category") or "Local Sales").strip()
+    image_url = (body.get("image_url") or "").strip() or "/static/img/placeholder.svg"
+
+    platform_listing_id = sku or f"LOCAL-{secrets.token_hex(4).upper()}"
+
+    listing = Listing(
+        platform=platform,
+        platform_listing_id=platform_listing_id,
+        title=title,
+        description=description,
+        price_cents=price_cents,
+        price_raw=f"{currency} {price_cents / 100:.2f}",
+        currency=currency,
+        status="sold" if is_sold else status,
+        is_sold=is_sold,
+        available_quantity=quantity,
+        views_count=1,
+        image_url=image_url,
+        images_json=[image_url],
+        category=category,
+        sku=sku,
+        team_id=team_id,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    db.add(listing)
+    db.commit()
+    db.refresh(listing)
+    return {"ok": True, "listing": listing.to_dict()}
+
+
+@api_router.post("/listings/{listing_id}/mark-sold")
+async def mark_listing_sold(listing_id: int, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
+    """Quickly mark a listing as sold (e.g. for a local in-person cash sale)."""
+    listing = db.get(Listing, listing_id)
+    if not listing:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Listing not found"})
+    if listing.team_id and listing.team_id not in _user["team_ids"]:
+        return JSONResponse(status_code=403, content={"ok": False, "error": "Not authorized for this team"})
+
+    listing.status = "sold"
+    listing.is_sold = True
+    listing.available_quantity = max(0, listing.available_quantity - 1)
+    listing.updated_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True, "listing": listing.to_dict()}
+
+
+@api_router.delete("/listings/{listing_id}")
+async def delete_listing(listing_id: int, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
+    """Delete a listing from the dashboard inventory."""
+    listing = db.get(Listing, listing_id)
+    if not listing:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Listing not found"})
+    if listing.team_id and listing.team_id not in _user["team_ids"]:
+        return JSONResponse(status_code=403, content={"ok": False, "error": "Not authorized for this team"})
+
+    db.delete(listing)
     db.commit()
     return {"ok": True}
 

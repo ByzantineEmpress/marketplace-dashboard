@@ -61,6 +61,8 @@ async function loadAllSettings() {
     const redirectUri = document.getElementById("google-redirect-uri");
     const ebayRedirect = document.getElementById("ebay-redirect-uri");
     const etsyRedirect = document.getElementById("etsy-redirect-uri");
+    const poshmarkRedirect = document.getElementById("poshmark-redirect-uri");
+    const amazonRedirect = document.getElementById("amazon-redirect-uri");
     try {
         const resp = await fetch("/api/settings");
         if (!resp.ok) return;
@@ -69,6 +71,8 @@ async function loadAllSettings() {
         if (redirectUri) redirectUri.value = data.google_redirect_uri || "";
         if (ebayRedirect) ebayRedirect.value = data.ebay_redirect_uri || "";
         if (etsyRedirect) etsyRedirect.value = data.etsy_redirect_uri || "";
+        if (poshmarkRedirect) poshmarkRedirect.value = data.poshmark_redirect_uri || "";
+        if (amazonRedirect) amazonRedirect.value = data.amazon_redirect_uri || "";
 
         const setIf = (id, value) => {
             const el = document.getElementById(id);
@@ -77,11 +81,24 @@ async function loadAllSettings() {
         setIf("google-client-id", s.GOOGLE_CLIENT_ID);
         setIf("google-client-secret", s.GOOGLE_CLIENT_SECRET);
         setIf("google-allowed-emails", s.GOOGLE_ALLOWED_EMAILS);
+        const devModeCheckbox = document.getElementById("google-dev-mode");
+        if (devModeCheckbox) {
+            devModeCheckbox.checked = Boolean(s.GOOGLE_DEV_MODE);
+        }
 
         setIf("ebay-client-id", s.EBAY_CLIENT_ID);
         setIf("ebay-client-secret", s.EBAY_CLIENT_SECRET);
         setIf("etsy-api-key", s.ETSY_API_KEY);
         setIf("etsy-api-secret", s.ETSY_API_SECRET);
+
+        setIf("poshmark-username", s.POSHMARK_USERNAME);
+        setIf("poshmark-api-key", s.POSHMARK_API_KEY);
+
+        setIf("amazon-seller-id", s.AMAZON_SELLER_ID);
+        setIf("amazon-client-id", s.AMAZON_CLIENT_ID);
+        setIf("amazon-client-secret", s.AMAZON_CLIENT_SECRET);
+        setIf("amazon-refresh-token", s.AMAZON_REFRESH_TOKEN);
+        setIf("amazon-marketplace-id", s.AMAZON_MARKETPLACE_ID || "ATVPDKIKX0DER");
     } catch (e) {
         /* leave the form at its defaults */
     }
@@ -89,10 +106,12 @@ async function loadAllSettings() {
 
 async function saveGoogleSettings() {
     const status = document.getElementById("google-settings-status");
+    const devModeCheckbox = document.getElementById("google-dev-mode");
     const body = {
-        GOOGLE_CLIENT_ID: document.getElementById("google-client-id").value.trim(),
-        GOOGLE_CLIENT_SECRET: document.getElementById("google-client-secret").value.trim(),
-        GOOGLE_ALLOWED_EMAILS: document.getElementById("google-allowed-emails").value.trim(),
+        GOOGLE_CLIENT_ID: (document.getElementById("google-client-id")?.value || "").trim(),
+        GOOGLE_CLIENT_SECRET: (document.getElementById("google-client-secret")?.value || "").trim(),
+        GOOGLE_ALLOWED_EMAILS: (document.getElementById("google-allowed-emails")?.value || "").trim(),
+        GOOGLE_DEV_MODE: devModeCheckbox ? devModeCheckbox.checked : true,
     };
     try {
         const resp = await fetch("/api/settings", {
@@ -103,7 +122,7 @@ async function saveGoogleSettings() {
         const data = await resp.json();
         if (data.ok) {
             status.innerHTML =
-                '<span class="flash flash--success flash--inline">✓ Saved — the sign-in button now appears on the login page.</span>';
+                '<span class="flash flash--success flash--inline">✓ Saved — sign-in settings updated.</span>';
         } else {
             status.innerHTML =
                 `<span class="flash flash--error flash--inline">✗ Save failed: ${escapeHtml(data.error || ("HTTP " + resp.status))}</span>`;
@@ -121,6 +140,13 @@ async function saveMarketplaceSettings() {
         EBAY_CLIENT_SECRET: (document.getElementById("ebay-client-secret")?.value || "").trim(),
         ETSY_API_KEY: (document.getElementById("etsy-api-key")?.value || "").trim(),
         ETSY_API_SECRET: (document.getElementById("etsy-api-secret")?.value || "").trim(),
+        POSHMARK_USERNAME: (document.getElementById("poshmark-username")?.value || "").trim(),
+        POSHMARK_API_KEY: (document.getElementById("poshmark-api-key")?.value || "").trim(),
+        AMAZON_SELLER_ID: (document.getElementById("amazon-seller-id")?.value || "").trim(),
+        AMAZON_CLIENT_ID: (document.getElementById("amazon-client-id")?.value || "").trim(),
+        AMAZON_CLIENT_SECRET: (document.getElementById("amazon-client-secret")?.value || "").trim(),
+        AMAZON_REFRESH_TOKEN: (document.getElementById("amazon-refresh-token")?.value || "").trim(),
+        AMAZON_MARKETPLACE_ID: (document.getElementById("amazon-marketplace-id")?.value || "").trim(),
     };
     try {
         const resp = await fetch("/api/settings", {
@@ -302,8 +328,12 @@ document.addEventListener("DOMContentLoaded", () => {
     };
     wire("connect-ebay", () => startOAuth("ebay"));
     wire("connect-etsy", () => startOAuth("etsy"));
+    wire("connect-poshmark", () => startOAuth("poshmark"));
+    wire("connect-amazon", () => startOAuth("amazon"));
     wire("sync-ebay", () => syncPlatform("ebay"));
     wire("sync-etsy", () => syncPlatform("etsy"));
+    wire("sync-poshmark", () => syncPlatform("poshmark"));
+    wire("sync-amazon", () => syncPlatform("amazon"));
     wire("save-google-settings", saveGoogleSettings);
     wire("save-marketplace-settings", saveMarketplaceSettings);
     wire("create-team", createTeam);
