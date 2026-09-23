@@ -140,15 +140,48 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch(`/api/stats${teamParam}`);
             if (!res.ok) return;
             const stats = await res.json();
-            document.getElementById("stat-active").textContent = stats.active_listings || 0;
-            document.getElementById("stat-sold").textContent = stats.sold_listings || 0;
-            document.getElementById("stat-total").textContent = stats.total_listings || 0;
+            const cur = stats.currency || "CAD";
+            const sym = stats.currency_symbol || "$";
+
+            const statActive = document.getElementById("stat-active");
+            if (statActive) statActive.textContent = stats.active_listings || 0;
+
+            const statSold = document.getElementById("stat-sold");
+            if (statSold) statSold.textContent = stats.sold_listings || 0;
+
+            const statTotal = document.getElementById("stat-total");
+            if (statTotal) statTotal.textContent = stats.total_listings || 0;
+
             if (stats.total_value_cents !== undefined) {
                 const total = (stats.total_value_cents / 100).toLocaleString(undefined, {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
                 });
-                document.getElementById("stat-value").textContent = `$${total}`;
+                const statVal = document.getElementById("stat-value");
+                if (statVal) statVal.textContent = `${sym}${total} ${cur}`;
+            }
+
+            if (stats.total_cost_cents !== undefined) {
+                const cost = (stats.total_cost_cents / 100).toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                });
+                const statCost = document.getElementById("stat-cost");
+                if (statCost) statCost.textContent = `${sym}${cost} ${cur}`;
+            }
+
+            if (stats.sold_profit_cents !== undefined) {
+                const profitVal = (stats.sold_profit_cents || 0) / 100;
+                const profitStr = Math.abs(profitVal).toLocaleString(undefined, {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                });
+                const prefix = profitVal < 0 ? `-${sym}` : `+${sym}`;
+                const statProfit = document.getElementById("stat-profit");
+                if (statProfit) {
+                    statProfit.textContent = `${prefix}${profitStr} ${cur}`;
+                    statProfit.style.color = profitVal >= 0 ? "var(--success)" : "var(--danger)";
+                }
             }
         } catch (e) { /* ignore */ }
     }
@@ -157,6 +190,7 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadTeams() {
         const sel = document.getElementById("filter-team");
         const manualTeamSel = document.getElementById("manual-team");
+        const inviteTeamSel = document.getElementById("invite-team-select");
         const teamsContainer = document.getElementById("dashboard-teams-container");
         const inviteUrlInput = document.getElementById("share-invite-url");
         try {
@@ -189,6 +223,17 @@ document.addEventListener("DOMContentLoaded", () => {
                         opt.value = String(t.id);
                         opt.textContent = t.name;
                         manualTeamSel.appendChild(opt);
+                    });
+                }
+
+                if (inviteTeamSel) {
+                    inviteTeamSel.innerHTML = "";
+                    teams.forEach(t => {
+                        const opt = document.createElement("option");
+                        opt.value = String(t.id);
+                        opt.textContent = t.name;
+                        if (state.team === String(t.id)) opt.selected = true;
+                        inviteTeamSel.appendChild(opt);
                     });
                 }
 
@@ -239,7 +284,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <img src="${image}" alt="${escapeHtml(listing.title || 'Listing')}" loading="lazy" onerror="this.src='/static/img/placeholder.svg'">
             </div>
             <div class="modal-price-row">
-                <div class="modal-price">${price} <span style="font-size:14px;font-weight:normal;color:var(--text-muted);">${listing.currency || 'USD'}</span></div>
+                <div class="modal-price">${price} <span style="font-size:14px;font-weight:normal;color:var(--text-muted);">${listing.currency || 'CAD'}</span></div>
                 <div>
                     <span class="card-status card-status--${listing.status || 'unknown'}">${listing.status || 'unknown'}</span>
                     ${listing.is_sold ? '<span class="card-status card-status--sold">Sold</span>' : ''}
@@ -264,12 +309,185 @@ document.addEventListener("DOMContentLoaded", () => {
                 </div>
             </div>
             ${listing.description ? `
-                <div>
+                <div style="margin-bottom: 14px;">
                     <span class="modal-detail-label" style="display:block;margin-bottom:6px;">Description</span>
                     <div class="modal-description">${escapeHtml(listing.description)}</div>
                 </div>
             ` : ''}
+
+            <!-- Costs, Parts & Profit Breakdown ($ CAD) -->
+            <div class="modal-costs-section" style="margin-top: 14px; padding: 14px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h4 style="margin: 0; font-size: 13.5px; font-weight: 600;">💰 Bought For &amp; Parts Put Into It ($ CAD)</h4>
+                    <span style="font-size: 11.5px; color: var(--text-muted);">For all listings &amp; platforms</span>
+                </div>
+                <div style="display: flex; gap: 10px; margin-bottom: 12px;">
+                    <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                        <label style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px;">Bought For / Cost ($ CAD)</label>
+                        <input type="number" step="0.01" min="0" class="detail-purchase-price-input" value="${(listing.purchase_price !== undefined ? listing.purchase_price : 0).toFixed(2)}" style="width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); color: var(--text);">
+                    </div>
+                    <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                        <label style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px;">Selling / Listed Price ($ CAD)</label>
+                        <input type="number" step="0.01" min="0" class="detail-selling-price-input" value="${((listing.price_cents || 0) / 100).toFixed(2)}" style="width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); color: var(--text);">
+                    </div>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <label style="font-size: 12px; font-weight: 600; margin: 0;">Parts &amp; Repairs Added</label>
+                        <button type="button" class="btn btn--sm btn--outline detail-add-part-btn" style="font-size: 11px; padding: 2px 7px;">+ Add Part</button>
+                    </div>
+                    <p style="font-size: 11.5px; color: var(--text-muted); margin-bottom: 6px;">
+                        Log parts installed (e.g. "New power supply" - $25.00 CAD).
+                    </p>
+                    <div class="detail-parts-list" style="display: flex; flex-direction: column; gap: 6px;">
+                        <!-- Dynamic parts injected here -->
+                    </div>
+                </div>
+                <div class="detail-financial-summary" style="padding: 8px 10px; background: var(--bg-elevated); border: 1px dashed var(--border); border-radius: 6px; font-size: 12px; display: flex; justify-content: space-between; margin-bottom: 12px;">
+                    <span>Total Investment: <strong class="detail-total-cost-val">$0.00 CAD</strong></span>
+                    <span>Est. Net Profit: <strong class="detail-net-profit-val" style="color: var(--success);">+$0.00 CAD</strong> <span class="detail-margin-val" style="color: var(--text-muted);">(0%)</span></span>
+                </div>
+                <div style="display: flex; justify-content: flex-end; align-items: center; gap: 10px;">
+                    <span class="detail-save-cost-status" style="font-size: 12px;"></span>
+                    <button type="button" class="btn btn--sm btn--primary detail-save-cost-btn">💾 Save Costs &amp; Parts</button>
+                </div>
+            </div>
         `;
+
+        // Wire Cost & Parts Breakdown Editor
+        const partsContainer = modalBody.querySelector(".detail-parts-list");
+        const addPartBtn = modalBody.querySelector(".detail-add-part-btn");
+        const purchaseInput = modalBody.querySelector(".detail-purchase-price-input");
+        const sellingInput = modalBody.querySelector(".detail-selling-price-input");
+        const totalCostVal = modalBody.querySelector(".detail-total-cost-val");
+        const netProfitVal = modalBody.querySelector(".detail-net-profit-val");
+        const marginVal = modalBody.querySelector(".detail-margin-val");
+        const saveCostBtn = modalBody.querySelector(".detail-save-cost-btn");
+        const saveCostStatus = modalBody.querySelector(".detail-save-cost-status");
+
+        function renderDetailPartRow(desc = "", cost = "") {
+            if (!partsContainer) return;
+            const row = document.createElement("div");
+            row.className = "detail-part-row";
+            row.style.cssText = "display: flex; gap: 6px; align-items: center;";
+            row.innerHTML = `
+                <input type="text" class="detail-part-desc" placeholder="Part description (e.g. New power supply)" value="${escapeHtml(desc)}" style="flex: 2; padding: 5px 8px; font-size: 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); color: var(--text);" required>
+                <input type="number" step="0.01" min="0" class="detail-part-cost" placeholder="0.00" value="${cost !== '' ? cost : ''}" style="flex: 1; padding: 5px 8px; font-size: 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); color: var(--text);" required>
+                <button type="button" class="btn btn--sm btn--danger detail-remove-part-btn" style="padding: 3px 7px; font-size: 12px;">&times;</button>
+            `;
+            partsContainer.appendChild(row);
+        }
+
+        const existingParts = Array.isArray(listing.parts) ? listing.parts : [];
+        existingParts.forEach(p => {
+            const c = p.cost !== undefined ? p.cost : ((p.cost_cents || 0) / 100);
+            renderDetailPartRow(p.description || p.name || "", c ? c.toFixed(2) : "");
+        });
+
+        function updateDetailCalculations() {
+            const purchasePrice = parseFloat(purchaseInput?.value || 0);
+            let partsTotal = 0;
+            if (partsContainer) {
+                partsContainer.querySelectorAll(".detail-part-cost").forEach(input => {
+                    partsTotal += parseFloat(input.value || 0);
+                });
+            }
+            const totalCost = purchasePrice + partsTotal;
+            const sellingPrice = parseFloat(sellingInput?.value || 0);
+            const netProfit = sellingPrice - totalCost;
+            const margin = sellingPrice > 0 ? ((netProfit / sellingPrice) * 100).toFixed(1) : "0.0";
+
+            if (totalCostVal) totalCostVal.textContent = `$${totalCost.toFixed(2)} CAD`;
+            if (netProfitVal) {
+                netProfitVal.textContent = `${netProfit > 0 ? "+" : ""}$${netProfit.toFixed(2)} CAD`;
+                netProfitVal.style.color = netProfit >= 0 ? "var(--success)" : "var(--danger)";
+            }
+            if (marginVal) {
+                marginVal.textContent = `(${margin}%)`;
+            }
+        }
+
+        updateDetailCalculations();
+
+        if (addPartBtn) {
+            addPartBtn.onclick = () => {
+                renderDetailPartRow("", "");
+                updateDetailCalculations();
+            };
+        }
+
+        if (partsContainer) {
+            partsContainer.oninput = () => updateDetailCalculations();
+            partsContainer.onclick = (e) => {
+                if (e.target.closest(".detail-remove-part-btn")) {
+                    e.target.closest(".detail-part-row").remove();
+                    updateDetailCalculations();
+                }
+            };
+        }
+
+        if (purchaseInput) purchaseInput.oninput = () => updateDetailCalculations();
+        if (sellingInput) sellingInput.oninput = () => updateDetailCalculations();
+
+        if (saveCostBtn) {
+            saveCostBtn.onclick = async () => {
+                saveCostBtn.disabled = true;
+                if (saveCostStatus) saveCostStatus.innerHTML = "<span style='color:var(--text-muted);'>Saving…</span>";
+
+                const parts = [];
+                if (partsContainer) {
+                    partsContainer.querySelectorAll(".detail-part-row").forEach(row => {
+                        const desc = (row.querySelector(".detail-part-desc")?.value || "").trim();
+                        const cost = parseFloat(row.querySelector(".detail-part-cost")?.value || 0);
+                        if (desc) {
+                            parts.push({ description: desc, cost });
+                        }
+                    });
+                }
+
+                const purchasePrice = parseFloat(purchaseInput?.value || 0);
+                const sellingPrice = parseFloat(sellingInput?.value || 0);
+
+                try {
+                    const res = await fetch(`/api/listings/${listing.id}`, {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            purchase_price: purchasePrice,
+                            price: sellingPrice,
+                            parts: parts,
+                        }),
+                    });
+                    const resData = await res.json();
+                    if (resData.ok && resData.listing) {
+                        loadedListings[listing.id] = { ...listing, ...resData.listing };
+                        Object.assign(listing, resData.listing);
+
+                        if (saveCostStatus) saveCostStatus.innerHTML = "<span class='flash flash--success flash--inline'>✓ Saved!</span>";
+                        setTimeout(() => { if (saveCostStatus) saveCostStatus.innerHTML = ""; }, 2500);
+
+                        // Update card in grid if visible
+                        const card = document.querySelector(`.listing-card[data-id="${listing.id}"]`);
+                        if (card) {
+                            const newCardHtml = renderCard(listing);
+                            const tmp = document.createElement("div");
+                            tmp.innerHTML = newCardHtml;
+                            const newCardEl = tmp.firstElementChild;
+                            card.replaceWith(newCardEl);
+                            newCardEl.addEventListener("click", () => openListingModal(listing));
+                        }
+
+                        loadStats();
+                    } else {
+                        if (saveCostStatus) saveCostStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(resData.error || "Save failed")}</span>`;
+                    }
+                } catch (err) {
+                    if (saveCostStatus) saveCostStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(err.message)}</span>`;
+                } finally {
+                    saveCostBtn.disabled = false;
+                }
+            };
+        }
 
         const teamSelect = document.getElementById("modal-team-dropdown");
         const statusSpan = document.getElementById("modal-team-status");
@@ -370,6 +588,57 @@ document.addEventListener("DOMContentLoaded", () => {
     const closeManualBtn = document.getElementById("close-manual-modal-btn");
     const cancelManualBtn = document.getElementById("cancel-manual-modal-btn");
     const manualForm = document.getElementById("manual-listing-form");
+    const manualAddPartBtn = document.getElementById("manual-add-part-btn");
+    const manualPartsContainer = document.getElementById("manual-parts-container");
+    const manualTotalCostPreview = document.getElementById("manual-total-cost-preview");
+    const manualProfitPreview = document.getElementById("manual-profit-preview");
+    const manualPriceInput = document.getElementById("manual-price");
+    const manualPurchasePriceInput = document.getElementById("manual-purchase-price");
+
+    function updateManualCalculations() {
+        const price = parseFloat(manualPriceInput?.value || 0);
+        const purchasePrice = parseFloat(manualPurchasePriceInput?.value || 0);
+        let partsTotal = 0;
+        if (manualPartsContainer) {
+            manualPartsContainer.querySelectorAll(".manual-part-cost").forEach(input => {
+                partsTotal += parseFloat(input.value || 0);
+            });
+        }
+        const totalCost = purchasePrice + partsTotal;
+        const profit = price - totalCost;
+
+        if (manualTotalCostPreview) manualTotalCostPreview.textContent = `$${totalCost.toFixed(2)} CAD`;
+        if (manualProfitPreview) {
+            manualProfitPreview.textContent = `${profit > 0 ? "+" : ""}$${profit.toFixed(2)} CAD`;
+            manualProfitPreview.style.color = profit >= 0 ? "var(--success)" : "var(--danger)";
+        }
+    }
+
+    if (manualAddPartBtn && manualPartsContainer) {
+        manualAddPartBtn.addEventListener("click", () => {
+            const row = document.createElement("div");
+            row.className = "manual-part-row";
+            row.style.cssText = "display: flex; gap: 8px; align-items: center;";
+            row.innerHTML = `
+                <input type="text" class="manual-part-desc" placeholder="Part description (e.g. New power supply)" style="flex: 2; padding: 6px 8px; font-size: 12px; border: 1px solid var(--border); border-radius: 4px;" required>
+                <input type="number" step="0.01" min="0" class="manual-part-cost" placeholder="Cost ($ CAD)" style="flex: 1; padding: 6px 8px; font-size: 12px; border: 1px solid var(--border); border-radius: 4px;" required>
+                <button type="button" class="btn btn--sm btn--danger manual-remove-part-btn" style="padding: 4px 8px; font-size: 13px;">&times;</button>
+            `;
+            manualPartsContainer.appendChild(row);
+            updateManualCalculations();
+        });
+
+        manualPartsContainer.addEventListener("input", updateManualCalculations);
+        manualPartsContainer.addEventListener("click", (e) => {
+            if (e.target.closest(".manual-remove-part-btn")) {
+                e.target.closest(".manual-part-row").remove();
+                updateManualCalculations();
+            }
+        });
+    }
+
+    if (manualPriceInput) manualPriceInput.addEventListener("input", updateManualCalculations);
+    if (manualPurchasePriceInput) manualPurchasePriceInput.addEventListener("input", updateManualCalculations);
 
     function openManualModal() {
         if (!manualModal) return;
@@ -402,9 +671,22 @@ document.addEventListener("DOMContentLoaded", () => {
             const submitBtn = document.getElementById("save-manual-listing-btn");
             if (submitBtn) submitBtn.disabled = true;
 
+            const parts = [];
+            if (manualPartsContainer) {
+                manualPartsContainer.querySelectorAll(".manual-part-row").forEach(row => {
+                    const desc = (row.querySelector(".manual-part-desc")?.value || "").trim();
+                    const cost = parseFloat(row.querySelector(".manual-part-cost")?.value || 0);
+                    if (desc) {
+                        parts.push({ description: desc, cost: cost });
+                    }
+                });
+            }
+
             const payload = {
                 title: document.getElementById("manual-title").value.trim(),
                 price: parseFloat(document.getElementById("manual-price").value || 0),
+                purchase_price: parseFloat(document.getElementById("manual-purchase-price")?.value || 0),
+                parts: parts,
                 quantity: parseInt(document.getElementById("manual-quantity").value || 1),
                 platform: document.getElementById("manual-platform").value,
                 status: document.getElementById("manual-status").value,
@@ -422,6 +704,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 const data = await res.json();
                 if (data.ok) {
                     manualForm.reset();
+                    if (manualPartsContainer) manualPartsContainer.innerHTML = "";
+                    updateManualCalculations();
                     closeManualModal();
                     loadListings();
                     loadStats();
@@ -446,6 +730,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const sendInviteBtn = document.getElementById("send-email-invite-btn");
     const inviteEmailInput = document.getElementById("invite-email-input");
     const inviteEmailStatus = document.getElementById("invite-email-status");
+    const inviteTeamSelect = document.getElementById("invite-team-select");
+    const openMailtoBtn = document.getElementById("open-mailto-link-btn");
+    const copyEmailTemplateBtn = document.getElementById("copy-email-template-btn");
+    const emailInviteActions = document.getElementById("email-invite-actions");
     const createTeamBtn = document.getElementById("dashboard-create-team-btn");
     const newTeamNameInput = document.getElementById("dashboard-new-team-name");
     const createTeamStatus = document.getElementById("dashboard-create-team-status");
@@ -501,11 +789,15 @@ document.addEventListener("DOMContentLoaded", () => {
     async function handleAddMember() {
         const email = (inviteEmailInput?.value || "").trim();
         if (!email) return;
-        const teamId = state.team || (loadedTeams[0] ? loadedTeams[0].id : null);
+        const selectedTeamId = inviteTeamSelect?.value ? Number(inviteTeamSelect.value) : null;
+        const teamId = selectedTeamId || state.team || (loadedTeams[0] ? loadedTeams[0].id : null);
         if (!teamId) {
             if (inviteEmailStatus) inviteEmailStatus.innerHTML = "<span class='flash flash--error flash--inline'>Create or select a team first.</span>";
             return;
         }
+        if (sendInviteBtn) sendInviteBtn.disabled = true;
+        if (inviteEmailStatus) inviteEmailStatus.innerHTML = "<span style='color:var(--text-muted);'>Processing invitation…</span>";
+
         try {
             const res = await fetch(`/api/teams/${teamId}/members`, {
                 method: "POST",
@@ -514,14 +806,34 @@ document.addEventListener("DOMContentLoaded", () => {
             });
             const data = await res.json();
             if (data.ok) {
-                if (inviteEmailInput) inviteEmailInput.value = "";
-                if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--success flash--inline'>✓ Added ${escapeHtml(email)}!</span>`;
+                const teamName = data.team_name || "the team";
+                if (data.email_sent) {
+                    if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--success flash--inline'>✓ Added &amp; sent email invite to ${escapeHtml(email)}!</span>`;
+                } else {
+                    if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--success flash--inline'>✓ Added ${escapeHtml(email)} to ${escapeHtml(teamName)}! Ready to share invite:</span>`;
+                }
+
+                if (emailInviteActions && openMailtoBtn && copyEmailTemplateBtn) {
+                    emailInviteActions.style.display = "flex";
+                    const subject = encodeURIComponent(data.invite_subject || `Invitation to join ${teamName}`);
+                    const bodyText = data.invite_body || `Join our team on Marketplace Dashboard: ${data.invite_url}`;
+                    openMailtoBtn.href = `mailto:${encodeURIComponent(email)}?subject=${subject}&body=${encodeURIComponent(bodyText)}`;
+
+                    copyEmailTemplateBtn.onclick = () => {
+                        copyToClipboard(bodyText, inviteEmailStatus);
+                        if (inviteEmailStatus) {
+                            inviteEmailStatus.innerHTML = `<span class='flash flash--success flash--inline'>✓ Copied invite message to clipboard!</span>`;
+                        }
+                    };
+                }
                 loadTeams();
             } else {
                 if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(data.error || "Failed to add")}</span>`;
             }
         } catch (err) {
             if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(err.message)}</span>`;
+        } finally {
+            if (sendInviteBtn) sendInviteBtn.disabled = false;
         }
     }
 
@@ -646,8 +958,14 @@ document.addEventListener("DOMContentLoaded", () => {
 // Render a single listing card
 function renderCard(listing) {
     const platformIcon = getPlatformIcon(listing.platform);
-    const price = listing.price_raw || `$${((listing.price_cents || 0) / 100).toFixed(2)}`;
+    const price = listing.price_raw || `$${((listing.price_cents || 0) / 100).toFixed(2)} CAD`;
     const image = listing.image_url || "/static/img/placeholder.svg";
+
+    const hasCost = (listing.total_cost_cents || 0) > 0;
+    const costText = hasCost ? `$${(listing.total_cost || 0).toFixed(2)} CAD` : null;
+    const netProfit = listing.net_profit !== undefined ? listing.net_profit : (((listing.price_cents || 0) - (listing.total_cost_cents || 0)) / 100);
+    const profitSign = netProfit > 0 ? "+" : "";
+    const profitColor = netProfit >= 0 ? "var(--success)" : "var(--danger)";
 
     return `
         <div class="listing-card" data-id="${listing.id}" data-platform="${listing.platform}">
@@ -658,6 +976,11 @@ function renderCard(listing) {
             <div class="card-body">
                 <h3 class="card-title">${escapeHtml(listing.title || "Untitled")}</h3>
                 <p class="card-price">${price}</p>
+                ${hasCost ? `
+                    <div style="font-size: 11.5px; color: var(--text-muted); margin-top: -4px; margin-bottom: 6px;">
+                        <span>Cost: ${costText}</span> · <span style="color: ${profitColor}; font-weight: 500;">Net: ${profitSign}$${netProfit.toFixed(2)} CAD</span>
+                    </div>
+                ` : ""}
                 <div class="card-meta">
                     <span class="card-status card-status--${listing.status || 'unknown'}">${listing.status || "unknown"}</span>
                     ${listing.team_name ? `<span class="card-team" title="Team">${escapeHtml(listing.team_name)}</span>` : ""}

@@ -184,9 +184,14 @@ class Listing(Base):
     original_url = Column(Text, nullable=True)     # deep link to the live listing
 
     # Pricing
-    price_raw = Column(String(50), nullable=True)  # e.g. "USD 19.99"
+    price_raw = Column(String(50), nullable=True)  # e.g. "CAD 19.99"
     price_cents = Column(Integer, nullable=False, default=0)
-    currency = Column(String(10), nullable=True, default="USD")
+    currency = Column(String(10), nullable=True, default="CAD")
+
+    # Cost & Investment Tracking (COGS)
+    purchase_price_cents = Column(Integer, nullable=False, default=0)  # What we bought it for
+    parts_cost_cents = Column(Integer, nullable=False, default=0)      # Total parts/repair cost
+    parts_json = Column(JSON, nullable=True)                          # [{"description": "Power supply", "cost_cents": 2500}]
 
     # State
     status = Column(String(20), nullable=False, default="active", index=True)
@@ -211,6 +216,20 @@ class Listing(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_fetched = Column(DateTime, nullable=True)
 
+    @property
+    def total_cost_cents(self) -> int:
+        return (self.purchase_price_cents or 0) + (self.parts_cost_cents or 0)
+
+    @property
+    def net_profit_cents(self) -> int:
+        return (self.price_cents or 0) - self.total_cost_cents
+
+    @property
+    def profit_margin_pct(self) -> float:
+        if not self.price_cents or self.price_cents <= 0:
+            return 0.0
+        return round((self.net_profit_cents / self.price_cents) * 100, 1)
+
     def to_dict(self):
         """Serialise for the JSON API (consumed by the dashboard UI)."""
         return {
@@ -222,7 +241,17 @@ class Listing(Base):
             "description": self.description,
             "price_raw": self.price_raw,
             "price_cents": self.price_cents,
-            "currency": self.currency,
+            "currency": self.currency or "CAD",
+            "purchase_price_cents": self.purchase_price_cents or 0,
+            "purchase_price": round((self.purchase_price_cents or 0) / 100, 2),
+            "parts_cost_cents": self.parts_cost_cents or 0,
+            "parts_cost": round((self.parts_cost_cents or 0) / 100, 2),
+            "parts": self.parts_json or [],
+            "total_cost_cents": self.total_cost_cents,
+            "total_cost": round(self.total_cost_cents / 100, 2),
+            "net_profit_cents": self.net_profit_cents,
+            "net_profit": round(self.net_profit_cents / 100, 2),
+            "profit_margin_pct": self.profit_margin_pct,
             "status": self.status,
             "is_sold": bool(self.is_sold),
             "image_url": self.image_url,

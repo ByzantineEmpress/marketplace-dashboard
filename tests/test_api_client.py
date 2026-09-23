@@ -459,6 +459,112 @@ class MarketplaceApiTest(unittest.TestCase):
             config.GOOGLE_CLIENT_ID = orig_client_id
 
 
+    def test_13_cost_parts_and_cad_currency(self):
+        """Verify CAD default currency, bought-for cost, repair parts tracking, and profit calculations."""
+        # Ensure authenticated
+        self.client.post(
+            "/api/auth/login",
+            json={"username": config.ADMIN_USERNAME, "password": config.ADMIN_PASSWORD},
+        )
+
+        # 1. Create a manual listing with purchase price and repair parts in CAD
+        create_res = self.client.post(
+            "/api/listings/manual",
+            json={
+                "title": "Nintendo Switch OLED - Console with New Power Supply",
+                "price": 280.00,
+                "purchase_price": 120.00,
+                "parts": [
+                    {"description": "OEM AC Adapter Power Supply", "cost": 30.00},
+                    {"description": "Replacement Joy-Con Rail", "cost": 15.00},
+                ],
+                "quantity": 1,
+                "platform": "local",
+                "status": "active",
+                "sku": "NSW-001",
+                "description": "Refurbished console tested and fully working",
+            },
+        )
+        self.assertEqual(create_res.status_code, 200)
+        data = create_res.json()
+        self.assertTrue(data.get("ok"))
+        listing = data.get("listing", {})
+        listing_id = listing["id"]
+
+        self.assertEqual(listing["currency"], "CAD")
+        self.assertEqual(listing["price_cents"], 28000)
+        self.assertEqual(listing["purchase_price_cents"], 12000)
+        self.assertEqual(listing["purchase_price"], 120.00)
+        self.assertEqual(listing["parts_cost_cents"], 4500)
+        self.assertEqual(listing["parts_cost"], 45.00)
+        self.assertEqual(len(listing["parts"]), 2)
+        self.assertEqual(listing["total_cost_cents"], 16500)
+        self.assertEqual(listing["total_cost"], 165.00)
+        self.assertEqual(listing["net_profit_cents"], 11500)
+        self.assertEqual(listing["net_profit"], 115.00)
+        self.assertAlmostEqual(listing["profit_margin_pct"], 41.1, places=1)
+
+        # 2. Update an existing listing's costs and parts via PUT /api/listings/{id}
+        update_res = self.client.put(
+            f"/api/listings/{listing_id}",
+            json={
+                "purchase_price": 110.00,
+                "price": 290.00,
+                "parts": [
+                    {"description": "OEM AC Adapter Power Supply", "cost": 25.00},
+                ],
+            },
+        )
+        self.assertEqual(update_res.status_code, 200)
+        up_data = update_res.json()
+        self.assertTrue(up_data.get("ok"))
+        up_listing = up_data.get("listing", {})
+        self.assertEqual(up_listing["purchase_price"], 110.00)
+        self.assertEqual(up_listing["parts_cost"], 25.00)
+        self.assertEqual(up_listing["total_cost"], 135.00)
+        self.assertEqual(up_listing["net_profit"], 155.00)
+
+        # 3. Verify stats reflect total costs
+        stats_res = self.client.get("/api/stats")
+        self.assertEqual(stats_res.status_code, 200)
+        s = stats_res.json()
+        self.assertEqual(s.get("currency"), "CAD")
+        self.assertGreaterEqual(s.get("total_cost_cents", 0), 13500)
+
+        # Cleanup
+        self.client.delete(f"/api/listings/{listing_id}")
+
+    def test_14_team_invite_email_dispatch(self):
+        """Verify team invite generation, invite link, email template, and SMTP response."""
+        # Ensure authenticated
+        self.client.post(
+            "/api/auth/login",
+            json={"username": config.ADMIN_USERNAME, "password": config.ADMIN_PASSWORD},
+        )
+
+        # Get existing teams
+        teams_res = self.client.get("/api/teams")
+        self.assertEqual(teams_res.status_code, 200)
+        teams = teams_res.json()
+        self.assertGreaterEqual(len(teams), 1)
+        team_id = teams[0]["id"]
+
+        # Add / invite collaborator by email
+        invite_res = self.client.post(
+            f"/api/teams/{team_id}/members",
+            json={"email": "collaborator_test@example.com"},
+        )
+        self.assertEqual(invite_res.status_code, 200)
+        inv_data = invite_res.json()
+        self.assertTrue(inv_data.get("ok"))
+        self.assertIn("invite_url", inv_data)
+        self.assertIn("/join/", inv_data["invite_url"])
+        self.assertIn("invite_subject", inv_data)
+        self.assertIn("invite_body", inv_data)
+        self.assertIn("team_name", inv_data)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

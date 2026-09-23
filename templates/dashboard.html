@@ -16,12 +16,20 @@
             <span class="stat-label">Sold</span>
         </div>
         <div class="stat stat--value">
-            <span class="stat-number" id="stat-value">$—</span>
-            <span class="stat-label">Value</span>
+            <span class="stat-number" id="stat-value">$— CAD</span>
+            <span class="stat-label">Active Value</span>
+        </div>
+        <div class="stat stat--cost">
+            <span class="stat-number" id="stat-cost">$— CAD</span>
+            <span class="stat-label">Active Cost (COGS)</span>
+        </div>
+        <div class="stat stat--profit">
+            <span class="stat-number" id="stat-profit">$— CAD</span>
+            <span class="stat-label">Realized Profit</span>
         </div>
         <div class="stat stat--total">
             <span class="stat-number" id="stat-total">—</span>
-            <span class="stat-label">Total</span>
+            <span class="stat-label">Total Listings</span>
         </div>
     </div>
 
@@ -69,34 +77,53 @@
 
     <!-- Manual Listing / Local Sale Modal -->
     <div id="manual-listing-modal" class="modal-backdrop" aria-hidden="true" role="dialog">
-        <div class="modal" style="max-width: 520px;">
+        <div class="modal" style="max-width: 560px;">
             <div class="modal-header">
-                <h2 class="modal-title" id="manual-modal-title">Record Listing or Local Sale</h2>
+                <h2 class="modal-title" id="manual-modal-title">Record Listing or Local Sale ($ CAD)</h2>
                 <button type="button" class="modal-close" id="close-manual-modal-btn" aria-label="Close dialog">&times;</button>
             </div>
             <form id="manual-listing-form">
                 <div class="modal-body">
                     <div class="form-group">
                         <label for="manual-title">Item Title *</label>
-                        <input type="text" id="manual-title" required placeholder="e.g. Vintage Denim Jacket, Sony Headphones, Pokémon Cards">
+                        <input type="text" id="manual-title" required placeholder="e.g. Nintendo Switch Console, Vintage Jacket, iPhone 12">
                     </div>
                     <div style="display: flex; gap: 12px;">
                         <div class="form-group" style="flex: 1;">
-                            <label for="manual-price">Price ($ USD) *</label>
-                            <input type="number" step="0.01" min="0" id="manual-price" required placeholder="25.00">
+                            <label for="manual-price">Selling / Listed Price ($ CAD) *</label>
+                            <input type="number" step="0.01" min="0" id="manual-price" required placeholder="150.00">
                         </div>
                         <div class="form-group" style="flex: 1;">
-                            <label for="manual-quantity">Quantity</label>
-                            <input type="number" min="0" id="manual-quantity" value="1">
+                            <label for="manual-purchase-price">Bought For / Cost ($ CAD)</label>
+                            <input type="number" step="0.01" min="0" id="manual-purchase-price" placeholder="50.00">
                         </div>
                     </div>
+
+                    <!-- Parts & Repairs Section -->
+                    <div style="border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; background: var(--bg); margin-bottom: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <label style="font-weight: 600; font-size: 13px; color: var(--text);">Parts & Repairs Put Into It ($ CAD)</label>
+                            <button type="button" class="btn btn--sm btn--outline" id="manual-add-part-btn" style="font-size: 12px; padding: 3px 8px;">+ Add Part</button>
+                        </div>
+                        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">
+                            Record replacement parts, accessories, or materials (e.g. "New power supply" - $25 CAD).
+                        </p>
+                        <div id="manual-parts-container" style="display: flex; flex-direction: column; gap: 8px;">
+                            <!-- Dynamic part rows injected here -->
+                        </div>
+                        <div id="manual-financial-summary" style="margin-top: 10px; padding: 8px 10px; background: var(--bg-elevated); border: 1px dashed var(--border); border-radius: 6px; font-size: 12.5px; display: flex; justify-content: space-between;">
+                            <span>Total Investment: <strong id="manual-total-cost-preview">$0.00 CAD</strong></span>
+                            <span>Est. Profit: <strong id="manual-profit-preview" style="color: var(--success);">+$0.00 CAD</strong></span>
+                        </div>
+                    </div>
+
                     <div style="display: flex; gap: 12px;">
                         <div class="form-group" style="flex: 1;">
                             <label for="manual-platform">Sales Channel / Platform</label>
                             <select id="manual-platform">
                                 <option value="local">Local / In-Person (Cash/Pickup)</option>
                                 <option value="facebook">Facebook Marketplace</option>
-                                <option value="craigslist">Craigslist / OfferUp</option>
+                                <option value="craigslist">Craigslist / Kijiji</option>
                                 <option value="poshmark">Poshmark</option>
                                 <option value="amazon">Amazon</option>
                                 <option value="ebay">eBay</option>
@@ -113,6 +140,10 @@
                     </div>
                     <div style="display: flex; gap: 12px;">
                         <div class="form-group" style="flex: 1;">
+                            <label for="manual-quantity">Quantity</label>
+                            <input type="number" min="0" id="manual-quantity" value="1">
+                        </div>
+                        <div class="form-group" style="flex: 1;">
                             <label for="manual-sku">SKU / Custom ID (optional)</label>
                             <input type="text" id="manual-sku" placeholder="e.g. LOC-001">
                         </div>
@@ -125,7 +156,7 @@
                     </div>
                     <div class="form-group">
                         <label for="manual-desc">Notes / Description (optional)</label>
-                        <textarea id="manual-desc" rows="2" placeholder="e.g. Paid cash at yard sale; in great condition"></textarea>
+                        <textarea id="manual-desc" rows="2" placeholder="e.g. Paid cash at yard sale; replaced power supply, tested and working"></textarea>
                     </div>
                 </div>
                 <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px;">
@@ -169,11 +200,24 @@
 
                 <div style="margin-bottom: 18px;">
                     <label style="font-weight: 600; display: block; margin-bottom: 4px;">Invite Collaborator by Email</label>
+                    <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 8px;">
+                        Enroll a teammate by email. You can send them a direct invitation or open your email app with the link ready.
+                    </p>
+                    <div class="form-group" style="margin-bottom: 8px;">
+                        <label for="invite-team-select">Team to Invite To:</label>
+                        <select id="invite-team-select">
+                            <!-- Populated by JS -->
+                        </select>
+                    </div>
                     <div style="display: flex; gap: 8px;">
                         <input type="email" id="invite-email-input" placeholder="colleague@gmail.com" style="flex: 1;">
-                        <button type="button" class="btn btn--sm" id="send-email-invite-btn">Add to Team</button>
+                        <button type="button" class="btn btn--sm btn--primary" id="send-email-invite-btn">Add to Team</button>
                     </div>
-                    <span id="invite-email-status" style="font-size: 12px; margin-top: 4px; display: block;"></span>
+                    <div id="email-invite-actions" style="margin-top: 8px; display: none; gap: 8px; flex-wrap: wrap;">
+                        <a id="open-mailto-link-btn" href="#" class="btn btn--sm btn--outline" target="_blank">✉️ Open Email App</a>
+                        <button type="button" class="btn btn--sm btn--outline" id="copy-email-template-btn">📋 Copy Invite Message</button>
+                    </div>
+                    <span id="invite-email-status" style="font-size: 12px; margin-top: 6px; display: block;"></span>
                 </div>
 
                 <hr style="border: 0; border-top: 1px solid var(--border); margin: 16px 0;">

@@ -99,6 +99,19 @@ async function loadAllSettings() {
         setIf("amazon-client-secret", s.AMAZON_CLIENT_SECRET);
         setIf("amazon-refresh-token", s.AMAZON_REFRESH_TOKEN);
         setIf("amazon-marketplace-id", s.AMAZON_MARKETPLACE_ID || "ATVPDKIKX0DER");
+
+        setIf("default-currency", s.DEFAULT_CURRENCY || "CAD");
+        setIf("default-currency-symbol", s.DEFAULT_CURRENCY_SYMBOL || "$");
+
+        setIf("smtp-host", s.SMTP_HOST);
+        setIf("smtp-port", s.SMTP_PORT || "587");
+        setIf("smtp-from", s.SMTP_FROM);
+        setIf("smtp-user", s.SMTP_USER);
+        setIf("smtp-password", s.SMTP_PASSWORD);
+        const smtpTls = document.getElementById("smtp-use-tls");
+        if (smtpTls) {
+            smtpTls.checked = s.SMTP_USE_TLS !== false;
+        }
     } catch (e) {
         /* leave the form at its defaults */
     }
@@ -158,6 +171,63 @@ async function saveMarketplaceSettings() {
         if (data.ok) {
             status.innerHTML =
                 '<span class="flash flash--success flash--inline">✓ Marketplace credentials saved.</span>';
+        } else {
+            status.innerHTML =
+                `<span class="flash flash--error flash--inline">✗ Save failed: ${escapeHtml(data.error || ("HTTP " + resp.status))}</span>`;
+        }
+    } catch (e) {
+        status.innerHTML =
+            `<span class="flash flash--error flash--inline">✗ Save error: ${escapeHtml(e.message)}</span>`;
+    }
+}
+
+async function saveCurrencySettings() {
+    const status = document.getElementById("currency-settings-status");
+    const body = {
+        DEFAULT_CURRENCY: (document.getElementById("default-currency")?.value || "CAD").trim(),
+        DEFAULT_CURRENCY_SYMBOL: (document.getElementById("default-currency-symbol")?.value || "$").trim(),
+    };
+    try {
+        const resp = await fetch("/api/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+            status.innerHTML =
+                '<span class="flash flash--success flash--inline">✓ Currency settings saved.</span>';
+        } else {
+            status.innerHTML =
+                `<span class="flash flash--error flash--inline">✗ Save failed: ${escapeHtml(data.error || ("HTTP " + resp.status))}</span>`;
+        }
+    } catch (e) {
+        status.innerHTML =
+            `<span class="flash flash--error flash--inline">✗ Save error: ${escapeHtml(e.message)}</span>`;
+    }
+}
+
+async function saveSmtpSettings() {
+    const status = document.getElementById("smtp-settings-status");
+    const smtpTls = document.getElementById("smtp-use-tls");
+    const body = {
+        SMTP_HOST: (document.getElementById("smtp-host")?.value || "").trim(),
+        SMTP_PORT: parseInt(document.getElementById("smtp-port")?.value || "587", 10),
+        SMTP_FROM: (document.getElementById("smtp-from")?.value || "").trim(),
+        SMTP_USER: (document.getElementById("smtp-user")?.value || "").trim(),
+        SMTP_PASSWORD: (document.getElementById("smtp-password")?.value || "").trim(),
+        SMTP_USE_TLS: smtpTls ? smtpTls.checked : true,
+    };
+    try {
+        const resp = await fetch("/api/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+            status.innerHTML =
+                '<span class="flash flash--success flash--inline">✓ Outbound email (SMTP) settings saved.</span>';
         } else {
             status.innerHTML =
                 `<span class="flash flash--error flash--inline">✗ Save failed: ${escapeHtml(data.error || ("HTTP " + resp.status))}</span>`;
@@ -336,6 +406,8 @@ document.addEventListener("DOMContentLoaded", () => {
     wire("sync-amazon", () => syncPlatform("amazon"));
     wire("save-google-settings", saveGoogleSettings);
     wire("save-marketplace-settings", saveMarketplaceSettings);
+    wire("save-currency-settings", saveCurrencySettings);
+    wire("save-smtp-settings", saveSmtpSettings);
     wire("create-team", createTeam);
     loadAllSettings();
     loadTeams();

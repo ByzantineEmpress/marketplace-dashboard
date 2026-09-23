@@ -77,6 +77,14 @@ def _migrate_existing_db():
         if "invite_code" not in team_cols:
             conn.execute(text("ALTER TABLE teams ADD COLUMN invite_code VARCHAR(32)"))
 
+        # 1c. Cost tracking columns (COGS & Parts)
+        if "purchase_price_cents" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN purchase_price_cents INTEGER NOT NULL DEFAULT 0"))
+        if "parts_cost_cents" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN parts_cost_cents INTEGER NOT NULL DEFAULT 0"))
+        if "parts_json" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN parts_json JSON DEFAULT '[]'"))
+
     # 2. A default team that everything (and the local admin) belongs to
     import secrets
     db = SessionLocal()

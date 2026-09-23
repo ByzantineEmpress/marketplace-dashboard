@@ -225,6 +225,81 @@
         </div>
     </section>
 
+    <!-- Currency & Localization -->
+    <section class="admin-section">
+        <h2>Currency &amp; Localization</h2>
+        <div class="settings-form" id="currency-settings">
+            <p>
+                Configure the default currency and symbol used for pricing, cost tracking (COGS), repairs, and profit calculations across all listings.
+            </p>
+            <div style="display: flex; gap: 12px; max-width: 480px;">
+                <div class="form-group" style="flex: 2;">
+                    <label for="default-currency">Default Currency</label>
+                    <select id="default-currency">
+                        <option value="CAD">CAD - Canadian Dollar ($ CAD)</option>
+                        <option value="USD">USD - US Dollar ($ USD)</option>
+                        <option value="EUR">EUR - Euro (€)</option>
+                        <option value="GBP">GBP - British Pound (£)</option>
+                    </select>
+                </div>
+                <div class="form-group" style="flex: 1;">
+                    <label for="default-currency-symbol">Symbol</label>
+                    <input type="text" id="default-currency-symbol" value="$" maxlength="4">
+                </div>
+            </div>
+            <div class="settings-actions">
+                <button class="btn btn--primary" id="save-currency-settings">Save Currency Settings</button>
+                <span id="currency-settings-status" class="settings-status"></span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Outbound Email (SMTP) -->
+    <section class="admin-section">
+        <h2>Outbound Email (SMTP)</h2>
+        <div class="settings-form" id="smtp-settings">
+            <p>
+                Optional SMTP mail credentials to dispatch automated team invitations and price alerts directly to teammates' inboxes.
+            </p>
+            <div class="settings-grid">
+                <div class="settings-col">
+                    <div class="form-group">
+                        <label for="smtp-host">SMTP Host</label>
+                        <input type="text" id="smtp-host" placeholder="smtp.gmail.com" class="input-mono">
+                    </div>
+                    <div class="form-group">
+                        <label for="smtp-port">SMTP Port</label>
+                        <input type="number" id="smtp-port" placeholder="587" class="input-mono">
+                    </div>
+                    <div class="form-group">
+                        <label for="smtp-from">From Address / Sender</label>
+                        <input type="text" id="smtp-from" placeholder="Marketplace Dashboard <notifications@yourdomain.com>">
+                    </div>
+                </div>
+                <div class="settings-col">
+                    <div class="form-group">
+                        <label for="smtp-user">SMTP Username / Email</label>
+                        <input type="text" id="smtp-user" placeholder="your-email@gmail.com" class="input-mono" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="smtp-password">SMTP Password / App Password</label>
+                        <input type="password" id="smtp-password" placeholder="••••••••••••••••" class="input-mono" autocomplete="off">
+                    </div>
+                    <div class="form-group" style="margin-top: 14px;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="checkbox" id="smtp-use-tls" checked>
+                            <span>Enable TLS Encryption (recommended for port 587)</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-actions">
+                <button class="btn btn--primary" id="save-smtp-settings">Save SMTP Settings</button>
+                <span id="smtp-settings-status" class="settings-status"></span>
+            </div>
+        </div>
+    </section>
+
     <!-- Teams (shared inventory) -->
     <section class="admin-section">
         <h2>Teams</h2>

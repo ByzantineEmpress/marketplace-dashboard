@@ -547,6 +547,14 @@ SETTINGS_KEYS = (
     "EBAY_CLIENT_SECRET",
     "ETSY_API_KEY",
     "ETSY_API_SECRET",
+    "DEFAULT_CURRENCY",
+    "DEFAULT_CURRENCY_SYMBOL",
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_USER",
+    "SMTP_PASSWORD",
+    "SMTP_FROM",
+    "SMTP_USE_TLS",
     "POSHMARK_USERNAME",
     "POSHMARK_API_KEY",
     "AMAZON_SELLER_ID",
@@ -568,6 +576,14 @@ async def get_settings(_auth: bool = Depends(check_auth)):
             "GOOGLE_ALLOWED_EMAILS": ",".join(config.GOOGLE_ALLOWED_EMAILS),
             "GOOGLE_DEV_MODE": config.GOOGLE_DEV_MODE,
             "APP_BASE_URL": config.APP_BASE_URL,
+            "DEFAULT_CURRENCY": config.DEFAULT_CURRENCY,
+            "DEFAULT_CURRENCY_SYMBOL": config.DEFAULT_CURRENCY_SYMBOL,
+            "SMTP_HOST": config.SMTP_HOST,
+            "SMTP_PORT": config.SMTP_PORT,
+            "SMTP_USER": config.SMTP_USER,
+            "SMTP_PASSWORD": config.SMTP_PASSWORD,
+            "SMTP_FROM": config.SMTP_FROM,
+            "SMTP_USE_TLS": config.SMTP_USE_TLS,
             "DEFAULT_REFRESH_INTERVAL_S": config.DEFAULT_REFRESH_INTERVAL_S,
             "EBAY_CLIENT_ID": config.EBAY_CLIENT_ID,
             "EBAY_CLIENT_SECRET": config.EBAY_CLIENT_SECRET,
@@ -730,11 +746,27 @@ async def get_stats(team: str = None, db: Session = Depends(get_db), _user: dict
     # Total value (sum of active listings)
     total_value = db.query(func.sum(Listing.price_cents)).filter(scope, Listing.status == "active").scalar() or 0
 
+    # Total investment / cost across active listings
+    total_cost = db.query(
+        func.sum(Listing.purchase_price_cents + Listing.parts_cost_cents)
+    ).filter(scope, Listing.status == "active").scalar() or 0
+
+    # Total profit realized from sold items (revenue - costs)
+    sold_revenue = db.query(func.sum(Listing.price_cents)).filter(scope, Listing.is_sold == True).scalar() or 0  # noqa: E712
+    sold_cost = db.query(
+        func.sum(Listing.purchase_price_cents + Listing.parts_cost_cents)
+    ).filter(scope, Listing.is_sold == True).scalar() or 0  # noqa: E712
+    sold_profit = sold_revenue - sold_cost
+
     return {
         "total_listings": total,
         "active_listings": active,
         "sold_listings": sold,
         "total_value_cents": total_value,
+        "total_cost_cents": total_cost,
+        "sold_profit_cents": sold_profit,
+        "currency": config.DEFAULT_CURRENCY or "CAD",
+        "currency_symbol": config.DEFAULT_CURRENCY_SYMBOL or "$",
         "platforms": platforms,
     }
 
@@ -876,8 +908,51 @@ async def add_team_member(team_id: int, body: dict, db: Session = Depends(get_db
     if exists:
         return JSONResponse(status_code=400, content={"ok": False, "error": "Already a member of that team"})
     db.add(TeamMembership(team_id=team_id, user_id=user.id, role="member"))
+    team = db.get(Team, team_id)
+    if not team.invite_code:
+        import secrets
+        team.invite_code = secrets.token_urlsafe(16)
     db.commit()
-    return {"ok": True}
+
+    invite_url = f"{config.APP_BASE_URL}/join/{team.invite_code}"
+    inviter_name = _user.get("name") or "A team member"
+    invite_subject = f"Invitation to join team '{team.name}' on {config.APP_NAME}"
+    invite_body = (
+        f"Hi,\n\n"
+        f"{inviter_name} has invited you to collaborate on team '{team.name}' in {config.APP_NAME}.\n\n"
+        f"Click the link below to accept the invitation and sign in:\n"
+        f"{invite_url}\n\n"
+        f"Welcome to the team!"
+    )
+
+    email_sent = False
+    if config.SMTP_HOST and config.SMTP_USER:
+        try:
+            import smtplib
+            from email.message import EmailMessage
+            msg = EmailMessage()
+            msg["Subject"] = invite_subject
+            msg["From"] = config.SMTP_FROM or config.SMTP_USER
+            msg["To"] = email
+            msg.set_content(invite_body)
+            with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=10) as server:
+                if config.SMTP_USE_TLS:
+                    server.starttls()
+                if config.SMTP_PASSWORD:
+                    server.login(config.SMTP_USER, config.SMTP_PASSWORD)
+                server.send_message(msg)
+            email_sent = True
+        except Exception:
+            email_sent = False
+
+    return {
+        "ok": True,
+        "email_sent": email_sent,
+        "invite_url": invite_url,
+        "invite_subject": invite_subject,
+        "invite_body": invite_body,
+        "team_name": team.name,
+    }
 
 
 @api_router.delete("/teams/{team_id}/members/{user_id}")
@@ -965,11 +1040,45 @@ async def create_manual_listing(body: dict, db: Session = Depends(get_db), _user
         except (ValueError, TypeError):
             price_cents = 0
 
-    currency = (body.get("currency") or "USD").upper().strip()
+    currency = (body.get("currency") or config.DEFAULT_CURRENCY or "CAD").upper().strip()
     platform = (body.get("platform") or "local").lower().strip()
     status = (body.get("status") or "active").lower().strip()
     is_sold = status == "sold" or bool(body.get("is_sold"))
     quantity = int(body.get("quantity") or (0 if is_sold else 1))
+
+    # Cost & Investment tracking (what we bought it for + parts/repairs)
+    purchase_price_cents = body.get("purchase_price_cents")
+    if purchase_price_cents is None:
+        try:
+            purchase_val = float(body.get("purchase_price") or body.get("cost") or 0)
+            purchase_price_cents = int(round(purchase_val * 100))
+        except (ValueError, TypeError):
+            purchase_price_cents = 0
+
+    parts_raw = body.get("parts") or []
+    cleaned_parts = []
+    parts_cost_cents = 0
+    if isinstance(parts_raw, list):
+        for p in parts_raw:
+            if not isinstance(p, dict):
+                continue
+            desc = (p.get("description") or p.get("name") or "").strip()
+            if not desc:
+                continue
+            c_cents = p.get("cost_cents")
+            if c_cents is None:
+                try:
+                    c_cents = int(round(float(p.get("cost") or 0) * 100))
+                except (ValueError, TypeError):
+                    c_cents = 0
+            else:
+                c_cents = int(c_cents)
+            cleaned_parts.append({
+                "description": desc,
+                "cost_cents": c_cents,
+                "cost": round(c_cents / 100, 2),
+            })
+            parts_cost_cents += c_cents
 
     team_id = body.get("team_id")
     if team_id:
@@ -997,6 +1106,9 @@ async def create_manual_listing(body: dict, db: Session = Depends(get_db), _user
         price_cents=price_cents,
         price_raw=f"{currency} {price_cents / 100:.2f}",
         currency=currency,
+        purchase_price_cents=purchase_price_cents,
+        parts_cost_cents=parts_cost_cents,
+        parts_json=cleaned_parts,
         status="sold" if is_sold else status,
         is_sold=is_sold,
         available_quantity=quantity,
@@ -1048,13 +1160,13 @@ async def delete_listing(listing_id: int, db: Session = Depends(get_db), _user: 
 
 @api_router.put("/listings/{listing_id}")
 async def update_listing(listing_id: int, body: dict, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
-    """Update a listing (currently: which team it belongs to).
-
-    Body: { "team_id": 2 } — or { "team_id": null } to make it shared.
-    """
+    """Update a listing (team assignment, purchase price, parts & repairs, price)."""
     listing = db.get(Listing, listing_id)
     if not listing:
         return JSONResponse(status_code=404, content={"ok": False, "error": "Listing not found"})
+    if listing.team_id and listing.team_id not in _user["team_ids"]:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Listing not found"})
+
     if "team_id" in body:
         new_team = body["team_id"]
         if new_team is None:
@@ -1067,6 +1179,58 @@ async def update_listing(listing_id: int, body: dict, db: Session = Depends(get_
             if new_team not in _user["team_ids"]:
                 return JSONResponse(status_code=404, content={"ok": False, "error": "Team not found"})
             listing.team_id = new_team
+
+    if "purchase_price" in body or "purchase_price_cents" in body:
+        purchase_cents = body.get("purchase_price_cents")
+        if purchase_cents is None:
+            try:
+                purchase_val = float(body.get("purchase_price") or 0)
+                purchase_cents = int(round(purchase_val * 100))
+            except (ValueError, TypeError):
+                purchase_cents = 0
+        listing.purchase_price_cents = max(0, int(purchase_cents))
+
+    if "parts" in body:
+        parts_raw = body.get("parts") or []
+        cleaned_parts = []
+        parts_cost_cents = 0
+        if isinstance(parts_raw, list):
+            for p in parts_raw:
+                if not isinstance(p, dict):
+                    continue
+                desc = (p.get("description") or p.get("name") or "").strip()
+                if not desc:
+                    continue
+                c_cents = p.get("cost_cents")
+                if c_cents is None:
+                    try:
+                        c_cents = int(round(float(p.get("cost") or 0) * 100))
+                    except (ValueError, TypeError):
+                        c_cents = 0
+                else:
+                    c_cents = int(c_cents)
+                cleaned_parts.append({
+                    "description": desc,
+                    "cost_cents": c_cents,
+                    "cost": round(c_cents / 100, 2),
+                })
+                parts_cost_cents += c_cents
+        listing.parts_cost_cents = parts_cost_cents
+        listing.parts_json = cleaned_parts
+
+    if "price" in body or "price_cents" in body:
+        p_cents = body.get("price_cents")
+        if p_cents is None:
+            try:
+                p_val = float(body.get("price") or 0)
+                p_cents = int(round(p_val * 100))
+            except (ValueError, TypeError):
+                p_cents = listing.price_cents
+        listing.price_cents = max(0, int(p_cents))
+        curr = listing.currency or config.DEFAULT_CURRENCY or "CAD"
+        listing.price_raw = f"{curr} {listing.price_cents / 100:.2f}"
+
+    listing.updated_at = datetime.utcnow()
     db.commit()
     return {"ok": True, "listing": listing.to_dict()}
 

@@ -75,6 +75,18 @@ class Config:
     ESY_API_KEY: str = ""
     ESY_API_SECRET: str = ""
 
+    # -- Currency & Localization --
+    DEFAULT_CURRENCY: str = "CAD"
+    DEFAULT_CURRENCY_SYMBOL: str = "$"
+
+    # -- Outbound Email (SMTP) for Team Invites & Alerts --
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_USE_TLS: bool = True
+
     # -- Cache / polling --
     DEFAULT_REFRESH_INTERVAL_S: int = 300  # 5 minutes
     MAX_CACHED_LISTINGS: int = 10000
