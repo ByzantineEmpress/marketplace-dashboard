@@ -15,6 +15,7 @@ document.addEventListener("DOMContentLoaded", () => {
         order: "desc",
         total: 0,
         pageSize: 50,
+        metricsDays: "all",
     };
 
     let loadedListings = {};
@@ -134,10 +135,46 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    // Metrics time-range filter
+    const metricsPeriodBadge = document.getElementById("metrics-period-badge");
+    const metricsFilterGroup = document.getElementById("metrics-filter-group");
+    const metricsBtn7d = document.getElementById("metrics-btn-7d");
+    const metricsBtn30d = document.getElementById("metrics-btn-30d");
+    const metricsBtnAll = document.getElementById("metrics-btn-all");
+
+    function setMetricsPeriod(days) {
+        state.metricsDays = days;
+        const btns = [
+            { el: metricsBtn7d, val: "7", label: "Last 7 Days" },
+            { el: metricsBtn30d, val: "30", label: "Last 30 Days" },
+            { el: metricsBtnAll, val: "all", label: "All Time" },
+        ];
+        btns.forEach(b => {
+            if (b.el) {
+                if (b.val === days) {
+                    b.el.classList.add("is-active");
+                    if (metricsPeriodBadge) metricsPeriodBadge.textContent = b.label;
+                } else {
+                    b.el.classList.remove("is-active");
+                }
+            }
+        });
+        loadStats();
+    }
+
+    if (metricsBtn7d) metricsBtn7d.addEventListener("click", () => setMetricsPeriod("7"));
+    if (metricsBtn30d) metricsBtn30d.addEventListener("click", () => setMetricsPeriod("30"));
+    if (metricsBtnAll) metricsBtnAll.addEventListener("click", () => setMetricsPeriod("all"));
+
     async function loadStats() {
         try {
-            const teamParam = state.team ? `?team=${state.team}` : "";
-            const res = await fetch(`/api/stats${teamParam}`);
+            const params = new URLSearchParams();
+            if (state.team) params.set("team", state.team);
+            if (state.metricsDays && state.metricsDays !== "all") {
+                params.set("days", state.metricsDays);
+            }
+            const query = params.toString() ? `?${params.toString()}` : "";
+            const res = await fetch(`/api/stats${query}`);
             if (!res.ok) return;
             const stats = await res.json();
             const cur = stats.currency || "CAD";
@@ -176,11 +213,11 @@ document.addEventListener("DOMContentLoaded", () => {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
                 });
-                const prefix = profitVal < 0 ? `-${sym}` : `+${sym}`;
+                const prefix = profitVal < 0 ? `-${sym}` : (profitVal > 0 ? `+${sym}` : `${sym}`);
                 const statProfit = document.getElementById("stat-profit");
                 if (statProfit) {
                     statProfit.textContent = `${prefix}${profitStr} ${cur}`;
-                    statProfit.style.color = profitVal >= 0 ? "var(--success)" : "var(--danger)";
+                    statProfit.style.color = profitVal > 0 ? "var(--success)" : (profitVal < 0 ? "var(--danger)" : "var(--text)");
                 }
             }
         } catch (e) { /* ignore */ }

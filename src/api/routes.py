@@ -720,9 +720,10 @@ async def get_listings(
     }
 
 @api_router.get("/stats")
-async def get_stats(team: str = None, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
-    """Return summary stats for the dashboard header (team-scoped)."""
-    from sqlalchemy import func, or_
+async def get_stats(team: str = None, days: str = None, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
+    """Return summary stats for the dashboard header (team-scoped, optional time-filtered)."""
+    from sqlalchemy import func, or_, and_
+    from sqlalchemy.sql.functions import coalesce
 
     # Same team scoping as the listings endpoint.
     if team:
@@ -734,41 +735,64 @@ async def get_stats(team: str = None, db: Session = Depends(get_db), _user: dict
     else:
         scope = or_(Listing.team_id == None, Listing.team_id.in_(_user["team_ids"]))  # noqa: E711
 
-    total = db.query(func.count(Listing.id)).filter(scope).scalar() or 0
-    active = db.query(func.count(Listing.id)).filter(scope, Listing.status == "active").scalar() or 0
-    sold = db.query(func.count(Listing.id)).filter(scope, Listing.is_sold == True).scalar() or 0  # noqa: E712
+    days_int = None
+    if days and str(days).lower() not in ("all", "0", "none", ""):
+        try:
+            days_int = int(days)
+        except (TypeError, ValueError):
+            days_int = None
+
+    cutoff = (datetime.utcnow() - timedelta(days=days_int)) if days_int else None
+
+    if cutoff:
+        sold_time = coalesce(Listing.sold_at, Listing.updated_at)
+        sold_scope = and_(scope, Listing.is_sold == True, sold_time >= cutoff)  # noqa: E712
+        active_scope = and_(scope, Listing.status == "active", Listing.created_at >= cutoff)
+        total_scope = and_(scope, Listing.created_at >= cutoff)
+    else:
+        sold_scope = and_(scope, Listing.is_sold == True)  # noqa: E712
+        active_scope = and_(scope, Listing.status == "active")
+        total_scope = scope
+
+    total = db.query(func.count(Listing.id)).filter(total_scope).scalar() or 0
+    active = db.query(func.count(Listing.id)).filter(active_scope).scalar() or 0
+    sold = db.query(func.count(Listing.id)).filter(sold_scope).scalar() or 0
 
     # Count per platform
     platform_counts = (
         db.query(Listing.platform, func.count(Listing.id))
-        .filter(scope)
+        .filter(total_scope)
         .group_by(Listing.platform)
         .all()
     )
 
     platforms = {p: c for p, c in platform_counts}
 
-    # Total value (sum of active listings)
-    total_value = db.query(func.sum(Listing.price_cents)).filter(scope, Listing.status == "active").scalar() or 0
+    # Total value (sum of active listings in scope)
+    total_value = db.query(func.sum(Listing.price_cents)).filter(active_scope).scalar() or 0
 
-    # Total investment / cost across active listings
+    # Total investment / cost across active listings in scope
     total_cost = db.query(
         func.sum(Listing.purchase_price_cents + Listing.parts_cost_cents)
-    ).filter(scope, Listing.status == "active").scalar() or 0
+    ).filter(active_scope).scalar() or 0
 
-    # Total profit realized from sold items (revenue - costs)
-    sold_revenue = db.query(func.sum(Listing.price_cents)).filter(scope, Listing.is_sold == True).scalar() or 0  # noqa: E712
+    # Total profit realized from sold items in scope (revenue - costs)
+    sold_revenue = db.query(func.sum(Listing.price_cents)).filter(sold_scope).scalar() or 0
     sold_cost = db.query(
         func.sum(Listing.purchase_price_cents + Listing.parts_cost_cents)
-    ).filter(scope, Listing.is_sold == True).scalar() or 0  # noqa: E712
+    ).filter(sold_scope).scalar() or 0
     sold_profit = sold_revenue - sold_cost
 
     return {
+        "period": f"{days_int}d" if days_int else "all",
+        "days": days_int,
         "total_listings": total,
         "active_listings": active,
         "sold_listings": sold,
         "total_value_cents": total_value,
         "total_cost_cents": total_cost,
+        "sold_revenue_cents": sold_revenue,
+        "sold_cost_cents": sold_cost,
         "sold_profit_cents": sold_profit,
         "currency": config.DEFAULT_CURRENCY or "CAD",
         "currency_symbol": config.DEFAULT_CURRENCY_SYMBOL or "$",
@@ -1158,6 +1182,7 @@ async def create_manual_listing(body: dict, db: Session = Depends(get_db), _user
         parts_json=cleaned_parts,
         status="sold" if is_sold else status,
         is_sold=is_sold,
+        sold_at=datetime.utcnow() if is_sold else None,
         available_quantity=quantity,
         views_count=1,
         image_url=image_url,
@@ -1185,6 +1210,7 @@ async def mark_listing_sold(listing_id: int, db: Session = Depends(get_db), _use
 
     listing.status = "sold"
     listing.is_sold = True
+    listing.sold_at = datetime.utcnow()
     listing.available_quantity = max(0, listing.available_quantity - 1)
     listing.updated_at = datetime.utcnow()
     db.commit()
@@ -1291,6 +1317,30 @@ async def update_listing(listing_id: int, body: dict, db: Session = Depends(get_
     if "image_url" in body:
         img_val = (body.get("image_url") or "").strip()
         listing.image_url = img_val or None
+
+    if "status" in body:
+        new_status = (body.get("status") or "").lower().strip()
+        if new_status:
+            listing.status = new_status
+            if new_status == "sold":
+                if not listing.is_sold:
+                    listing.is_sold = True
+                    listing.sold_at = datetime.utcnow()
+            elif listing.is_sold:
+                listing.is_sold = False
+                listing.sold_at = None
+
+    if "is_sold" in body:
+        new_is_sold = bool(body["is_sold"])
+        if new_is_sold and not listing.is_sold:
+            listing.is_sold = True
+            listing.sold_at = datetime.utcnow()
+            listing.status = "sold"
+        elif not new_is_sold and listing.is_sold:
+            listing.is_sold = False
+            listing.sold_at = None
+            if listing.status == "sold":
+                listing.status = "active"
 
     listing.updated_at = datetime.utcnow()
     db.commit()

@@ -89,6 +89,10 @@ def _migrate_existing_db():
         if "platforms_json" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN platforms_json JSON DEFAULT '[]'"))
 
+        # 1e. sold_at timestamp for date-range metrics
+        if "sold_at" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN sold_at TIMESTAMP"))
+
     # 2. A default team that everything (and the local admin) belongs to
     import secrets
     db = SessionLocal()

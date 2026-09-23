@@ -215,6 +215,7 @@ class Listing(Base):
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    sold_at = Column(DateTime, nullable=True, index=True)
     last_fetched = Column(DateTime, nullable=True)
 
     @property
@@ -262,6 +263,7 @@ class Listing(Base):
             "profit_margin_pct": self.profit_margin_pct,
             "status": self.status,
             "is_sold": bool(self.is_sold),
+            "sold_at": self.sold_at.isoformat() if self.sold_at else None,
             "image_url": self.image_url,
             "images": self.images_json or [],
             "original_url": self.original_url,

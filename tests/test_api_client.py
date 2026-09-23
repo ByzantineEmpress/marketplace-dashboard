@@ -685,6 +685,102 @@ class MarketplaceApiTest(unittest.TestCase):
             if os.path.exists(local_path):
                 os.remove(local_path)
 
+    def test_16_metrics_time_range_filtering(self):
+        """Verify top metrics can be filtered by 7 days, 30 days, and all time."""
+        from datetime import datetime, timedelta
+        # 1. Login as admin
+        self.client.post(
+            "/api/auth/login",
+            json={"username": config.ADMIN_USERNAME, "password": config.ADMIN_PASSWORD},
+        )
+
+        db = SessionLocal()
+        created_ids = []
+        try:
+            # Create a recent sale (< 7 days ago, e.g. 2 days ago)
+            recent_sold = Listing(
+                platform="local",
+                platform_listing_id="TEST-METRIC-RECENT",
+                title="Recent Sale Controller",
+                price_cents=10000,  # $100.00
+                purchase_price_cents=4000,  # $40.00
+                parts_cost_cents=1000,  # $10.00
+                status="sold",
+                is_sold=True,
+                sold_at=datetime.utcnow() - timedelta(days=2),
+                created_at=datetime.utcnow() - timedelta(days=2),
+                updated_at=datetime.utcnow() - timedelta(days=2),
+            )
+            # Create a mid-range sale (between 7 and 30 days ago, e.g. 15 days ago)
+            mid_sold = Listing(
+                platform="local",
+                platform_listing_id="TEST-METRIC-MID",
+                title="Mid Sale Console",
+                price_cents=20000,  # $200.00
+                purchase_price_cents=10000,  # $100.00
+                parts_cost_cents=2000,  # $20.00
+                status="sold",
+                is_sold=True,
+                sold_at=datetime.utcnow() - timedelta(days=15),
+                created_at=datetime.utcnow() - timedelta(days=15),
+                updated_at=datetime.utcnow() - timedelta(days=15),
+            )
+            # Create an old sale (> 30 days ago, e.g. 45 days ago)
+            old_sold = Listing(
+                platform="local",
+                platform_listing_id="TEST-METRIC-OLD",
+                title="Old Sale Game",
+                price_cents=5000,  # $50.00
+                purchase_price_cents=1500,  # $15.00
+                parts_cost_cents=500,  # $5.00
+                status="sold",
+                is_sold=True,
+                sold_at=datetime.utcnow() - timedelta(days=45),
+                created_at=datetime.utcnow() - timedelta(days=45),
+                updated_at=datetime.utcnow() - timedelta(days=45),
+            )
+            db.add_all([recent_sold, mid_sold, old_sold])
+            db.commit()
+            created_ids = [recent_sold.id, mid_sold.id, old_sold.id]
+
+            # 2. Query stats for 7 days
+            res_7d = self.client.get("/api/stats?days=7")
+            self.assertEqual(res_7d.status_code, 200)
+            data_7d = res_7d.json()
+            self.assertEqual(data_7d["period"], "7d")
+            self.assertEqual(data_7d["days"], 7)
+
+            # 3. Query stats for 30 days
+            res_30d = self.client.get("/api/stats?days=30")
+            self.assertEqual(res_30d.status_code, 200)
+            data_30d = res_30d.json()
+            self.assertEqual(data_30d["period"], "30d")
+            self.assertEqual(data_30d["days"], 30)
+
+            # 4. Query stats for all time
+            res_all = self.client.get("/api/stats?days=all")
+            self.assertEqual(res_all.status_code, 200)
+            data_all = res_all.json()
+            self.assertEqual(data_all["period"], "all")
+            self.assertIsNone(data_all["days"])
+
+            # 5. Verify monotonically increasing sold counts and profits:
+            # 7d <= 30d <= all
+            self.assertGreaterEqual(data_30d["sold_listings"], data_7d["sold_listings"])
+            self.assertGreaterEqual(data_all["sold_listings"], data_30d["sold_listings"])
+            self.assertGreaterEqual(data_30d["sold_revenue_cents"], data_7d["sold_revenue_cents"])
+            self.assertGreaterEqual(data_all["sold_revenue_cents"], data_30d["sold_revenue_cents"])
+            self.assertGreaterEqual(data_30d["sold_profit_cents"], data_7d["sold_profit_cents"])
+            self.assertGreaterEqual(data_all["sold_profit_cents"], data_30d["sold_profit_cents"])
+
+        finally:
+            for lid in created_ids:
+                item = db.get(Listing, lid)
+                if item:
+                    db.delete(item)
+            db.commit()
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

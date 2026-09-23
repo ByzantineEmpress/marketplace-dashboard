@@ -454,6 +454,49 @@ code {
 .stat--sold .stat-number { color: var(--success-text); }
 .stat--value .stat-number { color: var(--warning-text); }
 
+/* --- Metrics Time Filter --- */
+.metrics-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.metrics-filter-group {
+    display: inline-flex;
+    gap: 4px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 3px;
+}
+
+.metrics-filter-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    padding: 5px 13px;
+    font-size: 12.5px;
+    font-weight: 550;
+    font-family: inherit;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.15s, color 0.15s;
+}
+
+.metrics-filter-btn:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+}
+
+.metrics-filter-btn.is-active {
+    background: var(--accent);
+    color: #ffffff;
+    font-weight: 600;
+}
+
 /* --- 8. Dashboard: toolbar --------------------------------------- */
 
 .toolbar {

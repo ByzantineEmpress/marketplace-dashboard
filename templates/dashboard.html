@@ -5,6 +5,19 @@
 
 {% block content %}
 <div class="dashboard">
+    <!-- Metrics header & time filter -->
+    <div class="metrics-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <h3 style="margin: 0; font-size: 15px; font-weight: 650; color: var(--text);">📊 Performance &amp; Inventory Overview</h3>
+            <span id="metrics-period-badge" style="font-size: 11.5px; font-weight: 500; color: var(--text-muted); background: var(--bg-elevated); border: 1px solid var(--border); padding: 2px 9px; border-radius: 999px;">All Time</span>
+        </div>
+        <div class="metrics-filter-group" id="metrics-filter-group" style="display: flex; gap: 4px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; padding: 3px;">
+            <button type="button" class="metrics-filter-btn" id="metrics-btn-7d" data-days="7">7 Days</button>
+            <button type="button" class="metrics-filter-btn" id="metrics-btn-30d" data-days="30">30 Days</button>
+            <button type="button" class="metrics-filter-btn is-active" id="metrics-btn-all" data-days="all">All Time</button>
+        </div>
+    </div>
+
     <!-- Stats bar -->
     <div class="stats-bar" id="stats-bar">
         <div class="stat stat--active">
