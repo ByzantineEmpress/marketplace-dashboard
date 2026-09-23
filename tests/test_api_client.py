@@ -167,7 +167,21 @@ class MarketplaceApiTest(unittest.TestCase):
 
     def test_08_google_dev_auth_flow(self):
         """Verify local Google OAuth dev simulation and session issuance."""
+        # 0. Unconfigured state: when dev mode is off and no client ID, redirect with error
+        orig_dev_mode = config.GOOGLE_DEV_MODE
+        orig_client_id = config.GOOGLE_CLIENT_ID
+        try:
+            config.GOOGLE_DEV_MODE = False
+            config.GOOGLE_CLIENT_ID = ""
+            res_unconfigured = self.client.get("/auth/google", follow_redirects=False)
+            self.assertEqual(res_unconfigured.status_code, 302)
+            self.assertIn("not+configured", res_unconfigured.headers["location"])
+        finally:
+            config.GOOGLE_DEV_MODE = orig_dev_mode
+            config.GOOGLE_CLIENT_ID = orig_client_id
+
         # 1. Initiating Google auth redirects to dev picker when credentials are dummy/dev mode
+        config.GOOGLE_DEV_MODE = True
         res_init = self.client.get("/auth/google", follow_redirects=False)
         self.assertEqual(res_init.status_code, 302)
         self.assertIn("/auth/google/dev-picker", res_init.headers["location"])

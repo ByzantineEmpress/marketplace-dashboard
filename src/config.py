@@ -48,7 +48,7 @@ class Config:
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_ALLOWED_EMAILS: list = field(default_factory=list)
-    GOOGLE_DEV_MODE: bool = False  # Enable local Google OAuth test simulator
+    GOOGLE_DEV_MODE: bool = True  # Enable local Google OAuth test simulator for dev/testing
 
     # -- OAuth keys for marketplace APIs (standard naming) --
     EBAY_CLIENT_ID: str = ""
