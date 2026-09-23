@@ -85,6 +85,10 @@ def _migrate_existing_db():
         if "parts_json" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN parts_json JSON DEFAULT '[]'"))
 
+        # 1d. Multi-platform cross-listing
+        if "platforms_json" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN platforms_json JSON DEFAULT '[]'"))
+
     # 2. A default team that everything (and the local admin) belongs to
     import secrets
     db = SessionLocal()

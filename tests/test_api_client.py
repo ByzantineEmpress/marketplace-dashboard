@@ -576,6 +576,115 @@ class MarketplaceApiTest(unittest.TestCase):
             finally:
                 db.close()
 
+    def test_15_multi_platform_cross_listing_and_image_upload(self):
+        """Verify multi-platform cross-listing, image file upload, and filtering."""
+        import os
+        import io
+
+        # 1. Login as admin
+        self.client.post(
+            "/api/auth/login",
+            json={"username": config.ADMIN_USERNAME, "password": config.ADMIN_PASSWORD},
+        )
+
+        # 2. Test file upload with disallowed extension
+        res_bad = self.client.post(
+            "/api/upload",
+            files={"file": ("malicious.exe", io.BytesIO(b"executable content"), "application/octet-stream")},
+        )
+        self.assertEqual(res_bad.status_code, 400)
+        self.assertFalse(res_bad.json().get("ok"))
+
+        # 3. Test valid image file upload
+        test_img_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+        res_upload = self.client.post(
+            "/api/upload",
+            files={"file": ("controller.png", io.BytesIO(test_img_bytes), "image/png")},
+        )
+        self.assertEqual(res_upload.status_code, 200)
+        up_data = res_upload.json()
+        self.assertTrue(up_data.get("ok"))
+        uploaded_url = up_data.get("url")
+        self.assertTrue(uploaded_url.startswith("/static/uploads/"))
+
+        # Verify uploaded file exists on disk
+        local_path = uploaded_url.lstrip("/")
+        self.assertTrue(os.path.exists(local_path))
+
+        listing_id = None
+        try:
+            # 4. Create manual listing cross-listed on eBay, Etsy, and Facebook
+            create_res = self.client.post(
+                "/api/listings/manual",
+                json={
+                    "title": "Custom LED Modded Pro Controller",
+                    "price": 149.99,
+                    "purchase_price": 45.00,
+                    "parts": [
+                        {"description": "Hall Effect Joysticks", "cost": 15.00},
+                        {"description": "RGB LED Kit", "cost": 12.50},
+                    ],
+                    "platforms": ["ebay", "etsy", "facebook"],
+                    "image_url": uploaded_url,
+                    "quantity": 1,
+                    "status": "active",
+                },
+            )
+            self.assertEqual(create_res.status_code, 200)
+            data = create_res.json()
+            self.assertTrue(data.get("ok"))
+            listing = data.get("listing", {})
+            listing_id = listing["id"]
+
+            self.assertEqual(listing["image_url"], uploaded_url)
+            self.assertEqual(listing["platforms"], ["ebay", "etsy", "facebook"])
+            self.assertEqual(listing["platform"], "ebay")
+
+            # 5. Verify platform filter works across multi-listed items
+            # Filter by facebook -> should include this listing
+            fb_res = self.client.get("/api/listings?platform=facebook")
+            self.assertEqual(fb_res.status_code, 200)
+            fb_ids = [l["id"] for l in fb_res.json().get("listings", [])]
+            self.assertIn(listing_id, fb_ids)
+
+            # Filter by etsy -> should include this listing
+            etsy_res = self.client.get("/api/listings?platform=etsy")
+            self.assertEqual(etsy_res.status_code, 200)
+            etsy_ids = [l["id"] for l in etsy_res.json().get("listings", [])]
+            self.assertIn(listing_id, etsy_ids)
+
+            # Filter by poshmark -> should NOT include this listing yet
+            posh_res = self.client.get("/api/listings?platform=poshmark")
+            self.assertEqual(posh_res.status_code, 200)
+            posh_ids = [l["id"] for l in posh_res.json().get("listings", [])]
+            self.assertNotIn(listing_id, posh_ids)
+
+            # 6. Update listing to also cross-list on Poshmark and update image via PUT
+            new_image_url = "https://images.unsplash.com/photo-example"
+            update_res = self.client.put(
+                f"/api/listings/{listing_id}",
+                json={
+                    "platforms": ["ebay", "etsy", "facebook", "poshmark"],
+                    "image_url": new_image_url,
+                },
+            )
+            self.assertEqual(update_res.status_code, 200)
+            up_listing = update_res.json().get("listing", {})
+            self.assertEqual(up_listing["platforms"], ["ebay", "etsy", "facebook", "poshmark"])
+            self.assertEqual(up_listing["image_url"], new_image_url)
+
+            # Now filter by poshmark -> should include this listing
+            posh_res2 = self.client.get("/api/listings?platform=poshmark")
+            self.assertEqual(posh_res2.status_code, 200)
+            posh_ids2 = [l["id"] for l in posh_res2.json().get("listings", [])]
+            self.assertIn(listing_id, posh_ids2)
+
+        finally:
+            if listing_id:
+                self.client.delete(f"/api/listings/{listing_id}")
+            if os.path.exists(local_path):
+                os.remove(local_path)
+
 
 if __name__ == "__main__":
     unittest.main()

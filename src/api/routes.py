@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from urllib.parse import quote
 
 import httpx
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -672,9 +672,14 @@ async def get_listings(
             or_(Listing.team_id == None, Listing.team_id.in_(_user["team_ids"]))  # noqa: E711
         )
 
-    # Filter by platform
+    # Filter by platform (primary platform or cross-listed in platforms_json)
     if platform:
-        query = query.filter(Listing.platform == platform)
+        query = query.filter(
+            or_(
+                Listing.platform == platform,
+                Listing.platforms_json.like(f'%"{platform}"%'),
+            )
+        )
 
     # Filter by status
     if status:
@@ -1022,6 +1027,36 @@ async def join_team_api(body: dict, db: Session = Depends(get_db), _user: dict =
     return {"ok": True, "team": team.to_dict()}
 
 
+# -- Image uploads --
+
+@api_router.post("/upload")
+async def upload_image(file: UploadFile = File(...), _user: dict = Depends(check_auth)):
+    """Upload an image file for a listing and store in static/uploads/."""
+    import os
+    import shutil
+    import uuid
+
+    if not file.filename:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "No file uploaded"})
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    allowed_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
+    if ext not in allowed_exts:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": f"Unsupported image extension '{ext}'. Allowed: {', '.join(sorted(allowed_exts))}"},
+        )
+
+    uploads_dir = os.path.join("static", "uploads")
+    os.makedirs(uploads_dir, exist_ok=True)
+    safe_name = f"{uuid.uuid4().hex[:12]}{ext}"
+    dest_path = os.path.join(uploads_dir, safe_name)
+    with open(dest_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    return {"ok": True, "url": f"/static/uploads/{safe_name}"}
+
+
 # -- Listings (creation, update, delete, local sales) --
 
 @api_router.post("/listings/manual")
@@ -1041,7 +1076,18 @@ async def create_manual_listing(body: dict, db: Session = Depends(get_db), _user
             price_cents = 0
 
     currency = (body.get("currency") or config.DEFAULT_CURRENCY or "CAD").upper().strip()
-    platform = (body.get("platform") or "local").lower().strip()
+
+    # Platforms: array of cross-listed channels (e.g. ["ebay", "etsy", "facebook"])
+    platforms_raw = body.get("platforms")
+    cleaned_platforms = []
+    if isinstance(platforms_raw, list):
+        for p in platforms_raw:
+            if isinstance(p, str) and p.strip():
+                cleaned_platforms.append(p.strip().lower())
+    if not cleaned_platforms:
+        cleaned_platforms = [(body.get("platform") or "local").lower().strip()]
+    platform = cleaned_platforms[0]
+
     status = (body.get("status") or "active").lower().strip()
     is_sold = status == "sold" or bool(body.get("is_sold"))
     quantity = int(body.get("quantity") or (0 if is_sold else 1))
@@ -1100,6 +1146,7 @@ async def create_manual_listing(body: dict, db: Session = Depends(get_db), _user
 
     listing = Listing(
         platform=platform,
+        platforms_json=cleaned_platforms,
         platform_listing_id=platform_listing_id,
         title=title,
         description=description,
@@ -1229,6 +1276,21 @@ async def update_listing(listing_id: int, body: dict, db: Session = Depends(get_
         listing.price_cents = max(0, int(p_cents))
         curr = listing.currency or config.DEFAULT_CURRENCY or "CAD"
         listing.price_raw = f"{curr} {listing.price_cents / 100:.2f}"
+
+    if "platforms" in body:
+        platforms_raw = body.get("platforms") or []
+        cleaned_platforms = []
+        if isinstance(platforms_raw, list):
+            for p in platforms_raw:
+                if isinstance(p, str) and p.strip():
+                    cleaned_platforms.append(p.strip().lower())
+        listing.platforms_json = cleaned_platforms
+        if cleaned_platforms:
+            listing.platform = cleaned_platforms[0]
+
+    if "image_url" in body:
+        img_val = (body.get("image_url") or "").strip()
+        listing.image_url = img_val or None
 
     listing.updated_at = datetime.utcnow()
     db.commit()

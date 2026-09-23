@@ -267,7 +267,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function openListingModal(listing) {
         if (!modalBackdrop) return;
 
-        modalPlatformIcon.innerHTML = getPlatformIcon(listing.platform);
+        modalPlatformIcon.innerHTML = renderPlatformBadges(listing.platforms, listing.platform);
         modalTitle.textContent = listing.title || "Listing Details";
 
         const price = listing.price_raw || `$${((listing.price_cents || 0) / 100).toFixed(2)}`;
@@ -283,6 +283,14 @@ document.addEventListener("DOMContentLoaded", () => {
             <div class="modal-media">
                 <img src="${image}" alt="${escapeHtml(listing.title || 'Listing')}" loading="lazy" onerror="this.src='/static/img/placeholder.svg'">
             </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; margin-bottom: 12px; gap: 8px; flex-wrap: wrap;">
+                <span style="font-size: 12px; color: var(--text-muted);">Photo:</span>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="file" class="detail-image-file" accept="image/*" style="display: none;">
+                    <button type="button" class="btn btn--sm btn--outline detail-upload-img-btn" style="font-size: 11.5px; padding: 3px 8px;">📷 Upload / Change Photo</button>
+                    <input type="text" class="detail-image-url-input" placeholder="Or paste image URL" value="${escapeHtml(listing.image_url || '')}" style="font-size: 12px; padding: 4px 8px; width: 170px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); color: var(--text);">
+                </div>
+            </div>
             <div class="modal-price-row">
                 <div class="modal-price">${price} <span style="font-size:14px;font-weight:normal;color:var(--text-muted);">${listing.currency || 'CAD'}</span></div>
                 <div>
@@ -290,11 +298,46 @@ document.addEventListener("DOMContentLoaded", () => {
                     ${listing.is_sold ? '<span class="card-status card-status--sold">Sold</span>' : ''}
                 </div>
             </div>
-            <div class="modal-details-grid">
-                <div class="modal-detail-item">
-                    <span class="modal-detail-label">Platform</span>
-                    <span class="modal-detail-value">${listing.platform ? listing.platform.toUpperCase() : '—'}</span>
+
+            <!-- Multi-Channel Cross-Listing Section -->
+            <div class="modal-platforms-section" style="margin-bottom: 14px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <h4 style="margin: 0; font-size: 13.5px; font-weight: 600;">🏷️ Listed On (Channels &amp; Marketplaces)</h4>
+                    <span style="font-size: 11.5px; color: var(--text-muted);">Mark all places where this is active</span>
                 </div>
+                <div class="detail-platforms-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px;">
+                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
+                        <input type="checkbox" class="detail-platform-cb" value="ebay" ${hasPlatform(listing, 'ebay') ? 'checked' : ''}>
+                        <span style="color:#e53238; font-weight:bold;">eBay</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
+                        <input type="checkbox" class="detail-platform-cb" value="etsy" ${hasPlatform(listing, 'etsy') ? 'checked' : ''}>
+                        <span style="color:#F56400; font-weight:bold;">Etsy</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
+                        <input type="checkbox" class="detail-platform-cb" value="facebook" ${hasPlatform(listing, 'facebook') ? 'checked' : ''}>
+                        <span style="color:#1877F2; font-weight:bold;">FB Marketplace</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
+                        <input type="checkbox" class="detail-platform-cb" value="local" ${hasPlatform(listing, 'local') ? 'checked' : ''}>
+                        <span style="color:#10b981; font-weight:bold;">Local / In-Person</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
+                        <input type="checkbox" class="detail-platform-cb" value="poshmark" ${hasPlatform(listing, 'poshmark') ? 'checked' : ''}>
+                        <span style="color:#8E1A34; font-weight:bold;">Poshmark</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
+                        <input type="checkbox" class="detail-platform-cb" value="amazon" ${hasPlatform(listing, 'amazon') ? 'checked' : ''}>
+                        <span style="color:#FF9900; font-weight:bold;">Amazon</span>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
+                        <input type="checkbox" class="detail-platform-cb" value="craigslist" ${hasPlatform(listing, 'craigslist') ? 'checked' : ''}>
+                        <span style="color:#795548; font-weight:bold;">Craigslist / Kijiji</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="modal-details-grid">
                 <div class="modal-detail-item">
                     <span class="modal-detail-label">Quantity</span>
                     <span class="modal-detail-value">${listing.available_quantity ?? '—'}</span>
@@ -306,6 +349,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 <div class="modal-detail-item">
                     <span class="modal-detail-label">SKU</span>
                     <span class="modal-detail-value">${escapeHtml(listing.sku || 'None')}</span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Platform</span>
+                    <span class="modal-detail-value">${listing.platform ? listing.platform.toUpperCase() : '—'}</span>
                 </div>
             </div>
             ${listing.description ? `
@@ -349,7 +396,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 </div>
                 <div style="display: flex; justify-content: flex-end; align-items: center; gap: 10px;">
                     <span class="detail-save-cost-status" style="font-size: 12px;"></span>
-                    <button type="button" class="btn btn--sm btn--primary detail-save-cost-btn">💾 Save Costs &amp; Parts</button>
+                    <button type="button" class="btn btn--sm btn--primary detail-save-cost-btn">💾 Save Changes (Costs, Channels &amp; Photo)</button>
                 </div>
             </div>
         `;
@@ -364,6 +411,47 @@ document.addEventListener("DOMContentLoaded", () => {
         const marginVal = modalBody.querySelector(".detail-margin-val");
         const saveCostBtn = modalBody.querySelector(".detail-save-cost-btn");
         const saveCostStatus = modalBody.querySelector(".detail-save-cost-status");
+
+        // Wire Photo Upload in detail modal
+        const detailImgFileInput = modalBody.querySelector(".detail-image-file");
+        const detailUploadImgBtn = modalBody.querySelector(".detail-upload-img-btn");
+        const detailImgUrlInput = modalBody.querySelector(".detail-image-url-input");
+        const modalImg = modalBody.querySelector(".modal-media img");
+
+        if (detailUploadImgBtn && detailImgFileInput) {
+            detailUploadImgBtn.onclick = () => detailImgFileInput.click();
+            detailImgFileInput.onchange = async (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (!file) return;
+                detailUploadImgBtn.textContent = "Uploading…";
+                detailUploadImgBtn.disabled = true;
+                try {
+                    const formData = new FormData();
+                    formData.append("file", file);
+                    const res = await fetch("/api/upload", { method: "POST", body: formData });
+                    const data = await res.json();
+                    if (data.ok) {
+                        if (detailImgUrlInput) detailImgUrlInput.value = data.url;
+                        if (modalImg) modalImg.src = data.url;
+                    } else {
+                        alert("Upload failed: " + (data.error || "Unknown error"));
+                    }
+                } catch (err) {
+                    alert("Upload error: " + err.message);
+                } finally {
+                    detailUploadImgBtn.textContent = "📷 Upload / Change Photo";
+                    detailUploadImgBtn.disabled = false;
+                }
+            };
+        }
+
+        if (detailImgUrlInput) {
+            detailImgUrlInput.oninput = (e) => {
+                if (modalImg && e.target.value.trim()) {
+                    modalImg.src = e.target.value.trim();
+                }
+            };
+        }
 
         function renderDetailPartRow(desc = "", cost = "") {
             if (!partsContainer) return;
@@ -448,6 +536,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 const purchasePrice = parseFloat(purchaseInput?.value || 0);
                 const sellingPrice = parseFloat(sellingInput?.value || 0);
 
+                const checkedPlatforms = [];
+                modalBody.querySelectorAll(".detail-platform-cb:checked").forEach(cb => {
+                    checkedPlatforms.push(cb.value);
+                });
+                const imgUrl = (detailImgUrlInput?.value || "").trim();
+
                 try {
                     const res = await fetch(`/api/listings/${listing.id}`, {
                         method: "PUT",
@@ -456,12 +550,16 @@ document.addEventListener("DOMContentLoaded", () => {
                             purchase_price: purchasePrice,
                             price: sellingPrice,
                             parts: parts,
+                            platforms: checkedPlatforms,
+                            image_url: imgUrl,
                         }),
                     });
                     const resData = await res.json();
                     if (resData.ok && resData.listing) {
                         loadedListings[listing.id] = { ...listing, ...resData.listing };
                         Object.assign(listing, resData.listing);
+
+                        modalPlatformIcon.innerHTML = renderPlatformBadges(listing.platforms, listing.platform);
 
                         if (saveCostStatus) saveCostStatus.innerHTML = "<span class='flash flash--success flash--inline'>✓ Saved!</span>";
                         setTimeout(() => { if (saveCostStatus) saveCostStatus.innerHTML = ""; }, 2500);
@@ -640,6 +738,65 @@ document.addEventListener("DOMContentLoaded", () => {
     if (manualPriceInput) manualPriceInput.addEventListener("input", updateManualCalculations);
     if (manualPurchasePriceInput) manualPurchasePriceInput.addEventListener("input", updateManualCalculations);
 
+    const manualImageFileInput = document.getElementById("manual-image-file");
+    const manualImageUrlInput = document.getElementById("manual-image-url");
+    const manualImagePreviewWrap = document.getElementById("manual-image-preview-wrap");
+    const manualImagePreview = document.getElementById("manual-image-preview");
+    const manualImageRemoveBtn = document.getElementById("manual-image-remove-btn");
+    const manualImageUploadStatus = document.getElementById("manual-image-upload-status");
+
+    if (manualImageFileInput) {
+        manualImageFileInput.addEventListener("change", async (e) => {
+            const file = e.target.files && e.target.files[0];
+            if (!file) return;
+            if (manualImageUploadStatus) manualImageUploadStatus.textContent = "Uploading image...";
+            if (manualImagePreviewWrap) manualImagePreviewWrap.style.display = "flex";
+            const formData = new FormData();
+            formData.append("file", file);
+            try {
+                const res = await fetch("/api/upload", {
+                    method: "POST",
+                    body: formData,
+                });
+                const data = await res.json();
+                if (data.ok && data.url) {
+                    if (manualImageUrlInput) manualImageUrlInput.value = data.url;
+                    if (manualImagePreview) manualImagePreview.src = data.url;
+                    if (manualImageUploadStatus) manualImageUploadStatus.textContent = "✓ Uploaded";
+                } else {
+                    if (manualImageUploadStatus) manualImageUploadStatus.textContent = "✗ " + (data.error || "Upload failed");
+                }
+            } catch (err) {
+                if (manualImageUploadStatus) manualImageUploadStatus.textContent = "✗ Network error";
+            }
+        });
+    }
+
+    if (manualImageUrlInput) {
+        manualImageUrlInput.addEventListener("input", () => {
+            const url = manualImageUrlInput.value.trim();
+            if (url) {
+                if (manualImagePreview) manualImagePreview.src = url;
+                if (manualImagePreviewWrap) manualImagePreviewWrap.style.display = "flex";
+                if (manualImageUploadStatus) manualImageUploadStatus.textContent = "";
+            } else {
+                if (manualImagePreviewWrap) manualImagePreviewWrap.style.display = "none";
+                if (manualImagePreview) manualImagePreview.src = "";
+                if (manualImageUploadStatus) manualImageUploadStatus.textContent = "";
+            }
+        });
+    }
+
+    if (manualImageRemoveBtn) {
+        manualImageRemoveBtn.addEventListener("click", () => {
+            if (manualImageFileInput) manualImageFileInput.value = "";
+            if (manualImageUrlInput) manualImageUrlInput.value = "";
+            if (manualImagePreview) manualImagePreview.src = "";
+            if (manualImagePreviewWrap) manualImagePreviewWrap.style.display = "none";
+            if (manualImageUploadStatus) manualImageUploadStatus.textContent = "";
+        });
+    }
+
     function openManualModal() {
         if (!manualModal) return;
         manualModal.classList.add("is-open");
@@ -682,13 +839,27 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
             }
 
+            const checkedPlatforms = [];
+            const platformCbs = document.querySelectorAll("#manual-platforms-grid .manual-platform-cb:checked");
+            platformCbs.forEach(cb => {
+                if (cb.value) checkedPlatforms.push(cb.value);
+            });
+            if (checkedPlatforms.length === 0) {
+                const fallbackPlatform = document.getElementById("manual-platform")?.value || "local";
+                checkedPlatforms.push(fallbackPlatform);
+            }
+
+            const imgUrl = (manualImageUrlInput?.value || "").trim() || null;
+
             const payload = {
                 title: document.getElementById("manual-title").value.trim(),
                 price: parseFloat(document.getElementById("manual-price").value || 0),
                 purchase_price: parseFloat(document.getElementById("manual-purchase-price")?.value || 0),
                 parts: parts,
                 quantity: parseInt(document.getElementById("manual-quantity").value || 1),
-                platform: document.getElementById("manual-platform").value,
+                platform: checkedPlatforms[0],
+                platforms: checkedPlatforms,
+                image_url: imgUrl,
                 status: document.getElementById("manual-status").value,
                 sku: document.getElementById("manual-sku").value.trim(),
                 team_id: document.getElementById("manual-team").value ? parseInt(document.getElementById("manual-team").value) : null,
@@ -705,6 +876,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (data.ok) {
                     manualForm.reset();
                     if (manualPartsContainer) manualPartsContainer.innerHTML = "";
+                    if (manualImageFileInput) manualImageFileInput.value = "";
+                    if (manualImageUrlInput) manualImageUrlInput.value = "";
+                    if (manualImagePreview) manualImagePreview.src = "";
+                    if (manualImagePreviewWrap) manualImagePreviewWrap.style.display = "none";
+                    if (manualImageUploadStatus) manualImageUploadStatus.textContent = "";
+                    document.querySelectorAll("#manual-platforms-grid .manual-platform-cb").forEach(cb => {
+                        cb.checked = (cb.value === "local");
+                    });
                     updateManualCalculations();
                     closeManualModal();
                     loadListings();
@@ -955,9 +1134,22 @@ document.addEventListener("DOMContentLoaded", () => {
     loadListings();
 });
 
+function hasPlatform(listing, p) {
+    if (Array.isArray(listing.platforms) && listing.platforms.length > 0) {
+        return listing.platforms.includes(p);
+    }
+    return (listing.platform || '').toLowerCase() === p.toLowerCase();
+}
+
+function renderPlatformBadges(platforms, fallback) {
+    const list = (Array.isArray(platforms) && platforms.length > 0) ? platforms : (fallback ? [fallback] : []);
+    if (list.length === 0) return getPlatformIcon("local");
+    return list.map(p => getPlatformIcon(p)).join("");
+}
+
 // Render a single listing card
 function renderCard(listing) {
-    const platformIcon = getPlatformIcon(listing.platform);
+    const platformBadges = renderPlatformBadges(listing.platforms, listing.platform);
     const price = listing.price_raw || `$${((listing.price_cents || 0) / 100).toFixed(2)} CAD`;
     const image = listing.image_url || "/static/img/placeholder.svg";
 
@@ -969,7 +1161,7 @@ function renderCard(listing) {
 
     return `
         <div class="listing-card" data-id="${listing.id}" data-platform="${listing.platform}">
-            <div class="card-platform-badge">${platformIcon}</div>
+            <div class="card-platform-badge" style="display:flex;gap:4px;flex-wrap:wrap;max-width:85%;">${platformBadges}</div>
             <div class="card-image">
                 <img src="${image}" alt="${escapeHtml(listing.title || 'Listing')}" loading="lazy" onerror="this.src='/static/img/placeholder.svg'">
             </div>

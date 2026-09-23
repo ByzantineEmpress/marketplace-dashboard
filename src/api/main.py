@@ -24,6 +24,7 @@ templates = Jinja2Templates(directory="templates")
 os.makedirs("static/css", exist_ok=True)
 os.makedirs("static/js", exist_ok=True)
 os.makedirs("static/img", exist_ok=True)
+os.makedirs("static/uploads", exist_ok=True)
 
 # ---------- Application factory ----------
 

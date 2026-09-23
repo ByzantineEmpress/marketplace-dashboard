@@ -117,26 +117,63 @@
                         </div>
                     </div>
 
-                    <div style="display: flex; gap: 12px;">
-                        <div class="form-group" style="flex: 1;">
-                            <label for="manual-platform">Sales Channel / Platform</label>
-                            <select id="manual-platform">
-                                <option value="local">Local / In-Person (Cash/Pickup)</option>
-                                <option value="facebook">Facebook Marketplace</option>
-                                <option value="craigslist">Craigslist / Kijiji</option>
-                                <option value="poshmark">Poshmark</option>
-                                <option value="amazon">Amazon</option>
-                                <option value="ebay">eBay</option>
-                                <option value="etsy">Etsy</option>
-                            </select>
+                    <!-- Multi-channel cross-listing -->
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label style="font-weight: 600; font-size: 13px;">Listed On (Sales Channels &amp; Marketplaces) *</label>
+                        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 6px;">Select all places where you have this item cross-listed (e.g. eBay, Etsy, Facebook Marketplace):</p>
+                        <div id="manual-platforms-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); gap: 8px; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);">
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+                                <input type="checkbox" name="manual_platforms" value="ebay" class="manual-platform-cb">
+                                <span style="color:#e53238; font-weight:bold;">eBay</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+                                <input type="checkbox" name="manual_platforms" value="etsy" class="manual-platform-cb">
+                                <span style="color:#F56400; font-weight:bold;">Etsy</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+                                <input type="checkbox" name="manual_platforms" value="facebook" class="manual-platform-cb">
+                                <span style="color:#1877F2; font-weight:bold;">FB Marketplace</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+                                <input type="checkbox" name="manual_platforms" value="local" class="manual-platform-cb" checked>
+                                <span style="color:#10b981; font-weight:bold;">Local / In-Person</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+                                <input type="checkbox" name="manual_platforms" value="poshmark" class="manual-platform-cb">
+                                <span style="color:#8E1A34; font-weight:bold;">Poshmark</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+                                <input type="checkbox" name="manual_platforms" value="amazon" class="manual-platform-cb">
+                                <span style="color:#FF9900; font-weight:bold;">Amazon</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; font-size: 12.5px; cursor: pointer;">
+                                <input type="checkbox" name="manual_platforms" value="craigslist" class="manual-platform-cb">
+                                <span style="color:#795548; font-weight:bold;">Craigslist / Kijiji</span>
+                            </label>
                         </div>
-                        <div class="form-group" style="flex: 1;">
-                            <label for="manual-status">Status</label>
-                            <select id="manual-status">
-                                <option value="active">Active (Available for Sale)</option>
-                                <option value="sold">Sold (Completed Sale)</option>
-                            </select>
+                        <input type="hidden" id="manual-platform" value="local">
+                    </div>
+
+                    <!-- Image Attachment (Optional) -->
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label style="font-weight: 600; font-size: 13px; display: block; margin-bottom: 4px;">Item Photo / Image <span style="font-weight: normal; font-size: 12px; color: var(--text-muted);">(Optional — can also be added later)</span></label>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <input type="file" id="manual-image-file" accept="image/*" style="font-size: 12px; flex: 1;">
+                            <input type="text" id="manual-image-url" placeholder="Or paste image URL (https://...)" style="font-size: 12px; flex: 1;">
                         </div>
+                        <div id="manual-image-preview-wrap" style="display: none; margin-top: 8px; align-items: center; gap: 10px;">
+                            <img id="manual-image-preview" src="" alt="Listing photo preview" style="max-height: 70px; max-width: 100px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border);">
+                            <button type="button" class="btn btn--sm btn--outline" id="manual-image-remove-btn" style="font-size: 11px; padding: 2px 7px;">Remove Photo</button>
+                            <span id="manual-image-upload-status" style="font-size: 12px; color: var(--text-muted);"></span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="manual-status">Listing Status</label>
+                        <select id="manual-status">
+                            <option value="active">Active (Available for Sale)</option>
+                            <option value="sold">Sold (Completed Sale)</option>
+                        </select>
                     </div>
                     <div style="display: flex; gap: 12px;">
                         <div class="form-group" style="flex: 1;">

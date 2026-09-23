@@ -173,7 +173,8 @@ class Listing(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     # Which marketplace + platform-side id
-    platform = Column(String(20), nullable=False, index=True)          # "ebay" | "etsy" | plugin name
+    platform = Column(String(20), nullable=False, index=True)          # primary platform: "ebay" | "etsy" | "facebook" | "local"
+    platforms_json = Column(JSON, nullable=True)                       # cross-listed platforms: ["ebay", "etsy", "facebook"]
     platform_listing_id = Column(String(64), nullable=False, index=True)
 
     # Display data
@@ -230,11 +231,18 @@ class Listing(Base):
             return 0.0
         return round((self.net_profit_cents / self.price_cents) * 100, 1)
 
+    @property
+    def platforms(self) -> list:
+        if self.platforms_json and isinstance(self.platforms_json, list) and len(self.platforms_json) > 0:
+            return self.platforms_json
+        return [self.platform] if self.platform else []
+
     def to_dict(self):
         """Serialise for the JSON API (consumed by the dashboard UI)."""
         return {
             "id": self.id,
             "platform": self.platform,
+            "platforms": self.platforms,
             "platform_listing_id": self.platform_listing_id,
             "team_id": self.team_id,
             "title": self.title,
