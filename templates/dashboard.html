@@ -77,13 +77,13 @@
 
     <!-- Manual Listing / Local Sale Modal -->
     <div id="manual-listing-modal" class="modal-backdrop" aria-hidden="true" role="dialog">
-        <div class="modal" style="max-width: 560px;">
-            <div class="modal-header">
+        <div class="modal" style="max-width: 560px; max-height: 90vh; max-height: 90dvh; display: flex; flex-direction: column; overflow: hidden;">
+            <div class="modal-header" style="flex-shrink: 0;">
                 <h2 class="modal-title" id="manual-modal-title">Record Listing or Local Sale ($ CAD)</h2>
                 <button type="button" class="modal-close" id="close-manual-modal-btn" aria-label="Close dialog">&times;</button>
             </div>
-            <form id="manual-listing-form">
-                <div class="modal-body">
+            <form id="manual-listing-form" style="display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden;">
+                <div class="modal-body" style="flex: 1; min-height: 0; overflow-y: auto; padding: 20px;">
                     <div class="form-group">
                         <label for="manual-title">Item Title *</label>
                         <input type="text" id="manual-title" required placeholder="e.g. Nintendo Switch Console, Vintage Jacket, iPhone 12">
@@ -154,17 +154,31 @@
                         <input type="hidden" id="manual-platform" value="local">
                     </div>
 
-                    <!-- Image Attachment (Optional) -->
+                    <!-- Image Attachment (Optional - Camera & File Upload) -->
                     <div class="form-group" style="margin-bottom: 12px;">
-                        <label style="font-weight: 600; font-size: 13px; display: block; margin-bottom: 4px;">Item Photo / Image <span style="font-weight: normal; font-size: 12px; color: var(--text-muted);">(Optional — can also be added later)</span></label>
-                        <div style="display: flex; gap: 10px; align-items: center;">
-                            <input type="file" id="manual-image-file" accept="image/*" style="font-size: 12px; flex: 1;">
-                            <input type="text" id="manual-image-url" placeholder="Or paste image URL (https://...)" style="font-size: 12px; flex: 1;">
+                        <label style="font-weight: 600; font-size: 13px; display: block; margin-bottom: 4px;">
+                            Item Photo / Image <span style="font-weight: normal; font-size: 12px; color: var(--text-muted);">(Optional — take with camera or upload)</span>
+                        </label>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px;">
+                            <input type="file" id="manual-camera-file" accept="image/*" capture="environment" style="display: none;">
+                            <button type="button" class="btn btn--sm btn--outline" id="manual-take-photo-btn" style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 6px 12px; cursor: pointer;">
+                                📷 <strong>Take Photo with Camera</strong>
+                            </button>
+
+                            <input type="file" id="manual-image-file" accept="image/*" style="display: none;">
+                            <button type="button" class="btn btn--sm btn--outline" id="manual-choose-file-btn" style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 6px 12px; cursor: pointer;">
+                                🖼️ Choose from Gallery / Files
+                            </button>
+                        </div>
+                        <div>
+                            <input type="text" id="manual-image-url" placeholder="Or paste image URL (https://...)" style="font-size: 12px; width: 100%;">
                         </div>
                         <div id="manual-image-preview-wrap" style="display: none; margin-top: 8px; align-items: center; gap: 10px;">
-                            <img id="manual-image-preview" src="" alt="Listing photo preview" style="max-height: 70px; max-width: 100px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border);">
-                            <button type="button" class="btn btn--sm btn--outline" id="manual-image-remove-btn" style="font-size: 11px; padding: 2px 7px;">Remove Photo</button>
-                            <span id="manual-image-upload-status" style="font-size: 12px; color: var(--text-muted);"></span>
+                            <img id="manual-image-preview" src="" alt="Listing photo preview" style="max-height: 75px; max-width: 100px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border);">
+                            <div style="display: flex; flex-direction: column; gap: 4px;">
+                                <button type="button" class="btn btn--sm btn--danger" id="manual-image-remove-btn" style="font-size: 11px; padding: 3px 8px; width: fit-content;">✕ Remove Photo</button>
+                                <span id="manual-image-upload-status" style="font-size: 12px; color: var(--text-muted);"></span>
+                            </div>
                         </div>
                     </div>
 
@@ -196,7 +210,7 @@
                         <textarea id="manual-desc" rows="2" placeholder="e.g. Paid cash at yard sale; replaced power supply, tested and working"></textarea>
                     </div>
                 </div>
-                <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px;">
+                <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px; flex-shrink: 0; position: sticky; bottom: 0; background: var(--bg-elevated); z-index: 5; border-top: 1px solid var(--border);">
                     <button type="button" class="btn" id="cancel-manual-modal-btn">Cancel</button>
                     <button type="submit" class="btn btn--primary" id="save-manual-listing-btn">Save Item</button>
                 </div>

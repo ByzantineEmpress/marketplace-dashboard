@@ -285,10 +285,12 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; margin-bottom: 12px; gap: 8px; flex-wrap: wrap;">
                 <span style="font-size: 12px; color: var(--text-muted);">Photo:</span>
-                <div style="display: flex; gap: 8px; align-items: center;">
+                <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
+                    <input type="file" class="detail-camera-file" accept="image/*" capture="environment" style="display: none;">
+                    <button type="button" class="btn btn--sm btn--outline detail-camera-btn" style="font-size: 11.5px; padding: 4px 8px;">📷 Take Photo</button>
                     <input type="file" class="detail-image-file" accept="image/*" style="display: none;">
-                    <button type="button" class="btn btn--sm btn--outline detail-upload-img-btn" style="font-size: 11.5px; padding: 3px 8px;">📷 Upload / Change Photo</button>
-                    <input type="text" class="detail-image-url-input" placeholder="Or paste image URL" value="${escapeHtml(listing.image_url || '')}" style="font-size: 12px; padding: 4px 8px; width: 170px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); color: var(--text);">
+                    <button type="button" class="btn btn--sm btn--outline detail-upload-img-btn" style="font-size: 11.5px; padding: 4px 8px;">🖼️ Gallery</button>
+                    <input type="text" class="detail-image-url-input" placeholder="Or paste image URL" value="${escapeHtml(listing.image_url || '')}" style="font-size: 12px; padding: 4px 8px; width: 150px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); color: var(--text);">
                 </div>
             </div>
             <div class="modal-price-row">
@@ -412,36 +414,55 @@ document.addEventListener("DOMContentLoaded", () => {
         const saveCostBtn = modalBody.querySelector(".detail-save-cost-btn");
         const saveCostStatus = modalBody.querySelector(".detail-save-cost-status");
 
-        // Wire Photo Upload in detail modal
+        // Wire Photo Upload & Camera in detail modal
+        const detailCameraFileInput = modalBody.querySelector(".detail-camera-file");
+        const detailCameraBtn = modalBody.querySelector(".detail-camera-btn");
         const detailImgFileInput = modalBody.querySelector(".detail-image-file");
         const detailUploadImgBtn = modalBody.querySelector(".detail-upload-img-btn");
         const detailImgUrlInput = modalBody.querySelector(".detail-image-url-input");
         const modalImg = modalBody.querySelector(".modal-media img");
 
+        async function uploadDetailImage(file, triggerBtn) {
+            if (!file) return;
+            const origText = triggerBtn ? triggerBtn.textContent : "";
+            if (triggerBtn) {
+                triggerBtn.textContent = "Uploading…";
+                triggerBtn.disabled = true;
+            }
+            try {
+                const formData = new FormData();
+                formData.append("file", file);
+                const res = await fetch("/api/upload", { method: "POST", body: formData });
+                const data = await res.json();
+                if (data.ok) {
+                    if (detailImgUrlInput) detailImgUrlInput.value = data.url;
+                    if (modalImg) modalImg.src = data.url;
+                } else {
+                    alert("Upload failed: " + (data.error || "Unknown error"));
+                }
+            } catch (err) {
+                alert("Upload error: " + err.message);
+            } finally {
+                if (triggerBtn) {
+                    triggerBtn.textContent = origText;
+                    triggerBtn.disabled = false;
+                }
+            }
+        }
+
+        if (detailCameraBtn && detailCameraFileInput) {
+            detailCameraBtn.onclick = () => detailCameraFileInput.click();
+            detailCameraFileInput.onchange = (e) => {
+                const file = e.target.files && e.target.files[0];
+                uploadDetailImage(file, detailCameraBtn);
+            };
+        }
+
         if (detailUploadImgBtn && detailImgFileInput) {
             detailUploadImgBtn.onclick = () => detailImgFileInput.click();
-            detailImgFileInput.onchange = async (e) => {
+            detailImgFileInput.onchange = (e) => {
                 const file = e.target.files && e.target.files[0];
-                if (!file) return;
-                detailUploadImgBtn.textContent = "Uploading…";
-                detailUploadImgBtn.disabled = true;
-                try {
-                    const formData = new FormData();
-                    formData.append("file", file);
-                    const res = await fetch("/api/upload", { method: "POST", body: formData });
-                    const data = await res.json();
-                    if (data.ok) {
-                        if (detailImgUrlInput) detailImgUrlInput.value = data.url;
-                        if (modalImg) modalImg.src = data.url;
-                    } else {
-                        alert("Upload failed: " + (data.error || "Unknown error"));
-                    }
-                } catch (err) {
-                    alert("Upload error: " + err.message);
-                } finally {
-                    detailUploadImgBtn.textContent = "📷 Upload / Change Photo";
-                    detailUploadImgBtn.disabled = false;
-                }
+                uploadDetailImage(file, detailUploadImgBtn);
             };
         }
 
@@ -738,37 +759,58 @@ document.addEventListener("DOMContentLoaded", () => {
     if (manualPriceInput) manualPriceInput.addEventListener("input", updateManualCalculations);
     if (manualPurchasePriceInput) manualPurchasePriceInput.addEventListener("input", updateManualCalculations);
 
+    const manualCameraFileInput = document.getElementById("manual-camera-file");
+    const manualTakePhotoBtn = document.getElementById("manual-take-photo-btn");
     const manualImageFileInput = document.getElementById("manual-image-file");
+    const manualChooseFileBtn = document.getElementById("manual-choose-file-btn");
     const manualImageUrlInput = document.getElementById("manual-image-url");
     const manualImagePreviewWrap = document.getElementById("manual-image-preview-wrap");
     const manualImagePreview = document.getElementById("manual-image-preview");
     const manualImageRemoveBtn = document.getElementById("manual-image-remove-btn");
     const manualImageUploadStatus = document.getElementById("manual-image-upload-status");
 
-    if (manualImageFileInput) {
-        manualImageFileInput.addEventListener("change", async (e) => {
-            const file = e.target.files && e.target.files[0];
-            if (!file) return;
-            if (manualImageUploadStatus) manualImageUploadStatus.textContent = "Uploading image...";
-            if (manualImagePreviewWrap) manualImagePreviewWrap.style.display = "flex";
-            const formData = new FormData();
-            formData.append("file", file);
-            try {
-                const res = await fetch("/api/upload", {
-                    method: "POST",
-                    body: formData,
-                });
-                const data = await res.json();
-                if (data.ok && data.url) {
-                    if (manualImageUrlInput) manualImageUrlInput.value = data.url;
-                    if (manualImagePreview) manualImagePreview.src = data.url;
-                    if (manualImageUploadStatus) manualImageUploadStatus.textContent = "✓ Uploaded";
-                } else {
-                    if (manualImageUploadStatus) manualImageUploadStatus.textContent = "✗ " + (data.error || "Upload failed");
-                }
-            } catch (err) {
-                if (manualImageUploadStatus) manualImageUploadStatus.textContent = "✗ Network error";
+    async function handleManualFileUpload(file) {
+        if (!file) return;
+        if (manualImageUploadStatus) manualImageUploadStatus.textContent = "Uploading image...";
+        if (manualImagePreviewWrap) manualImagePreviewWrap.style.display = "flex";
+        const formData = new FormData();
+        formData.append("file", file);
+        try {
+            const res = await fetch("/api/upload", {
+                method: "POST",
+                body: formData,
+            });
+            const data = await res.json();
+            if (data.ok && data.url) {
+                if (manualImageUrlInput) manualImageUrlInput.value = data.url;
+                if (manualImagePreview) manualImagePreview.src = data.url;
+                if (manualImageUploadStatus) manualImageUploadStatus.textContent = "✓ Uploaded";
+            } else {
+                if (manualImageUploadStatus) manualImageUploadStatus.textContent = "✗ " + (data.error || "Upload failed");
             }
+        } catch (err) {
+            if (manualImageUploadStatus) manualImageUploadStatus.textContent = "✗ Network error";
+        }
+    }
+
+    if (manualTakePhotoBtn && manualCameraFileInput) {
+        manualTakePhotoBtn.addEventListener("click", () => manualCameraFileInput.click());
+    }
+    if (manualChooseFileBtn && manualImageFileInput) {
+        manualChooseFileBtn.addEventListener("click", () => manualImageFileInput.click());
+    }
+
+    if (manualCameraFileInput) {
+        manualCameraFileInput.addEventListener("change", (e) => {
+            const file = e.target.files && e.target.files[0];
+            handleManualFileUpload(file);
+        });
+    }
+
+    if (manualImageFileInput) {
+        manualImageFileInput.addEventListener("change", (e) => {
+            const file = e.target.files && e.target.files[0];
+            handleManualFileUpload(file);
         });
     }
 
@@ -789,6 +831,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (manualImageRemoveBtn) {
         manualImageRemoveBtn.addEventListener("click", () => {
+            if (manualCameraFileInput) manualCameraFileInput.value = "";
             if (manualImageFileInput) manualImageFileInput.value = "";
             if (manualImageUrlInput) manualImageUrlInput.value = "";
             if (manualImagePreview) manualImagePreview.src = "";
@@ -801,6 +844,12 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!manualModal) return;
         manualModal.classList.add("is-open");
         manualModal.setAttribute("aria-hidden", "false");
+        if (manualCameraFileInput) manualCameraFileInput.value = "";
+        if (manualImageFileInput) manualImageFileInput.value = "";
+        if (manualImageUrlInput) manualImageUrlInput.value = "";
+        if (manualImagePreview) manualImagePreview.src = "";
+        if (manualImagePreviewWrap) manualImagePreviewWrap.style.display = "none";
+        if (manualImageUploadStatus) manualImageUploadStatus.textContent = "";
         setTimeout(() => {
             const titleInput = document.getElementById("manual-title");
             if (titleInput) titleInput.focus();
@@ -876,6 +925,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (data.ok) {
                     manualForm.reset();
                     if (manualPartsContainer) manualPartsContainer.innerHTML = "";
+                    if (manualCameraFileInput) manualCameraFileInput.value = "";
                     if (manualImageFileInput) manualImageFileInput.value = "";
                     if (manualImageUrlInput) manualImageUrlInput.value = "";
                     if (manualImagePreview) manualImagePreview.src = "";

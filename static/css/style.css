@@ -1300,6 +1300,7 @@ code {
     width: 100%;
     max-width: 640px;
     max-height: 90vh;
+    max-height: 90dvh;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -1318,6 +1319,7 @@ code {
     padding: 16px 20px;
     border-bottom: 1px solid var(--border);
     gap: 12px;
+    flex-shrink: 0;
 }
 
 .modal-title-wrap {
@@ -1350,6 +1352,7 @@ code {
     align-items: center;
     justify-content: center;
     transition: color 0.15s, background-color 0.15s;
+    flex-shrink: 0;
 }
 
 .modal-close:hover {
@@ -1357,9 +1360,21 @@ code {
     background: var(--bg-inset);
 }
 
+.modal > form {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
 .modal-body {
     padding: 20px;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -1444,9 +1459,13 @@ code {
     justify-content: space-between;
     padding: 14px 20px;
     border-top: 1px solid var(--border);
-    background: var(--bg);
+    background: var(--bg-elevated);
     gap: 10px;
     flex-wrap: wrap;
+    flex-shrink: 0;
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
 }
 
 .modal-team-select {
@@ -1532,4 +1551,28 @@ code {
     font-weight: 600;
     color: var(--text);
 }
+
+/* Mobile responsive adjustments for modals */
+@media (max-width: 640px) {
+    .modal-backdrop {
+        padding: 8px;
+        align-items: center;
+    }
+    .modal {
+        max-height: 94dvh;
+        max-height: 94vh;
+        border-radius: var(--radius);
+    }
+    .modal-header {
+        padding: 12px 14px;
+    }
+    .modal-body {
+        padding: 14px;
+        gap: 12px;
+    }
+    .modal-footer {
+        padding: 10px 14px;
+    }
+}
+
 
