@@ -67,40 +67,12 @@
         <button class="btn btn--sm" id="next-page">Next ›</button>
     </div>
 
-    <!-- Interactive listing details modal -->
-    <div id="listing-modal-backdrop" class="modal-backdrop" aria-hidden="true" role="dialog">
-        <div class="modal-dialog">
-            <div class="modal-header">
-                <div class="modal-header-left">
-                    <span id="modal-platform-icon"></span>
-                    <h2 class="modal-title" id="modal-title">Listing Details</h2>
-                </div>
-                <button type="button" class="modal-close" id="modal-close-btn" aria-label="Close dialog">&times;</button>
-            </div>
-            <div class="modal-body" id="modal-body">
-                <!-- Content injected dynamically by JS -->
-            <div class="modal-footer" id="modal-footer">
-                <div class="modal-team-assignment">
-                    <label for="modal-team-dropdown" class="modal-detail-label">Team:</label>
-                    <div style="display:flex;align-items:center;gap:8px;">
-                        <select id="modal-team-dropdown" class="filter-select"></select>
-                        <span id="modal-team-status" class="settings-status"></span>
-                    </div>
-                </div>
-                <div id="modal-action-wrap" style="display:flex;gap:8px;align-items:center;">
-                    <button type="button" class="btn btn--sm btn--success" id="modal-mark-sold-btn">✓ Mark Sold (Local)</button>
-                    <button type="button" class="btn btn--sm btn--danger" id="modal-delete-btn">🗑 Delete</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <!-- Manual Listing / Local Sale Modal -->
-    <div id="manual-listing-modal" class="modal-backdrop" aria-hidden="true" style="display:none;">
-        <div class="modal-dialog" style="max-width: 520px;">
+    <div id="manual-listing-modal" class="modal-backdrop" aria-hidden="true" role="dialog">
+        <div class="modal" style="max-width: 520px;">
             <div class="modal-header">
                 <h2 class="modal-title" id="manual-modal-title">Record Listing or Local Sale</h2>
-                <button type="button" class="modal-close" id="close-manual-modal-btn" aria-label="Close">&times;</button>
+                <button type="button" class="modal-close" id="close-manual-modal-btn" aria-label="Close dialog">&times;</button>
             </div>
             <form id="manual-listing-form">
                 <div class="modal-body">
@@ -165,11 +137,11 @@
     </div>
 
     <!-- Teams & Invites Modal -->
-    <div id="teams-modal" class="modal-backdrop" aria-hidden="true" style="display:none;">
-        <div class="modal-dialog" style="max-width: 580px;">
+    <div id="teams-modal" class="modal-backdrop" aria-hidden="true" role="dialog">
+        <div class="modal" style="max-width: 580px;">
             <div class="modal-header">
                 <h2 class="modal-title">👥 Team Coordination & Invites</h2>
-                <button type="button" class="modal-close" id="close-teams-modal-btn" aria-label="Close">&times;</button>
+                <button type="button" class="modal-close" id="close-teams-modal-btn" aria-label="Close dialog">&times;</button>
             </div>
             <div class="modal-body">
                 <div style="margin-bottom: 18px;">

@@ -1492,6 +1492,9 @@ code {
 }
 
 /* Modal form controls */
+.modal input,
+.modal select,
+.modal textarea,
 .modal-dialog input,
 .modal-dialog select,
 .modal-dialog textarea {
@@ -1503,8 +1506,12 @@ code {
     color: var(--text);
     font-family: inherit;
     font-size: 14px;
+    box-sizing: border-box;
 }
 
+.modal input:focus,
+.modal select:focus,
+.modal textarea:focus,
 .modal-dialog input:focus,
 .modal-dialog select:focus,
 .modal-dialog textarea:focus {
@@ -1512,3 +1519,17 @@ code {
     border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-soft);
 }
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.form-group label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+}
+

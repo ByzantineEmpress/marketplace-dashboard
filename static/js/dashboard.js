@@ -373,23 +373,35 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function openManualModal() {
         if (!manualModal) return;
-        manualModal.style.display = "flex";
         manualModal.classList.add("is-open");
+        manualModal.setAttribute("aria-hidden", "false");
+        setTimeout(() => {
+            const titleInput = document.getElementById("manual-title");
+            if (titleInput) titleInput.focus();
+        }, 50);
     }
 
     function closeManualModal() {
         if (!manualModal) return;
-        manualModal.style.display = "none";
         manualModal.classList.remove("is-open");
+        manualModal.setAttribute("aria-hidden", "true");
     }
 
     if (openManualBtn) openManualBtn.addEventListener("click", openManualModal);
     if (closeManualBtn) closeManualBtn.addEventListener("click", closeManualModal);
     if (cancelManualBtn) cancelManualBtn.addEventListener("click", closeManualModal);
+    if (manualModal) {
+        manualModal.addEventListener("click", (e) => {
+            if (e.target === manualModal) closeManualModal();
+        });
+    }
 
     if (manualForm) {
         manualForm.addEventListener("submit", async (e) => {
             e.preventDefault();
+            const submitBtn = document.getElementById("save-manual-listing-btn");
+            if (submitBtn) submitBtn.disabled = true;
+
             const payload = {
                 title: document.getElementById("manual-title").value.trim(),
                 price: parseFloat(document.getElementById("manual-price").value || 0),
@@ -418,6 +430,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             } catch (err) {
                 alert("Network error: " + err.message);
+            } finally {
+                if (submitBtn) submitBtn.disabled = false;
             }
         });
     }
@@ -438,89 +452,118 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function openTeamsModal() {
         if (!teamsModal) return;
-        teamsModal.style.display = "flex";
         teamsModal.classList.add("is-open");
+        teamsModal.setAttribute("aria-hidden", "false");
         loadTeams();
     }
 
     function closeTeamsModal() {
         if (!teamsModal) return;
-        teamsModal.style.display = "none";
         teamsModal.classList.remove("is-open");
+        teamsModal.setAttribute("aria-hidden", "true");
     }
 
     if (openTeamsBtn) openTeamsBtn.addEventListener("click", openTeamsModal);
     if (closeTeamsBtn) closeTeamsBtn.addEventListener("click", closeTeamsModal);
     if (closeTeamsFooterBtn) closeTeamsFooterBtn.addEventListener("click", closeTeamsModal);
+    if (teamsModal) {
+        teamsModal.addEventListener("click", (e) => {
+            if (e.target === teamsModal) closeTeamsModal();
+        });
+    }
+
+    async function copyToClipboard(text, feedbackEl) {
+        try {
+            await navigator.clipboard.writeText(text);
+        } catch (e) {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+        }
+        if (feedbackEl) {
+            feedbackEl.style.display = "inline-block";
+            setTimeout(() => { feedbackEl.style.display = "none"; }, 2500);
+        }
+    }
 
     if (copyInviteBtn) {
-        copyInviteBtn.addEventListener("click", async () => {
+        copyInviteBtn.addEventListener("click", () => {
             const urlInput = document.getElementById("share-invite-url");
             if (urlInput && urlInput.value) {
-                try {
-                    await navigator.clipboard.writeText(urlInput.value);
-                    if (copyFeedback) {
-                        copyFeedback.style.display = "inline-block";
-                        setTimeout(() => { copyFeedback.style.display = "none"; }, 2500);
-                    }
-                } catch (e) {
-                    urlInput.select();
-                    document.execCommand("copy");
-                }
+                copyToClipboard(urlInput.value, copyFeedback);
             }
         });
     }
 
-    if (sendInviteBtn) {
-        sendInviteBtn.addEventListener("click", async () => {
-            const email = (inviteEmailInput?.value || "").trim();
-            if (!email) return;
-            const teamId = state.team || (loadedTeams[0] ? loadedTeams[0].id : null);
-            if (!teamId) {
-                if (inviteEmailStatus) inviteEmailStatus.innerHTML = "<span class='flash flash--error flash--inline'>Create or select a team first.</span>";
-                return;
+    async function handleAddMember() {
+        const email = (inviteEmailInput?.value || "").trim();
+        if (!email) return;
+        const teamId = state.team || (loadedTeams[0] ? loadedTeams[0].id : null);
+        if (!teamId) {
+            if (inviteEmailStatus) inviteEmailStatus.innerHTML = "<span class='flash flash--error flash--inline'>Create or select a team first.</span>";
+            return;
+        }
+        try {
+            const res = await fetch(`/api/teams/${teamId}/members`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email }),
+            });
+            const data = await res.json();
+            if (data.ok) {
+                if (inviteEmailInput) inviteEmailInput.value = "";
+                if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--success flash--inline'>✓ Added ${escapeHtml(email)}!</span>`;
+                loadTeams();
+            } else {
+                if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(data.error || "Failed to add")}</span>`;
             }
-            try {
-                const res = await fetch(`/api/teams/${teamId}/members`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ email }),
-                });
-                const data = await res.json();
-                if (data.ok) {
-                    if (inviteEmailInput) inviteEmailInput.value = "";
-                    if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--success flash--inline'>✓ Added ${escapeHtml(email)}!</span>`;
-                    loadTeams();
-                } else {
-                    if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(data.error || "Failed to add")}</span>`;
-                }
-            } catch (err) {
-                if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(err.message)}</span>`;
+        } catch (err) {
+            if (inviteEmailStatus) inviteEmailStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(err.message)}</span>`;
+        }
+    }
+
+    if (sendInviteBtn) sendInviteBtn.addEventListener("click", handleAddMember);
+    if (inviteEmailInput) {
+        inviteEmailInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                handleAddMember();
             }
         });
     }
 
-    if (createTeamBtn) {
-        createTeamBtn.addEventListener("click", async () => {
-            const name = (newTeamNameInput?.value || "").trim();
-            if (!name) return;
-            try {
-                const res = await fetch("/api/teams", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ name }),
-                });
-                const data = await res.json();
-                if (data.ok) {
-                    if (newTeamNameInput) newTeamNameInput.value = "";
-                    if (createTeamStatus) createTeamStatus.innerHTML = `<span class='flash flash--success flash--inline'>✓ Team "${escapeHtml(name)}" created!</span>`;
-                    await loadTeams();
-                    loadListings();
-                } else {
-                    if (createTeamStatus) createTeamStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(data.error || "Failed")}</span>`;
-                }
-            } catch (err) {
-                if (createTeamStatus) createTeamStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(err.message)}</span>`;
+    async function handleCreateTeam() {
+        const name = (newTeamNameInput?.value || "").trim();
+        if (!name) return;
+        try {
+            const res = await fetch("/api/teams", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name }),
+            });
+            const data = await res.json();
+            if (data.ok) {
+                if (newTeamNameInput) newTeamNameInput.value = "";
+                if (createTeamStatus) createTeamStatus.innerHTML = `<span class='flash flash--success flash--inline'>✓ Team "${escapeHtml(name)}" created!</span>`;
+                await loadTeams();
+                loadListings();
+            } else {
+                if (createTeamStatus) createTeamStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(data.error || "Failed")}</span>`;
+            }
+        } catch (err) {
+            if (createTeamStatus) createTeamStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(err.message)}</span>`;
+        }
+    }
+
+    if (createTeamBtn) createTeamBtn.addEventListener("click", handleCreateTeam);
+    if (newTeamNameInput) {
+        newTeamNameInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                handleCreateTeam();
             }
         });
     }

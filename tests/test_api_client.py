@@ -54,6 +54,10 @@ class MarketplaceApiTest(unittest.TestCase):
         self.assertEqual(dash_res.status_code, 200)
         self.assertIn("listing-grid", dash_res.text)
         self.assertIn("listing-modal", dash_res.text)
+        self.assertIn("open-teams-modal-btn", dash_res.text)
+        self.assertIn("add-manual-listing-btn", dash_res.text)
+        self.assertIn("manual-listing-modal", dash_res.text)
+        self.assertIn("teams-modal", dash_res.text)
 
         admin_res = self.client.get("/admin")
         self.assertEqual(admin_res.status_code, 200)
