@@ -16,10 +16,10 @@ services:
       - DATABASE_URL=sqlite:///./marketplace.db
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme123}
-      - EBUY_CLIENT_ID=${EBUY_CLIENT_ID:-}
-      - EBUY_CLIENT_SECRET=${EBUY_CLIENT_SECRET:-}
-      - ESY_API_KEY=${ESY_API_KEY:-}
-      - ESY_API_SECRET=${ESY_API_SECRET:-}
+      - EBAY_CLIENT_ID=${EBAY_CLIENT_ID:-${EBUY_CLIENT_ID:-}}
+      - EBAY_CLIENT_SECRET=${EBAY_CLIENT_SECRET:-${EBUY_CLIENT_SECRET:-}}
+      - ETSY_API_KEY=${ETSY_API_KEY:-${ESY_API_KEY:-}}
+      - ETSY_API_SECRET=${ETSY_API_SECRET:-${ESY_API_SECRET:-}}
       - ALLOWED_ORIGINS=http://localhost,https://your-domain.com
       - REQUIRE_HTTPS=true
     expose:

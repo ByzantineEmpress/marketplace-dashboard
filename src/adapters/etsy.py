@@ -18,6 +18,7 @@ import httpx
 
 from src.adapters.base import MarketplaceAdapter
 from src.database import SessionLocal
+from src.config import config
 
 # Etsy API base URL
 ETSY_API_BASE = "https://api.etsy.com/v3"
@@ -54,8 +55,8 @@ class EtsyAdapter(MarketplaceAdapter):
         After authorisation, Etsy redirects back with a code.
         """
         import os
-        redirect_uri = os.environ.get("ETSY_REDIRECT_URI") or "http://localhost:8000/api/auth/etsy/callback"
-        api_key = os.environ.get("ESY_API_KEY") or ""
+        redirect_uri = os.environ.get("ETSY_REDIRECT_URI") or f"{config.APP_BASE_URL}/api/auth/etsy/callback"
+        api_key = config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
 
         # Required scopes for reading listings
         scopes = "listings_r"
@@ -78,9 +79,9 @@ class EtsyAdapter(MarketplaceAdapter):
         """
         import os
 
-        redirect_uri = os.environ.get("ETSY_REDIRECT_URI") or "http://localhost:8000/api/auth/etsy/callback"
-        api_key = os.environ.get("ESY_API_KEY") or ""
-        api_secret = os.environ.get("ESY_API_SECRET") or ""
+        redirect_uri = os.environ.get("ETSY_REDIRECT_URI") or f"{config.APP_BASE_URL}/api/auth/etsy/callback"
+        api_key = config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
+        api_secret = config.ETSY_API_SECRET or os.environ.get("ETSY_API_SECRET") or os.environ.get("ESY_API_SECRET") or ""
 
         try:
             resp = httpx.post(
@@ -147,8 +148,8 @@ class EtsyAdapter(MarketplaceAdapter):
         """Refresh an expired access token using the stored refresh token."""
         import os
 
-        api_key = os.environ.get("ESY_API_KEY") or ""
-        api_secret = os.environ.get("ESY_API_SECRET") or ""
+        api_key = config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
+        api_secret = config.ETSY_API_SECRET or os.environ.get("ETSY_API_SECRET") or os.environ.get("ESY_API_SECRET") or ""
 
         try:
             resp = httpx.post(
@@ -179,7 +180,7 @@ class EtsyAdapter(MarketplaceAdapter):
 
     # -- Listing fetching --
 
-    def list_listings(self, max_results: int = 500) -> List[Dict[str, Any]]:
+    def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None) -> List[Dict[str, Any]]:
         """Fetch active Etsy listings via the Open API v3.
 
         Uses:
@@ -188,54 +189,64 @@ class EtsyAdapter(MarketplaceAdapter):
 
         Paginates through results up to max_results.
         """
-        token = self.get_token(SessionLocal())
-        if not token:
-            return []
+        close_db = False
+        if db is None:
+            db = SessionLocal()
+            close_db = True
 
-        headers = {
-            "Authorization": f"Bearer {token['access_token']}",
-            "x-api-key": os.environ.get("ESY_API_KEY") or "",
-        }
+        try:
+            token = self.get_token(db)
+            if not token:
+                return []
 
-        shop_id = token.get("shop_id") or (token.get("token_data", {}) or {}).get("shop_id")
+            api_key = config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
+            headers = {
+                "Authorization": f"Bearer {token['access_token']}",
+                "x-api-key": api_key,
+            }
 
-        if not shop_id:
-            # Try to discover shop_id from the API
-            try:
-                resp = httpx.get(
-                    f"{ETSY_API_BASE}/applications",
-                    headers=headers,
-                    timeout=15,
-                )
-                if resp.status_code == 200:
-                    apps = resp.json()
-                    for app in apps.get("results", []):
-                        if app.get("type") == "SHOP_APP":
-                            shop_id = app.get("shop_id")
-                            break
-                    if shop_id:
-                        # Update stored tokens with shop_id
-                        self.store_tokens(
-                            SessionLocal(),
-                            access_token=token["access_token"],
-                            shop_id=shop_id,
-                        )
-            except Exception:
-                pass
+            shop_id = token.get("shop_id") or (token.get("token_data", {}) or {}).get("shop_id")
 
-        if not shop_id:
-            return []
+            if not shop_id:
+                # Try to discover shop_id from the API
+                try:
+                    resp = httpx.get(
+                        f"{ETSY_API_BASE}/applications",
+                        headers=headers,
+                        timeout=15,
+                    )
+                    if resp.status_code == 200:
+                        apps = resp.json()
+                        for app in apps.get("results", []):
+                            if app.get("type") == "SHOP_APP":
+                                shop_id = app.get("shop_id")
+                                break
+                        if shop_id:
+                            # Update stored tokens with shop_id
+                            self.store_tokens(
+                                db,
+                                access_token=token["access_token"],
+                                shop_id=shop_id,
+                            )
+                except Exception:
+                    pass
 
-        listings = []
+            if not shop_id:
+                return []
 
-        # Method 1: Get active listings directly
-        listings = self._fetch_active_listings(headers, shop_id, max_results)
+            listings = []
 
-        if not listings:
-            # Method 2: Get listings by shop
-            listings = self._fetch_shop_listings(headers, shop_id, max_results)
+            # Method 1: Get active listings directly
+            listings = self._fetch_active_listings(headers, shop_id, max_results)
 
-        return listings
+            if not listings:
+                # Method 2: Get listings by shop
+                listings = self._fetch_shop_listings(headers, shop_id, max_results)
+
+            return listings
+        finally:
+            if close_db:
+                db.close()
 
     def _fetch_active_listings(self, headers: dict, shop_id: str, limit: int) -> List[dict]:
         """Fetch active listings using the /listings/active endpoint."""

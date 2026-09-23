@@ -29,11 +29,11 @@ variables (useful for Docker).
 | `APP_DEBUG` | `false` | | Debug mode (verbose errors — keep off in production) |
 | `DATABASE_URL` | `sqlite:///./marketplace.db` | | Database connection string (SQLite file in project root) |
 | `SECRET_KEY` | *(auto-generated)* | | Signs the session cookie. Auto-generated randomly if left at the default — set it explicitly to keep sessions valid across restarts |
-| `EBUY_CLIENT_ID` | *(empty)* | | eBay OAuth client ID |
-| `EBUY_CLIENT_SECRET` | *(empty)* | | eBay OAuth client secret |
-| `EBUY_APP_ID` | *(empty)* | | eBay APP ID (needed by some v1 API calls) |
-| `ESY_API_KEY` | *(empty)* | | Etsy keystring |
-| `ESY_API_SECRET` | *(empty)* | | Etsy shared secret |
+| `EBAY_CLIENT_ID` | *(empty)* | ✅ | eBay OAuth client ID |
+| `EBAY_CLIENT_SECRET` | *(empty)* | ✅ | eBay OAuth client secret |
+| `EBAY_APP_ID` | *(empty)* | | eBay APP ID (needed by some v1 API calls) |
+| `ETSY_API_KEY` | *(empty)* | ✅ | Etsy keystring |
+| `ETSY_API_SECRET` | *(empty)* | ✅ | Etsy shared secret |
 | `ALLOWED_ORIGINS` | `http://localhost` | | Comma-separated origins allowed by CORS/Origin checks |
 | `REQUIRE_HTTPS` | `false` | | Set `true` when serving behind an Nginx proxy over HTTPS |
 | `PLUGIN_DIR` | `plugins` | | Folder scanned for plugin `.py` files |

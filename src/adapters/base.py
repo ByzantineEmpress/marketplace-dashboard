@@ -60,7 +60,7 @@ class MarketplaceAdapter(ABC):
     # ---------- Listing fetching (abstract — must be implemented) ----------
 
     @abstractmethod
-    def list_listings(self, max_results: int = 500) -> List[Dict[str, Any]]:
+    def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None) -> List[Dict[str, Any]]:
         """Fetch active listings from the platform.
 
         Returns a list of plain dicts ready to be stored or displayed.
@@ -269,7 +269,7 @@ class MarketplaceAdapter(ABC):
             self._record_request()
 
             # Fetch listings
-            listings = self.list_listings()
+            listings = self.list_listings(db=db)
             result["listings_fetched"] = len(listings)
 
             if not listings:

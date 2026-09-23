@@ -23,6 +23,7 @@ import httpx
 
 from src.adapters.base import MarketplaceAdapter
 from src.database import SessionLocal
+from src.config import config
 
 # eBay API base URL (production)
 EBAY_API_BASE = "https://api.ebay.com"
@@ -62,8 +63,8 @@ class eBayAdapter(MarketplaceAdapter):
         After authorisation, eBay redirects to your callback with a code.
         """
         import os
-        redirect_uri = os.environ.get("EBAY_REDIRECT_URI") or "http://localhost:8000/api/auth/ebay/callback"
-        client_id = os.environ.get("EBUY_CLIENT_ID") or ""
+        redirect_uri = os.environ.get("EBAY_REDIRECT_URI") or f"{config.APP_BASE_URL}/api/auth/ebay/callback"
+        client_id = config.EBAY_CLIENT_ID or os.environ.get("EBAY_CLIENT_ID") or os.environ.get("EBUY_CLIENT_ID") or ""
 
         # Required scopes for the Selling API v2
         scopes = [
@@ -92,9 +93,9 @@ class eBayAdapter(MarketplaceAdapter):
         import base64
         import os
 
-        redirect_uri = os.environ.get("EBAY_REDIRECT_URI") or "http://localhost:8000/api/auth/ebay/callback"
-        client_id = os.environ.get("EBUY_CLIENT_ID") or ""
-        client_secret = os.environ.get("EBUY_CLIENT_SECRET") or ""
+        redirect_uri = os.environ.get("EBAY_REDIRECT_URI") or f"{config.APP_BASE_URL}/api/auth/ebay/callback"
+        client_id = config.EBAY_CLIENT_ID or os.environ.get("EBAY_CLIENT_ID") or os.environ.get("EBUY_CLIENT_ID") or ""
+        client_secret = config.EBAY_CLIENT_SECRET or os.environ.get("EBAY_CLIENT_SECRET") or os.environ.get("EBUY_CLIENT_SECRET") or ""
 
         # eBay expects Basic Auth with client_id:client_secret
         credentials = f"{client_id}:{client_secret}"
@@ -141,8 +142,8 @@ class eBayAdapter(MarketplaceAdapter):
         import base64
         import os
 
-        client_id = os.environ.get("EBUY_CLIENT_ID") or ""
-        client_secret = os.environ.get("EBUY_CLIENT_SECRET") or ""
+        client_id = config.EBAY_CLIENT_ID or os.environ.get("EBAY_CLIENT_ID") or os.environ.get("EBUY_CLIENT_ID") or ""
+        client_secret = config.EBAY_CLIENT_SECRET or os.environ.get("EBAY_CLIENT_SECRET") or os.environ.get("EBUY_CLIENT_SECRET") or ""
         credentials = f"{client_id}:{client_secret}"
         auth_header = base64.b64encode(credentials.encode()).decode()
 
@@ -178,38 +179,47 @@ class eBayAdapter(MarketplaceAdapter):
 
     # -- Listing fetching (Selling API v2) --
 
-    def list_listings(self, max_results: int = 500) -> List[Dict[str, Any]]:
+    def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None) -> List[Dict[str, Any]]:
         """Fetch active eBay listings via the Selling API v2.
 
         Uses:
         - Inventory API to get all inventory items
         - Marketplace Listing API for listing details
         """
-        token = self.get_token(SessionLocal())
-        if not token:
-            return []
+        close_db = False
+        if db is None:
+            db = SessionLocal()
+            close_db = True
 
-        headers = {
-            "Authorization": f"Bearer {token['access_token']}",
-            "Content-Type": "application/json",
-        }
+        try:
+            token = self.get_token(db)
+            if not token:
+                return []
 
-        # Collect inventory items first
-        inventory_items = self._fetch_inventory_items(headers, max_results)
-        if not inventory_items:
-            return []
+            headers = {
+                "Authorization": f"Bearer {token['access_token']}",
+                "Content-Type": "application/json",
+            }
 
-        # Now fetch listing details for each item
-        all_listings = []
-        for item in inventory_items:
-            listing = self._get_listing_details(item, headers)
-            if listing:
-                all_listings.append(listing)
+            # Collect inventory items first
+            inventory_items = self._fetch_inventory_items(headers, max_results)
+            if not inventory_items:
+                return []
 
-            if len(all_listings) >= max_results:
-                break
+            # Now fetch listing details for each item
+            all_listings = []
+            for item in inventory_items:
+                listing = self._get_listing_details(item, headers)
+                if listing:
+                    all_listings.append(listing)
 
-        return all_listings
+                if len(all_listings) >= max_results:
+                    break
+
+            return all_listings
+        finally:
+            if close_db:
+                db.close()
 
     def _fetch_inventory_items(self, headers: dict, limit: int) -> List[dict]:
         """Fetch inventory items from eBay's Inventory API.

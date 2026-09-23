@@ -57,14 +57,19 @@ async function syncPlatform(platform) {
 
 // ---------- Google Sign-In settings ----------
 
-async function loadGoogleSettings() {
+async function loadAllSettings() {
     const redirectUri = document.getElementById("google-redirect-uri");
+    const ebayRedirect = document.getElementById("ebay-redirect-uri");
+    const etsyRedirect = document.getElementById("etsy-redirect-uri");
     try {
         const resp = await fetch("/api/settings");
         if (!resp.ok) return;
         const data = await resp.json();
         const s = data.settings || {};
         if (redirectUri) redirectUri.value = data.google_redirect_uri || "";
+        if (ebayRedirect) ebayRedirect.value = data.ebay_redirect_uri || "";
+        if (etsyRedirect) etsyRedirect.value = data.etsy_redirect_uri || "";
+
         const setIf = (id, value) => {
             const el = document.getElementById(id);
             if (el) el.value = value || "";
@@ -72,6 +77,11 @@ async function loadGoogleSettings() {
         setIf("google-client-id", s.GOOGLE_CLIENT_ID);
         setIf("google-client-secret", s.GOOGLE_CLIENT_SECRET);
         setIf("google-allowed-emails", s.GOOGLE_ALLOWED_EMAILS);
+
+        setIf("ebay-client-id", s.EBAY_CLIENT_ID);
+        setIf("ebay-client-secret", s.EBAY_CLIENT_SECRET);
+        setIf("etsy-api-key", s.ETSY_API_KEY);
+        setIf("etsy-api-secret", s.ETSY_API_SECRET);
     } catch (e) {
         /* leave the form at its defaults */
     }
@@ -94,6 +104,34 @@ async function saveGoogleSettings() {
         if (data.ok) {
             status.innerHTML =
                 '<span class="flash flash--success flash--inline">✓ Saved — the sign-in button now appears on the login page.</span>';
+        } else {
+            status.innerHTML =
+                `<span class="flash flash--error flash--inline">✗ Save failed: ${escapeHtml(data.error || ("HTTP " + resp.status))}</span>`;
+        }
+    } catch (e) {
+        status.innerHTML =
+            `<span class="flash flash--error flash--inline">✗ Save error: ${escapeHtml(e.message)}</span>`;
+    }
+}
+
+async function saveMarketplaceSettings() {
+    const status = document.getElementById("marketplace-settings-status");
+    const body = {
+        EBAY_CLIENT_ID: (document.getElementById("ebay-client-id")?.value || "").trim(),
+        EBAY_CLIENT_SECRET: (document.getElementById("ebay-client-secret")?.value || "").trim(),
+        ETSY_API_KEY: (document.getElementById("etsy-api-key")?.value || "").trim(),
+        ETSY_API_SECRET: (document.getElementById("etsy-api-secret")?.value || "").trim(),
+    };
+    try {
+        const resp = await fetch("/api/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+            status.innerHTML =
+                '<span class="flash flash--success flash--inline">✓ Marketplace credentials saved.</span>';
         } else {
             status.innerHTML =
                 `<span class="flash flash--error flash--inline">✗ Save failed: ${escapeHtml(data.error || ("HTTP " + resp.status))}</span>`;
@@ -267,7 +305,8 @@ document.addEventListener("DOMContentLoaded", () => {
     wire("sync-ebay", () => syncPlatform("ebay"));
     wire("sync-etsy", () => syncPlatform("etsy"));
     wire("save-google-settings", saveGoogleSettings);
+    wire("save-marketplace-settings", saveMarketplaceSettings);
     wire("create-team", createTeam);
-    loadGoogleSettings();
+    loadAllSettings();
     loadTeams();
 });

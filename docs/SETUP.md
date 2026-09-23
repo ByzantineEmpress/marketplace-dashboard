@@ -71,8 +71,8 @@ Serves on port 8000 through the bundled Nginx config
 3. Copy the **Client ID** and **Client Secret** into `.env`:
 
    ```
-   EBUY_CLIENT_ID=your_ebay_client_id
-   EBUY_CLIENT_SECRET=your_ebay_client_secret
+   EBAY_CLIENT_ID=your_ebay_client_id
+   EBAY_CLIENT_SECRET=your_ebay_client_secret
    EBAY_REDIRECT_URI=http://localhost:8000/api/auth/ebay/callback
    ```
 
@@ -91,8 +91,8 @@ Serves on port 8000 through the bundled Nginx config
 3. Copy the credentials into `.env`:
 
    ```
-   ESY_API_KEY=your_etsy_keystring
-   ESY_API_SECRET=your_etsy_shared_secret
+   ETSY_API_KEY=your_etsy_keystring
+   ETSY_API_SECRET=your_etsy_shared_secret
    ETSY_REDIRECT_URI=http://localhost:8000/api/auth/etsy/callback
    ```
 
@@ -115,7 +115,7 @@ Serves on port 8000 through the bundled Nginx config
 | OAuth redirect fails | The `*_REDIRECT_URI` in `.env` must exactly match the developer portal (including http/https and port) |
 | Listings not appearing | Click **Sync** in Admin, check the sync log in the server console |
 | API rate limits hit | The app backs off automatically — wait a few minutes |
-| `EBUY_CLIENT_SECRET not found` | eBay's developer portal moved — re-check the app in the new portal |
+| `EBAY_CLIENT_SECRET not found` | eBay's developer portal moved — re-check the app in the new portal |
 | Launcher says "Python not found" | Install Python 3.11+ from python.org with "Add to PATH" checked |
 | Port 8000 already in use | Change `APP_PORT` in `.env` and use the new port |
 

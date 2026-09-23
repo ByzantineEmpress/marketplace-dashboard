@@ -117,15 +117,13 @@ page_router = APIRouter()
 async def login_page(request: Request):
     """Login page — POSTs to /api/auth/login."""
     error = request.query_params.get("error", "")
-    return HTMLResponse(
-        content=templates.TemplateResponse(
-            "login.html",
-            {
-                "request": request,
-                "error": error,
-                "google_enabled": bool(config.GOOGLE_CLIENT_ID),
-            },
-        ).body.decode()
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context={
+            "error": error,
+            "google_enabled": bool(config.GOOGLE_CLIENT_ID),
+        },
     )
 
 @page_router.get("/dashboard")
@@ -134,10 +132,10 @@ async def dashboard_page(request: Request):
     user = require_auth(request)
     if not user:
         return RedirectResponse(url="/login?error=auth_required")
-    return HTMLResponse(
-        content=templates.TemplateResponse(
-            "dashboard.html", {"request": request, "identity": user["name"]}
-        ).body.decode()
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={"identity": user["name"]},
     )
 
 @page_router.get("/admin")
@@ -146,10 +144,10 @@ async def admin_page(request: Request):
     user = require_auth(request)
     if not user:
         return RedirectResponse(url="/login?error=auth_required")
-    return HTMLResponse(
-        content=templates.TemplateResponse(
-            "admin.html", {"request": request, "identity": user["name"]}
-        ).body.decode()
+    return templates.TemplateResponse(
+        request=request,
+        name="admin.html",
+        context={"identity": user["name"]},
     )
 
 # -- Google sign-in (OAuth 2.0 / OpenID Connect) --
@@ -418,6 +416,10 @@ SETTINGS_KEYS = (
     "GOOGLE_ALLOWED_EMAILS",
     "APP_BASE_URL",
     "DEFAULT_REFRESH_INTERVAL_S",
+    "EBAY_CLIENT_ID",
+    "EBAY_CLIENT_SECRET",
+    "ETSY_API_KEY",
+    "ETSY_API_SECRET",
 )
 
 @api_router.get("/settings")
@@ -432,8 +434,14 @@ async def get_settings(_auth: bool = Depends(check_auth)):
             "GOOGLE_ALLOWED_EMAILS": ",".join(config.GOOGLE_ALLOWED_EMAILS),
             "APP_BASE_URL": config.APP_BASE_URL,
             "DEFAULT_REFRESH_INTERVAL_S": config.DEFAULT_REFRESH_INTERVAL_S,
+            "EBAY_CLIENT_ID": config.EBAY_CLIENT_ID,
+            "EBAY_CLIENT_SECRET": config.EBAY_CLIENT_SECRET,
+            "ETSY_API_KEY": config.ETSY_API_KEY,
+            "ETSY_API_SECRET": config.ETSY_API_SECRET,
         },
         "google_redirect_uri": f"{config.APP_BASE_URL}/auth/google/callback",
+        "ebay_redirect_uri": f"{config.APP_BASE_URL}/api/auth/ebay/callback",
+        "etsy_redirect_uri": f"{config.APP_BASE_URL}/api/auth/etsy/callback",
     }
 
 @api_router.post("/settings")
@@ -456,6 +464,10 @@ async def update_settings(body: dict, _auth: bool = Depends(check_auth)):
         else:
             value = str(value).strip()
         setattr(config, key, value)
+        if key == "EBAY_CLIENT_ID": config.EBUY_CLIENT_ID = value
+        elif key == "EBAY_CLIENT_SECRET": config.EBUY_CLIENT_SECRET = value
+        elif key == "ETSY_API_KEY": config.ESY_API_KEY = value
+        elif key == "ETSY_API_SECRET": config.ESY_API_SECRET = value
         updated.append(key)
 
     if updated:

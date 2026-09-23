@@ -25,19 +25,15 @@ Prefer the command line or Docker? See [docs/SETUP.md](docs/SETUP.md).
 
 ## Features
 
-- **Multi-marketplace** — eBay and Etsy via official APIs
-  ([docs/SETUP.md](docs/SETUP.md) for credentials), sync on demand or on
-  a schedule.
-- **Google Sign-In** — one-click login with a Google account
-  ([docs/GOOGLE-LOGIN.md](docs/GOOGLE-LOGIN.md)).
-- **Teams** — multiple users share one inventory; personal stock stays
-  separate. Team switcher on the dashboard, team management in Admin
-  ([docs/TEAMS.md](docs/TEAMS.md)).
-- **Dashboard** — listings from every connected shop, per-team stock
-  counts, stats, price alerts.
-- **Admin page** — settings, marketplace accounts, users, teams, plugins.
-- **Plugin system** — drop a `.py` file into `plugins/` to add features
-  ([docs/PLUGINS.md](docs/PLUGINS.md)).
+- **Multi-marketplace** — eBay (Selling API v2) and Etsy (Open API v3) via official APIs, sync on demand or on a schedule. Configure credentials right in the Admin page.
+- **Dark / Light Theme** — Built-in theme switcher with automatic system preference detection (`prefers-color-scheme`) and persistence.
+- **Interactive Listing Details** — Modal dialog displaying full high-res images, pricing, available quantity, SKU, live links, and quick team reassignment.
+- **Google Sign-In** — One-click OAuth login with a Google account ([docs/GOOGLE-LOGIN.md](docs/GOOGLE-LOGIN.md)).
+- **Teams** — Multiple users share one inventory; personal stock stays separate. Team switcher on the dashboard, team management in Admin ([docs/TEAMS.md](docs/TEAMS.md)).
+- **Dashboard** — Listings from every connected shop, per-team stock counts, aggregated valuation stats, price alerts, and responsive grid.
+- **Admin page** — Interactive settings for API keys, marketplace accounts, users, teams, and plugins.
+- **Plugin system** — Drop a `.py` file into `plugins/` to add features ([docs/PLUGINS.md](docs/PLUGINS.md)).
+- **CI / Automated Testing** — Fast, in-process automated integration tests and GitHub Actions CI workflow.
 
 ## Tech stack
 
@@ -45,8 +41,9 @@ Prefer the command line or Docker? See [docs/SETUP.md](docs/SETUP.md).
 |---|---|
 | Backend | Python 3.11+ / FastAPI + Uvicorn |
 | Database | SQLite (SQLAlchemy ORM) — single file, zero config |
-| Frontend | Vanilla HTML + CSS + JS (no build step) |
+| Frontend | Modern Vanilla HTML5 + CSS3 + JS (no build step) |
 | Templating | Jinja2 |
+| CI/CD | GitHub Actions |
 | Deployment | Direct on Windows, or Docker + Nginx |
 
 ## Documentation
@@ -64,8 +61,9 @@ Prefer the command line or Docker? See [docs/SETUP.md](docs/SETUP.md).
 
 ## Tests
 
-```
+```bash
 python tests/test_ui_wiring.py       # static: JS getElementById vs HTML ids
+python -m unittest tests/test_api_client.py  # automated in-process API test suite
 python tests/test_teams.py           # API end-to-end (server must be running)
 node tests/ui_smoke_test.js          # real-browser UI smoke test (needs Node)
 ```

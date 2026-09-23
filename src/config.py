@@ -49,12 +49,19 @@ class Config:
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_ALLOWED_EMAILS: list = field(default_factory=list)
 
-    # -- OAuth keys for marketplace APIs --
+    # -- OAuth keys for marketplace APIs (standard naming) --
+    EBAY_CLIENT_ID: str = ""
+    EBAY_CLIENT_SECRET: str = ""
+    EBAY_APP_ID: str = ""
+    ETSY_API_KEY: str = ""
+    ETSY_API_SECRET: str = ""
+
+    # Legacy aliases (backwards compatibility for previous AI generation)
     EBUY_CLIENT_ID: str = ""
     EBUY_CLIENT_SECRET: str = ""
-    EBUY_APP_ID: str = ""  # eBay uses APP ID for v1 APIs
-    ESY_API_KEY: str = ""  # Etsy keystring
-    ESY_API_SECRET: str = ""  # Etsy shared secret
+    EBUY_APP_ID: str = ""
+    ESY_API_KEY: str = ""
+    ESY_API_SECRET: str = ""
 
     # -- Cache / polling --
     DEFAULT_REFRESH_INTERVAL_S: int = 300  # 5 minutes
@@ -86,6 +93,32 @@ class Config:
                 else:
                     value = str(value)
                 setattr(self, key, value)
+
+        # Sync standardized keys and legacy typos in both directions
+        if not self.EBAY_CLIENT_ID and self.EBUY_CLIENT_ID:
+            self.EBAY_CLIENT_ID = self.EBUY_CLIENT_ID
+        elif not self.EBUY_CLIENT_ID and self.EBAY_CLIENT_ID:
+            self.EBUY_CLIENT_ID = self.EBAY_CLIENT_ID
+
+        if not self.EBAY_CLIENT_SECRET and self.EBUY_CLIENT_SECRET:
+            self.EBAY_CLIENT_SECRET = self.EBUY_CLIENT_SECRET
+        elif not self.EBUY_CLIENT_SECRET and self.EBAY_CLIENT_SECRET:
+            self.EBUY_CLIENT_SECRET = self.EBAY_CLIENT_SECRET
+
+        if not self.EBAY_APP_ID and self.EBUY_APP_ID:
+            self.EBAY_APP_ID = self.EBUY_APP_ID
+        elif not self.EBUY_APP_ID and self.EBAY_APP_ID:
+            self.EBUY_APP_ID = self.EBAY_APP_ID
+
+        if not self.ETSY_API_KEY and self.ESY_API_KEY:
+            self.ETSY_API_KEY = self.ESY_API_KEY
+        elif not self.ESY_API_KEY and self.ETSY_API_KEY:
+            self.ESY_API_KEY = self.ETSY_API_KEY
+
+        if not self.ETSY_API_SECRET and self.ESY_API_SECRET:
+            self.ETSY_API_SECRET = self.ESY_API_SECRET
+        elif not self.ESY_API_SECRET and self.ETSY_API_SECRET:
+            self.ESY_API_SECRET = self.ETSY_API_SECRET
 
         # Secret key: generate a stable random one if not set
         if not self.SECRET_KEY or self.SECRET_KEY == "change-this-in-production-generate-a-real-one":

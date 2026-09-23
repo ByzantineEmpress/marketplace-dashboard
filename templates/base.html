@@ -13,7 +13,9 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0e1116" media="(prefers-color-scheme: dark)">
     <title>{{ title or "Marketplace Dashboard" }}</title>
 
     <!-- Fonts: Inter (modern, readable) -->
@@ -45,6 +47,10 @@
             <a href="/dashboard" class="nav-link{% if active == 'dashboard' %} active{% endif %}">Dashboard</a>
             <a href="/admin" class="nav-link{% if active == 'admin' %} active{% endif %}">Admin</a>
             <a href="/api/docs" class="nav-link nav-link--api" target="_blank" rel="noopener">API Docs</a>
+            <button type="button" id="theme-toggle" class="theme-toggle" title="Toggle dark/light mode" aria-label="Toggle theme">
+                <svg id="theme-icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                <svg id="theme-icon-moon" viewBox="0 0 24 24" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
         </div>
     </nav>
 
@@ -62,9 +68,35 @@
         {% block content %}{% endblock %}
     </main>
 
+    <!-- ========== Listing Detail Modal ========== -->
+    <div id="listing-modal-backdrop" class="modal-backdrop" role="dialog" aria-modal="true" aria-hidden="true">
+        <div class="modal" id="listing-modal">
+            <div class="modal-header">
+                <div class="modal-title-wrap">
+                    <span id="modal-platform-icon"></span>
+                    <h2 class="modal-title" id="modal-title">Listing Details</h2>
+                </div>
+                <button type="button" class="modal-close" id="modal-close-btn" aria-label="Close modal">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body">
+                <!-- dynamic content populated by JS -->
+            </div>
+            <div class="modal-footer" id="modal-footer">
+                <div class="modal-team-select">
+                    <label for="modal-team-dropdown"><strong>Team:</strong></label>
+                    <select id="modal-team-dropdown">
+                        <option value="">Shared (No team)</option>
+                    </select>
+                    <span id="modal-team-status" style="font-size:12px;color:var(--success);"></span>
+                </div>
+                <div id="modal-action-wrap"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- ========== Footer ========== -->
     <footer class="footer">
-        <p>v0.1 — Built with Python + FastAPI + SQLite</p>
+        <p>v0.2 — Built with Python + FastAPI + SQLite</p>
     </footer>
 
     <!-- ========== Scripts (external files only — CSP friendly) ========== -->

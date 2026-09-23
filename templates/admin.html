@@ -56,27 +56,56 @@
         </div>
     </section>
 
-    <!-- API Keys -->
+    <!-- Marketplace API Configuration -->
     <section class="admin-section">
-        <h2>API Configuration</h2>
-        <div class="api-config">
-            <p>Set your marketplace API credentials in <code>.env</code> (see <code>setup.md</code> for instructions).</p>
-
-            <h3>eBay API</h3>
+        <h2>Marketplace API Configuration</h2>
+        <div class="settings-form" id="marketplace-settings">
             <p>
-                <a href="https://developer.ebay.com/" target="_blank" rel="noopener">eBay Developer Portal →</a>
-                Create an app, then set:
+                Configure credentials for eBay and Etsy official APIs. These are saved to your local configuration and persist across restarts.
             </p>
-            <pre>EBAY_CLIENT_ID=your_client_id
-EBAY_CLIENT_SECRET=your_client_secret</pre>
 
-            <h3>Etsy API</h3>
-            <p>
-                <a href="https://www.etsy.com/developers" target="_blank" rel="noopener">Etsy Developer Portal →</a>
-                Create a Seller App, then set:
-            </p>
-            <pre>ETSY_API_KEY=your_keystring
-ETSY_API_SECRET=your_shared_secret</pre>
+            <div class="settings-grid">
+                <!-- eBay Column -->
+                <div class="settings-col">
+                    <h3>eBay API (Selling API v2)</h3>
+                    <p class="section-desc">Create your keys at <a href="https://developer.ebay.com/" target="_blank" rel="noopener">eBay Developer Portal →</a></p>
+                    <div class="form-group">
+                        <label for="ebay-redirect-uri">OAuth Redirect URI</label>
+                        <input type="text" id="ebay-redirect-uri" class="input-mono" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label for="ebay-client-id">eBay Client ID (App ID)</label>
+                        <input type="text" id="ebay-client-id" class="input-mono" placeholder="Your-eBay-Client-ID" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="ebay-client-secret">eBay Client Secret (Cert ID)</label>
+                        <input type="password" id="ebay-client-secret" class="input-mono" placeholder="Your-eBay-Client-Secret" autocomplete="off">
+                    </div>
+                </div>
+
+                <!-- Etsy Column -->
+                <div class="settings-col">
+                    <h3>Etsy API (Open API v3)</h3>
+                    <p class="section-desc">Create a Seller App at <a href="https://www.etsy.com/developers" target="_blank" rel="noopener">Etsy Developer Portal →</a></p>
+                    <div class="form-group">
+                        <label for="etsy-redirect-uri">OAuth Redirect URI</label>
+                        <input type="text" id="etsy-redirect-uri" class="input-mono" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label for="etsy-api-key">Etsy API Key (Keystring)</label>
+                        <input type="text" id="etsy-api-key" class="input-mono" placeholder="Your-Etsy-Keystring" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="etsy-api-secret">Etsy API Secret (Shared Secret)</label>
+                        <input type="password" id="etsy-api-secret" class="input-mono" placeholder="Your-Etsy-Shared-Secret" autocomplete="off">
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-actions">
+                <button class="btn btn--primary" id="save-marketplace-settings">Save Marketplace Credentials</button>
+                <span id="marketplace-settings-status" class="settings-status"></span>
+            </div>
         </div>
     </section>
 

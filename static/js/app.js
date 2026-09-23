@@ -10,6 +10,50 @@
 
    ================================================================== */
 
+/* --- Theme toggle (Dark / Light / Auto) --- */
+(function () {
+    const toggleBtn = document.getElementById("theme-toggle");
+    const sunIcon = document.getElementById("theme-icon-sun");
+    const moonIcon = document.getElementById("theme-icon-moon");
+
+    function getPreferredTheme() {
+        const stored = localStorage.getItem("theme");
+        if (stored) return stored;
+        return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+
+    function applyTheme(theme) {
+        if (theme === "dark") {
+            document.documentElement.setAttribute("data-theme", "dark");
+            if (sunIcon) sunIcon.style.display = "none";
+            if (moonIcon) moonIcon.style.display = "block";
+        } else {
+            document.documentElement.setAttribute("data-theme", "light");
+            if (sunIcon) sunIcon.style.display = "block";
+            if (moonIcon) moonIcon.style.display = "none";
+        }
+    }
+
+    const currentTheme = getPreferredTheme();
+    applyTheme(currentTheme);
+
+    if (toggleBtn) {
+        toggleBtn.addEventListener("click", function () {
+            const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+            const newTheme = isDark ? "light" : "dark";
+            localStorage.setItem("theme", newTheme);
+            applyTheme(newTheme);
+        });
+    }
+
+    // Listen for system theme changes if user hasn't explicitly overridden
+    window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function (e) {
+        if (!localStorage.getItem("theme")) {
+            applyTheme(e.matches ? "dark" : "light");
+        }
+    });
+})();
+
 /* --- Flash message auto-dismiss (shared by all pages) --- */
 (function () {
     const flashes = document.querySelectorAll(".flash");
