@@ -536,6 +536,7 @@ class MarketplaceApiTest(unittest.TestCase):
 
     def test_14_team_invite_email_dispatch(self):
         """Verify team invite generation, invite link, email template, and SMTP response."""
+        import time
         # Ensure authenticated
         self.client.post(
             "/api/auth/login",
@@ -549,19 +550,31 @@ class MarketplaceApiTest(unittest.TestCase):
         self.assertGreaterEqual(len(teams), 1)
         team_id = teams[0]["id"]
 
-        # Add / invite collaborator by email
-        invite_res = self.client.post(
-            f"/api/teams/{team_id}/members",
-            json={"email": "collaborator_test@example.com"},
-        )
-        self.assertEqual(invite_res.status_code, 200)
-        inv_data = invite_res.json()
-        self.assertTrue(inv_data.get("ok"))
-        self.assertIn("invite_url", inv_data)
-        self.assertIn("/join/", inv_data["invite_url"])
-        self.assertIn("invite_subject", inv_data)
-        self.assertIn("invite_body", inv_data)
-        self.assertIn("team_name", inv_data)
+        test_email = f"collab_{int(time.time() * 1000)}@example.com"
+        try:
+            # Add / invite collaborator by email
+            invite_res = self.client.post(
+                f"/api/teams/{team_id}/members",
+                json={"email": test_email},
+            )
+            self.assertEqual(invite_res.status_code, 200)
+            inv_data = invite_res.json()
+            self.assertTrue(inv_data.get("ok"))
+            self.assertIn("invite_url", inv_data)
+            self.assertIn("/join/", inv_data["invite_url"])
+            self.assertIn("invite_subject", inv_data)
+            self.assertIn("invite_body", inv_data)
+            self.assertIn("team_name", inv_data)
+        finally:
+            db = SessionLocal()
+            try:
+                u = db.query(User).filter(User.email == test_email).first()
+                if u:
+                    db.query(TeamMembership).filter(TeamMembership.user_id == u.id).delete()
+                    db.delete(u)
+                    db.commit()
+            finally:
+                db.close()
 
 
 if __name__ == "__main__":
