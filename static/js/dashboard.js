@@ -587,7 +587,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <div class="modal-price-row">
                 <div class="modal-price">${price} <span style="font-size:14px;font-weight:normal;color:var(--text-muted);">${listing.currency || 'CAD'}</span></div>
                 <div>
-                    <span class="card-status card-status--${listing.status || 'unknown'}">${listing.status || 'unknown'}</span>
+                    <span class="card-status card-status--${listing.status || 'unknown'}">${listing.status === 'written_off' ? 'Written Off' : (listing.status || 'unknown')}</span>
                     ${listing.is_sold ? '<span class="card-status card-status--sold">Sold</span>' : ''}
                 </div>
             </div>
@@ -902,6 +902,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const teamSelect = document.getElementById("modal-team-dropdown");
         const statusSpan = document.getElementById("modal-team-status");
         const markSoldBtn = document.getElementById("modal-mark-sold-btn");
+        const writeOffBtn = document.getElementById("modal-write-off-btn");
+        const restoreBtn = document.getElementById("modal-restore-btn");
         const deleteBtn = document.getElementById("modal-delete-btn");
 
         if (teamSelect) {
@@ -911,8 +913,11 @@ document.addEventListener("DOMContentLoaded", () => {
             statusSpan.textContent = "";
         }
 
+        const isWrittenOff = listing.status === "written_off";
+        const isSold = Boolean(listing.is_sold);
+
         if (markSoldBtn) {
-            markSoldBtn.style.display = listing.is_sold ? "none" : "";
+            markSoldBtn.style.display = (isSold || isWrittenOff) ? "none" : "";
             markSoldBtn.onclick = async () => {
                 try {
                     const res = await fetch(`/api/listings/${listing.id}/mark-sold`, { method: "POST" });
@@ -926,6 +931,52 @@ document.addEventListener("DOMContentLoaded", () => {
                     }
                 } catch (err) {
                     alert("Could not mark listing as sold: " + err.message);
+                }
+            };
+        }
+
+        if (writeOffBtn) {
+            writeOffBtn.style.display = (isSold || isWrittenOff) ? "none" : "";
+            writeOffBtn.onclick = async () => {
+                const titleStr = listing.title || "this item";
+                if (!confirm(`Write off "${titleStr}" as an inventory loss?\n\nThis marks it as unsellable and removes it from active inventory.`)) return;
+                try {
+                    const res = await fetch(`/api/listings/${listing.id}/write-off`, { method: "POST" });
+                    const resData = await res.json();
+                    if (resData.ok) {
+                        listing.status = "written_off";
+                        listing.is_sold = false;
+                        closeModal();
+                        loadListings();
+                        loadStats();
+                    } else {
+                        alert("Could not write off listing: " + (resData.error || "Unknown error"));
+                    }
+                } catch (err) {
+                    alert("Could not write off listing: " + err.message);
+                }
+            };
+        }
+
+        if (restoreBtn) {
+            restoreBtn.style.display = isWrittenOff ? "" : "none";
+            restoreBtn.onclick = async () => {
+                const titleStr = listing.title || "this item";
+                if (!confirm(`Restore "${titleStr}" back to active inventory?`)) return;
+                try {
+                    const res = await fetch(`/api/listings/${listing.id}/restore`, { method: "POST" });
+                    const resData = await res.json();
+                    if (resData.ok) {
+                        listing.status = "active";
+                        listing.is_sold = false;
+                        closeModal();
+                        loadListings();
+                        loadStats();
+                    } else {
+                        alert("Could not restore listing: " + (resData.error || "Unknown error"));
+                    }
+                } catch (err) {
+                    alert("Could not restore listing: " + err.message);
                 }
             };
         }
@@ -1511,11 +1562,13 @@ function renderCard(listing) {
                 <p class="card-price">${price}</p>
                 ${hasCost ? `
                     <div style="font-size: 11.5px; color: var(--text-muted); margin-top: -4px; margin-bottom: 6px;">
-                        <span>Cost: ${costText}</span> · <span style="color: ${profitColor}; font-weight: 500;">Net: ${profitSign}$${netProfit.toFixed(2)} CAD</span>
+                        <span>Cost: ${costText}</span> · <span style="color: ${listing.status === 'written_off' ? 'var(--danger)' : profitColor}; font-weight: 500;">
+                            ${listing.status === 'written_off' ? `Loss: -$${(listing.total_cost || 0).toFixed(2)} CAD` : `Net: ${profitSign}$${netProfit.toFixed(2)} CAD`}
+                        </span>
                     </div>
                 ` : ""}
                 <div class="card-meta">
-                    <span class="card-status card-status--${listing.status || 'unknown'}">${listing.status || "unknown"}</span>
+                    <span class="card-status card-status--${listing.status || 'unknown'}">${listing.status === 'written_off' ? 'Written Off' : (listing.status || "unknown")}</span>
                     ${listing.team_name ? `<span class="card-team" title="Team">${escapeHtml(listing.team_name)}</span>` : ""}
                 </div>
             </div>

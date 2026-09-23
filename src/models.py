@@ -216,6 +216,7 @@ class Listing(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     sold_at = Column(DateTime, nullable=True, index=True)
+    written_off_at = Column(DateTime, nullable=True, index=True)
     last_fetched = Column(DateTime, nullable=True)
 
     @property
@@ -264,6 +265,7 @@ class Listing(Base):
             "status": self.status,
             "is_sold": bool(self.is_sold),
             "sold_at": self.sold_at.isoformat() if self.sold_at else None,
+            "written_off_at": self.written_off_at.isoformat() if self.written_off_at else None,
             "image_url": self.image_url,
             "images": self.images_json or [],
             "original_url": self.original_url,

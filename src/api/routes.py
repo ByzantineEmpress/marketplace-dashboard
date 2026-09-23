@@ -749,14 +749,18 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
         sold_scope = and_(scope, Listing.is_sold == True, sold_time >= cutoff)  # noqa: E712
         active_scope = and_(scope, Listing.status == "active", Listing.created_at >= cutoff)
         total_scope = and_(scope, Listing.created_at >= cutoff)
+        write_off_time = coalesce(Listing.written_off_at, Listing.updated_at)
+        written_off_scope = and_(scope, Listing.status == "written_off", write_off_time >= cutoff)
     else:
         sold_scope = and_(scope, Listing.is_sold == True)  # noqa: E712
         active_scope = and_(scope, Listing.status == "active")
         total_scope = scope
+        written_off_scope = and_(scope, Listing.status == "written_off")
 
     total = db.query(func.count(Listing.id)).filter(total_scope).scalar() or 0
     active = db.query(func.count(Listing.id)).filter(active_scope).scalar() or 0
     sold = db.query(func.count(Listing.id)).filter(sold_scope).scalar() or 0
+    written_off = db.query(func.count(Listing.id)).filter(written_off_scope).scalar() or 0
 
     # Count per platform
     platform_counts = (
@@ -782,6 +786,11 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
         func.sum(Listing.purchase_price_cents + Listing.parts_cost_cents)
     ).filter(sold_scope).scalar() or 0
     sold_profit = sold_revenue - sold_cost
+
+    # Written-off inventory loss cost
+    written_off_cost = db.query(
+        func.sum(Listing.purchase_price_cents + Listing.parts_cost_cents)
+    ).filter(written_off_scope).scalar() or 0
 
     # Build timeline buckets for the chart
     from datetime import date
@@ -910,6 +919,8 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
         "total_listings": total,
         "active_listings": active,
         "sold_listings": sold,
+        "written_off_listings": written_off,
+        "written_off_cost_cents": written_off_cost,
         "total_value_cents": total_value,
         "total_cost_cents": total_cost,
         "sold_revenue_cents": sold_revenue,
@@ -1334,6 +1345,43 @@ async def mark_listing_sold(listing_id: int, db: Session = Depends(get_db), _use
     listing.is_sold = True
     listing.sold_at = datetime.utcnow()
     listing.available_quantity = max(0, listing.available_quantity - 1)
+    listing.updated_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True, "listing": listing.to_dict()}
+
+
+@api_router.post("/listings/{listing_id}/write-off")
+async def write_off_listing(listing_id: int, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
+    """Mark a listing as written off (unsellable, damaged, obsolete inventory loss)."""
+    listing = db.get(Listing, listing_id)
+    if not listing:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Listing not found"})
+    if listing.team_id and listing.team_id not in _user["team_ids"]:
+        return JSONResponse(status_code=403, content={"ok": False, "error": "Not authorized for this team"})
+
+    listing.status = "written_off"
+    listing.is_sold = False
+    listing.written_off_at = datetime.utcnow()
+    listing.available_quantity = 0
+    listing.updated_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True, "listing": listing.to_dict()}
+
+
+@api_router.post("/listings/{listing_id}/restore")
+async def restore_listing(listing_id: int, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
+    """Restore a written-off or ended listing back to active status."""
+    listing = db.get(Listing, listing_id)
+    if not listing:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Listing not found"})
+    if listing.team_id and listing.team_id not in _user["team_ids"]:
+        return JSONResponse(status_code=403, content={"ok": False, "error": "Not authorized for this team"})
+
+    listing.status = "active"
+    listing.is_sold = False
+    listing.written_off_at = None
+    if listing.available_quantity <= 0:
+        listing.available_quantity = 1
     listing.updated_at = datetime.utcnow()
     db.commit()
     return {"ok": True, "listing": listing.to_dict()}

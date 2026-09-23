@@ -797,6 +797,88 @@ class MarketplaceApiTest(unittest.TestCase):
             db.commit()
             db.close()
 
+    def test_17_write_off_and_restore_listing(self):
+        """Verify write-off and restore endpoints, status updates, and stats exclusion."""
+        from datetime import datetime
+        from src.database import SessionLocal
+        from src.models import Listing
+
+        # 1. Login as admin
+        self.client.post(
+            "/api/auth/login",
+            json={"username": config.ADMIN_USERNAME, "password": config.ADMIN_PASSWORD},
+        )
+
+        db = SessionLocal()
+        item = Listing(
+            platform="local",
+            platform_listing_id="TEST-WRITE-OFF-1",
+            title="Broken Vintage Gameboy",
+            price_cents=4500,  # $45.00
+            purchase_price_cents=2000,  # $20.00
+            parts_cost_cents=1000,  # $10.00
+            status="active",
+            is_sold=False,
+            available_quantity=1,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+        db.add(item)
+        db.commit()
+        listing_id = item.id
+        db.close()
+
+        try:
+            # 2. Check stats before write-off
+            stats_before = self.client.get("/api/stats").json()
+            active_before = stats_before["active_listings"]
+
+            # 3. Call write-off endpoint
+            res_wo = self.client.post(f"/api/listings/{listing_id}/write-off")
+            self.assertEqual(res_wo.status_code, 200)
+            data_wo = res_wo.json()
+            self.assertTrue(data_wo["ok"])
+            listing_wo = data_wo["listing"]
+            self.assertEqual(listing_wo["status"], "written_off")
+            self.assertFalse(listing_wo["is_sold"])
+            self.assertEqual(listing_wo["available_quantity"], 0)
+            self.assertIsNotNone(listing_wo["written_off_at"])
+
+            # 4. Check stats after write-off: active count decreased, written_off count increased
+            stats_after = self.client.get("/api/stats").json()
+            self.assertEqual(stats_after["active_listings"], active_before - 1)
+            self.assertGreaterEqual(stats_after["written_off_listings"], 1)
+            self.assertGreaterEqual(stats_after["written_off_cost_cents"], 3000)
+
+            # 5. Filter listings by status=written_off
+            res_filter = self.client.get("/api/listings?status=written_off")
+            self.assertEqual(res_filter.status_code, 200)
+            listings = res_filter.json().get("listings", [])
+            self.assertTrue(any(l["id"] == listing_id for l in listings))
+
+            # 6. Call restore endpoint
+            res_res = self.client.post(f"/api/listings/{listing_id}/restore")
+            self.assertEqual(res_res.status_code, 200)
+            data_res = res_res.json()
+            self.assertTrue(data_res["ok"])
+            listing_res = data_res["listing"]
+            self.assertEqual(listing_res["status"], "active")
+            self.assertFalse(listing_res["is_sold"])
+            self.assertGreaterEqual(listing_res["available_quantity"], 1)
+            self.assertIsNone(listing_res["written_off_at"])
+
+            # 7. Check stats after restore
+            stats_restored = self.client.get("/api/stats").json()
+            self.assertEqual(stats_restored["active_listings"], active_before)
+
+        finally:
+            db_clean = SessionLocal()
+            del_item = db_clean.get(Listing, listing_id)
+            if del_item:
+                db_clean.delete(del_item)
+                db_clean.commit()
+            db_clean.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -93,6 +93,10 @@ def _migrate_existing_db():
         if "sold_at" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN sold_at TIMESTAMP"))
 
+        # 1f. written_off_at timestamp for write-off tracking
+        if "written_off_at" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN written_off_at TIMESTAMP"))
+
     # 2. A default team that everything (and the local admin) belongs to
     import secrets
     db = SessionLocal()

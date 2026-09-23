@@ -392,6 +392,30 @@ code {
     border-color: var(--danger);
 }
 
+.btn--warning {
+    color: var(--warning-text);
+    border-color: var(--warning);
+    background: var(--warning-soft);
+}
+
+.btn--warning:hover {
+    background: var(--warning);
+    color: #fff;
+    border-color: var(--warning);
+}
+
+.btn--success {
+    color: var(--success-text);
+    border-color: var(--success);
+    background: var(--success-soft);
+}
+
+.btn--success:hover {
+    background: var(--success);
+    color: #fff;
+    border-color: var(--success);
+}
+
 .btn--sm {
     padding: 7px 13px;
     font-size: 13px;
@@ -655,6 +679,7 @@ code {
 
 .card-status--active { background: var(--success-soft); color: var(--success-text); }
 .card-status--sold { background: var(--warning-soft); color: var(--warning-text); }
+.card-status--written_off, .card-status--written-off { background: var(--danger-soft); color: var(--danger-text); border: 1px solid rgba(220, 38, 38, 0.25); }
 .card-status--draft { background: var(--bg-inset); color: var(--text-muted); }
 .card-status--expired { background: var(--danger-soft); color: var(--danger-text); }
 .card-status--unknown { background: var(--bg-inset); color: var(--text-muted); }
