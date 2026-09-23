@@ -783,6 +783,127 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
     ).filter(sold_scope).scalar() or 0
     sold_profit = sold_revenue - sold_cost
 
+    # Build timeline buckets for the chart
+    from datetime import date
+    now = datetime.utcnow()
+    buckets = []
+    bucket_map = {}
+
+    # Query sold items in scope
+    sold_rows = db.query(
+        Listing.price_cents,
+        Listing.purchase_price_cents,
+        Listing.parts_cost_cents,
+        coalesce(Listing.sold_at, Listing.updated_at).label("sold_date")
+    ).filter(sold_scope).all()
+
+    if days_int:
+        # Daily buckets for 7 or 30 days
+        for i in reversed(range(days_int)):
+            d = (now - timedelta(days=i)).date()
+            key = d.isoformat()
+            label = d.strftime("%b %d")
+            b = {
+                "key": key,
+                "label": label,
+                "date_str": key,
+                "revenue_cents": 0,
+                "cost_cents": 0,
+                "profit_cents": 0,
+                "sold_count": 0,
+            }
+            buckets.append(b)
+            bucket_map[key] = b
+    else:
+        # Monthly buckets for all time (at least 6 months up to current month)
+        current_year = now.year
+        current_month = now.month
+        all_month_keys = set()
+        for offset in reversed(range(6)):
+            m = current_month - offset
+            y = current_year
+            while m <= 0:
+                m += 12
+                y -= 1
+            all_month_keys.add(f"{y:04d}-{m:02d}")
+
+        for row in sold_rows:
+            dt = row.sold_date
+            if isinstance(dt, str):
+                try:
+                    dt = datetime.fromisoformat(dt)
+                except Exception:
+                    continue
+            if dt:
+                all_month_keys.add(dt.strftime("%Y-%m"))
+
+        min_key = min(all_month_keys)
+        max_key = max(all_month_keys)
+        min_y, min_m = int(min_key[:4]), int(min_key[5:7])
+        max_y, max_m = int(max_key[:4]), int(max_key[5:7])
+
+        cy, cm = min_y, min_m
+        while (cy < max_y) or (cy == max_y and cm <= max_m):
+            key = f"{cy:04d}-{cm:02d}"
+            d = date(cy, cm, 1)
+            b = {
+                "key": key,
+                "label": d.strftime("%b '%y"),
+                "date_str": key,
+                "revenue_cents": 0,
+                "cost_cents": 0,
+                "profit_cents": 0,
+                "sold_count": 0,
+            }
+            buckets.append(b)
+            bucket_map[key] = b
+            cm += 1
+            if cm > 12:
+                cm = 1
+                cy += 1
+
+    # Populate buckets from sold items
+    for row in sold_rows:
+        dt = row.sold_date
+        if isinstance(dt, str):
+            try:
+                dt = datetime.fromisoformat(dt)
+            except Exception:
+                continue
+        if not dt:
+            continue
+
+        b_key = dt.strftime("%Y-%m-%d") if days_int else dt.strftime("%Y-%m")
+        if b_key in bucket_map:
+            target_b = bucket_map[b_key]
+            rev = row.price_cents or 0
+            cost = (row.purchase_price_cents or 0) + (row.parts_cost_cents or 0)
+            target_b["revenue_cents"] += rev
+            target_b["cost_cents"] += cost
+            target_b["profit_cents"] += (rev - cost)
+            target_b["sold_count"] += 1
+
+    timeline_points = [
+        {
+            "key": b["key"],
+            "label": b["label"],
+            "date": b["date_str"],
+            "revenue_cents": b["revenue_cents"],
+            "cost_cents": b["cost_cents"],
+            "profit_cents": b["profit_cents"],
+            "revenue": round(b["revenue_cents"] / 100.0, 2),
+            "profit": round(b["profit_cents"] / 100.0, 2),
+            "sold_count": b["sold_count"],
+        }
+        for b in buckets
+    ]
+
+    timeline = {
+        "type": "daily" if days_int else "monthly",
+        "period": f"{days_int}d" if days_int else "all",
+        "points": timeline_points,
+    }
+
     return {
         "period": f"{days_int}d" if days_int else "all",
         "days": days_int,
@@ -797,6 +918,7 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
         "currency": config.DEFAULT_CURRENCY or "CAD",
         "currency_symbol": config.DEFAULT_CURRENCY_SYMBOL or "$",
         "platforms": platforms,
+        "timeline": timeline,
     }
 
 # -- Marketplace accounts (credentials) --

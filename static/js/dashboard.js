@@ -220,7 +220,261 @@ document.addEventListener("DOMContentLoaded", () => {
                     statProfit.style.color = profitVal > 0 ? "var(--success)" : (profitVal < 0 ? "var(--danger)" : "var(--text)");
                 }
             }
+
+            // Render sales & profit timeline chart
+            if (stats.timeline) {
+                renderMetricsChart(stats.timeline, cur, sym);
+            }
         } catch (e) { /* ignore */ }
+    }
+
+    // ====================================================================
+    //  Timeline Chart Renderer (Native SVG, Zero CDN, 100% CSP compliant)
+    // ====================================================================
+    function renderMetricsChart(timeline, cur = "CAD", sym = "$") {
+        const svg = document.getElementById("metrics-chart-svg");
+        const emptyState = document.getElementById("chart-empty-state");
+        const subtitle = document.getElementById("chart-period-subtitle");
+        const tooltip = document.getElementById("chart-tooltip");
+        const wrapper = document.getElementById("metrics-chart-wrapper");
+        if (!svg) return;
+
+        // Subtitle text based on state.metricsDays
+        if (subtitle) {
+            if (state.metricsDays === "7") subtitle.textContent = "(Last 7 Days)";
+            else if (state.metricsDays === "30") subtitle.textContent = "(Last 30 Days)";
+            else subtitle.textContent = "(All Time)";
+        }
+
+        const points = (timeline && Array.isArray(timeline.points)) ? timeline.points : [];
+        const hasSales = points.some(p => (p.sold_count > 0 || p.revenue_cents > 0));
+
+        if (emptyState) {
+            emptyState.style.display = hasSales ? "none" : "flex";
+        }
+
+        // Setup dimensions
+        const W = 800;
+        const H = 220;
+        const padL = 60;
+        const padR = 25;
+        const padT = 20;
+        const padB = 35;
+        const cW = W - padL - padR;
+        const cH = H - padT - padB;
+
+        if (points.length === 0) {
+            svg.innerHTML = "";
+            return;
+        }
+
+        // Determine value scales
+        let maxVal = 0;
+        let minVal = 0;
+        points.forEach(p => {
+            const rev = p.revenue || 0;
+            const prof = p.profit || 0;
+            if (rev > maxVal) maxVal = rev;
+            if (prof > maxVal) maxVal = prof;
+            if (prof < minVal) minVal = prof;
+        });
+
+        if (maxVal <= 0) maxVal = 100;
+        const magnitude = Math.pow(10, Math.max(1, Math.floor(Math.log10(maxVal))));
+        const normalized = maxVal / magnitude;
+        let niceMultiplier = 1;
+        if (normalized <= 1) niceMultiplier = 1;
+        else if (normalized <= 2) niceMultiplier = 2;
+        else if (normalized <= 5) niceMultiplier = 5;
+        else niceMultiplier = 10;
+        const niceMax = niceMultiplier * magnitude;
+        const niceMin = minVal < 0 ? -niceMax * 0.25 : 0;
+        const valRange = niceMax - niceMin;
+
+        function getX(i) {
+            if (points.length === 1) return padL + cW / 2;
+            return padL + (i / (points.length - 1)) * cW;
+        }
+
+        function getY(val) {
+            const ratio = (val - niceMin) / (valRange || 1);
+            return padT + cH * (1 - ratio);
+        }
+
+        const zeroY = getY(0);
+
+        // Generate Grid Lines and Y-Axis labels (4 steps: 0, 33%, 66%, 100%)
+        let gridHtml = `
+            <defs>
+                <linearGradient id="chartRevGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.32"/>
+                    <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.01"/>
+                </linearGradient>
+            </defs>
+        `;
+
+        const steps = 4;
+        for (let s = 0; s <= steps; s++) {
+            const val = niceMin + (valRange * s / steps);
+            const y = getY(val);
+            const labelStr = `${sym}${Math.round(val)}`;
+            gridHtml += `
+                <line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}" stroke="var(--border)" stroke-width="1" stroke-dasharray="3 3"/>
+                <text x="${padL - 8}" y="${(y + 4).toFixed(1)}" fill="var(--text-muted)" font-size="11" font-weight="500" text-anchor="end">${labelStr}</text>
+            `;
+        }
+
+        // X-Axis labels
+        let axisHtml = "";
+        const n = points.length;
+        let labelStep = 1;
+        if (n > 14) labelStep = 5;
+        else if (n > 8) labelStep = 2;
+
+        points.forEach((p, i) => {
+            if (i % labelStep === 0 || i === n - 1) {
+                const x = getX(i);
+                axisHtml += `
+                    <text x="${x.toFixed(1)}" y="${(H - 12)}" fill="var(--text-muted)" font-size="11" font-weight="500" text-anchor="middle">${escapeHtml(p.label || '')}</text>
+                `;
+            }
+        });
+
+        // Revenue Area & Line
+        const revPoints = points.map((p, i) => `${getX(i).toFixed(1)},${getY(p.revenue || 0).toFixed(1)}`);
+        let revAreaPath = "";
+        if (points.length > 0) {
+            const firstX = getX(0).toFixed(1);
+            const lastX = getX(points.length - 1).toFixed(1);
+            revAreaPath = `M ${firstX},${zeroY.toFixed(1)} L ` + revPoints.join(" L ") + ` L ${lastX},${zeroY.toFixed(1)} Z`;
+        }
+        const revLinePath = "M " + revPoints.join(" L ");
+
+        // Profit Line
+        const profPoints = points.map((p, i) => `${getX(i).toFixed(1)},${getY(p.profit || 0).toFixed(1)}`);
+        const profLinePath = "M " + profPoints.join(" L ");
+
+        // Dots & Interactive Hover columns
+        let dotsHtml = "";
+        let hoverBands = "";
+        const bandWidth = points.length > 1 ? (cW / (points.length - 1)) : cW;
+
+        points.forEach((p, i) => {
+            const x = getX(i);
+            const yRev = getY(p.revenue || 0);
+            const yProf = getY(p.profit || 0);
+
+            if (p.revenue > 0 || p.profit !== 0) {
+                dotsHtml += `
+                    <circle cx="${x.toFixed(1)}" cy="${yRev.toFixed(1)}" r="3.5" fill="#3b82f6" stroke="var(--bg-surface)" stroke-width="1.5"/>
+                    <circle cx="${x.toFixed(1)}" cy="${yProf.toFixed(1)}" r="3.5" fill="#10b981" stroke="var(--bg-surface)" stroke-width="1.5"/>
+                `;
+            }
+
+            const rx = x - bandWidth / 2;
+            hoverBands += `
+                <rect class="chart-hover-band" data-idx="${i}" x="${rx.toFixed(1)}" y="${padT}" width="${bandWidth.toFixed(1)}" height="${cH.toFixed(1)}" fill="transparent" style="cursor: pointer;"/>
+            `;
+        });
+
+        // Guidelines & active indicator points
+        const guideHtml = `<line id="chart-guideline" x1="0" y1="${padT}" x2="0" y2="${padT + cH}" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="2 2" opacity="0"/>`;
+        const activeRevDot = `<circle id="chart-active-rev-dot" cx="0" cy="0" r="5.5" fill="#3b82f6" stroke="#fff" stroke-width="2" opacity="0"/>`;
+        const activeProfDot = `<circle id="chart-active-prof-dot" cx="0" cy="0" r="5.5" fill="#10b981" stroke="#fff" stroke-width="2" opacity="0"/>`;
+
+        svg.innerHTML = `
+            ${gridHtml}
+            ${axisHtml}
+            <path d="${revAreaPath}" fill="url(#chartRevGrad)" />
+            <path d="${revLinePath}" fill="none" stroke="#3b82f6" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+            <path d="${profLinePath}" fill="none" stroke="#10b981" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+            ${dotsHtml}
+            ${guideHtml}
+            ${activeRevDot}
+            ${activeProfDot}
+            ${hoverBands}
+        `;
+
+        // Tooltip handlers
+        const bands = svg.querySelectorAll(".chart-hover-band");
+        const guide = svg.querySelector("#chart-guideline");
+        const dotR = svg.querySelector("#chart-active-rev-dot");
+        const dotP = svg.querySelector("#chart-active-prof-dot");
+
+        function showTooltip(idx) {
+            const p = points[idx];
+            if (!p || !tooltip) return;
+
+            const x = getX(idx);
+            const yRev = getY(p.revenue || 0);
+            const yProf = getY(p.profit || 0);
+
+            if (guide) {
+                guide.setAttribute("x1", x.toFixed(1));
+                guide.setAttribute("x2", x.toFixed(1));
+                guide.setAttribute("opacity", "0.7");
+            }
+            if (dotR) {
+                dotR.setAttribute("cx", x.toFixed(1));
+                dotR.setAttribute("cy", yRev.toFixed(1));
+                dotR.setAttribute("opacity", "1");
+            }
+            if (dotP) {
+                dotP.setAttribute("cx", x.toFixed(1));
+                dotP.setAttribute("cy", yProf.toFixed(1));
+                dotP.setAttribute("opacity", "1");
+            }
+
+            const profPrefix = (p.profit || 0) >= 0 ? "+" : "";
+            const profColor = (p.profit || 0) >= 0 ? "var(--success)" : "var(--danger)";
+            const countStr = `${p.sold_count || 0} ${p.sold_count === 1 ? 'sale' : 'sales'}`;
+
+            tooltip.innerHTML = `
+                <div class="chart-tooltip-date">${escapeHtml(p.date || p.label)}</div>
+                <div class="chart-tooltip-row">
+                    <span class="chart-tooltip-label" style="color:#3b82f6;">● Revenue:</span>
+                    <span class="chart-tooltip-val">${sym}${(p.revenue || 0).toFixed(2)} ${cur}</span>
+                </div>
+                <div class="chart-tooltip-row">
+                    <span class="chart-tooltip-label" style="color:#10b981;">● Realized Profit:</span>
+                    <span class="chart-tooltip-val" style="color:${profColor};">${profPrefix}${sym}${(p.profit || 0).toFixed(2)} ${cur}</span>
+                </div>
+                <div class="chart-tooltip-row">
+                    <span class="chart-tooltip-label">Volume:</span>
+                    <span class="chart-tooltip-val">${countStr}</span>
+                </div>
+            `;
+
+            if (wrapper) {
+                const rect = wrapper.getBoundingClientRect();
+                const posX = (x / W) * rect.width;
+                const topTarget = (Math.min(yRev, yProf) / H) * rect.height;
+                tooltip.style.left = `${posX}px`;
+                tooltip.style.top = `${Math.max(topTarget - 12, 10)}px`;
+                tooltip.style.display = "block";
+            }
+        }
+
+        function hideTooltip() {
+            if (tooltip) tooltip.style.display = "none";
+            if (guide) guide.setAttribute("opacity", "0");
+            if (dotR) dotR.setAttribute("opacity", "0");
+            if (dotP) dotP.setAttribute("opacity", "0");
+        }
+
+        bands.forEach(b => {
+            const idx = parseInt(b.getAttribute("data-idx"), 10);
+            b.addEventListener("mouseenter", () => showTooltip(idx));
+            b.addEventListener("mousemove", () => showTooltip(idx));
+            b.addEventListener("mouseleave", hideTooltip);
+            b.addEventListener("touchstart", (e) => {
+                showTooltip(idx);
+            }, { passive: true });
+        });
+
+        if (wrapper) {
+            wrapper.addEventListener("mouseleave", hideTooltip);
+        }
     }
 
     // Teams dropdown and modal population

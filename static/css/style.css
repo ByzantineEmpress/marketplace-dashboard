@@ -1618,4 +1618,191 @@ code {
     }
 }
 
+/* ==================================================================== */
+/*  Performance & Sales Metrics Filter Buttons & Timeline Chart         */
+/* ==================================================================== */
+
+.metrics-filter-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-weight: 550;
+    padding: 5px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.metrics-filter-btn:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+}
+
+.metrics-filter-btn.is-active {
+    color: #fff !important;
+    background: var(--accent) !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.metrics-chart-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px 14px 20px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+}
+
+.metrics-chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.metrics-chart-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 650;
+    color: var(--text);
+}
+
+.chart-subtitle {
+    font-size: 12px;
+    font-weight: 450;
+    color: var(--text-muted);
+}
+
+.metrics-chart-legend {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.legend-dot--revenue {
+    background: #3b82f6;
+    box-shadow: 0 0 6px rgba(59, 130, 246, 0.4);
+}
+
+.legend-dot--profit {
+    background: #10b981;
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
+}
+
+.metrics-chart-wrapper {
+    position: relative;
+    width: 100%;
+    min-height: 200px;
+    height: 220px;
+}
+
+.metrics-chart-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+/* Floating interactive chart tooltip */
+.chart-tooltip {
+    position: absolute;
+    z-index: 20;
+    pointer-events: none;
+    background: var(--bg-elevated);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+    transform: translate(-50%, -100%);
+    margin-top: -10px;
+    transition: opacity 0.12s ease;
+    white-space: nowrap;
+}
+
+.chart-tooltip-date {
+    font-weight: 650;
+    color: var(--text);
+    margin-bottom: 4px;
+    font-size: 11.5px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 3px;
+}
+
+.chart-tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 2px 0;
+}
+
+.chart-tooltip-label {
+    color: var(--text-muted);
+}
+
+.chart-tooltip-val {
+    font-weight: 600;
+}
+
+.chart-empty-state {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    background: var(--bg-surface);
+    z-index: 5;
+    padding: 20px;
+}
+
+.chart-empty-icon {
+    font-size: 28px;
+    margin-bottom: 6px;
+    opacity: 0.6;
+}
+
+.chart-empty-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0 0 4px 0;
+}
+
+.chart-empty-text {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 0;
+    max-width: 360px;
+}
+
 

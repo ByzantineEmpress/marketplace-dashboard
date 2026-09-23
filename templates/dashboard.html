@@ -46,6 +46,30 @@
         </div>
     </div>
 
+    <!-- Performance & Sales Timeline Chart -->
+    <div class="metrics-chart-card" id="metrics-chart-card">
+        <div class="metrics-chart-header">
+            <div class="metrics-chart-title">
+                <span class="metrics-chart-icon">📈</span>
+                <span id="chart-title-text">Revenue &amp; Realized Profit Trend</span>
+                <span id="chart-period-subtitle" class="chart-subtitle">(All Time)</span>
+            </div>
+            <div class="metrics-chart-legend">
+                <span class="legend-item"><span class="legend-dot legend-dot--revenue"></span> Revenue ($ CAD)</span>
+                <span class="legend-item"><span class="legend-dot legend-dot--profit"></span> Profit ($ CAD)</span>
+            </div>
+        </div>
+        <div class="metrics-chart-wrapper" id="metrics-chart-wrapper">
+            <svg id="metrics-chart-svg" class="metrics-chart-svg" viewBox="0 0 800 220" preserveAspectRatio="none"></svg>
+            <div id="chart-empty-state" class="chart-empty-state" style="display: none;">
+                <span class="chart-empty-icon">📊</span>
+                <p class="chart-empty-title">No sales recorded for this timeframe</p>
+                <p class="chart-empty-text">Sales and realized profit will appear here once items are marked sold.</p>
+            </div>
+            <div id="chart-tooltip" class="chart-tooltip" style="display: none;"></div>
+        </div>
+    </div>
+
     <!-- Search & filters -->
     <div class="toolbar">
         <div class="toolbar-left">

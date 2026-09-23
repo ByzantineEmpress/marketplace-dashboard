@@ -773,6 +773,22 @@ class MarketplaceApiTest(unittest.TestCase):
             self.assertGreaterEqual(data_30d["sold_profit_cents"], data_7d["sold_profit_cents"])
             self.assertGreaterEqual(data_all["sold_profit_cents"], data_30d["sold_profit_cents"])
 
+            # 6. Verify timeline structure and bucket counts for chart
+            self.assertIn("timeline", data_7d)
+            self.assertEqual(data_7d["timeline"]["type"], "daily")
+            self.assertEqual(len(data_7d["timeline"]["points"]), 7)
+            self.assertIn("revenue", data_7d["timeline"]["points"][0])
+            self.assertIn("profit", data_7d["timeline"]["points"][0])
+            self.assertIn("label", data_7d["timeline"]["points"][0])
+
+            self.assertIn("timeline", data_30d)
+            self.assertEqual(data_30d["timeline"]["type"], "daily")
+            self.assertEqual(len(data_30d["timeline"]["points"]), 30)
+
+            self.assertIn("timeline", data_all)
+            self.assertEqual(data_all["timeline"]["type"], "monthly")
+            self.assertGreaterEqual(len(data_all["timeline"]["points"]), 6)
+
         finally:
             for lid in created_ids:
                 item = db.get(Listing, lid)
