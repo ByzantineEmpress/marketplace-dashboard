@@ -1,0 +1,69 @@
+{# Local Google OAuth Test Picker #}
+{% extends "base.html" %}
+
+{% block content %}
+<div class="login-container">
+    <div class="login-card" style="max-width: 440px;">
+        <div style="display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 12px;">
+            <svg class="google-icon" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.24h5.92c-.26 1.37-.87 2.53-1.83 3.39l2.94 2.29c1.71-1.57 2.69-3.88 2.69-6.67z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-2.94-2.29c-.81.57-1.84.95-3.1.95-2.36 0-4.36-1.58-5.12-3.72H3.79v4.13C5.61 21.63 8.6 23 12 23z"/>
+                <path fill="#FBBC05" d="M6.86 14.28c-.44-.82-.69-1.76-.69-2.78s.25-1.96.69-2.78V4.79H3.79C2.71 6.22 2 8.06 2 10s.71 3.78 1.79 5.21l3.07-2.32z"/>
+                <path fill="#EA4335" d="M12 5.98c1.33 0 2.54.46 3.49 1.36l2.61-2.6C17.46 2.98 14.97 2 12 2 8.61 2 5.62 3.38 3.79 5.61l3.07 2.32C7.64 6.44 9.64 5.98 12 5.98z"/>
+            </svg>
+            <h1 style="font-size: 20px; margin: 0;">Google Sign-In</h1>
+        </div>
+        <p class="login-subtitle">Local Test Mode — Choose an account to sign in</p>
+
+        {% if error %}
+        <div class="flash flash--error">{{ error }}</div>
+        {% endif %}
+
+        <div style="display: flex; flex-direction: column; gap: 8px; margin: 20px 0;">
+            <!-- Quick preset test accounts -->
+            <form action="/auth/google/dev-login" method="post">
+                <input type="hidden" name="email" value="alex.rivera@gmail.com">
+                <input type="hidden" name="name" value="Alex Rivera">
+                <button type="submit" class="btn btn--block" style="text-align: left; display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border);">
+                    <div>
+                        <strong>Alex Rivera</strong>
+                        <div style="font-size: 12px; color: var(--text-muted);">alex.rivera@gmail.com</div>
+                    </div>
+                    <span style="font-size: 11px; background: var(--accent-soft); color: var(--accent); padding: 2px 6px; border-radius: 4px;">Select</span>
+                </button>
+            </form>
+
+            <form action="/auth/google/dev-login" method="post">
+                <input type="hidden" name="email" value="jordan.lee@gmail.com">
+                <input type="hidden" name="name" value="Jordan Lee">
+                <button type="submit" class="btn btn--block" style="text-align: left; display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border);">
+                    <div>
+                        <strong>Jordan Lee</strong>
+                        <div style="font-size: 12px; color: var(--text-muted);">jordan.lee@gmail.com</div>
+                    </div>
+                    <span style="font-size: 11px; background: var(--accent-soft); color: var(--accent); padding: 2px 6px; border-radius: 4px;">Select</span>
+                </button>
+            </form>
+        </div>
+
+        <div class="login-divider"><span>or enter custom email</span></div>
+
+        <!-- Custom email form -->
+        <form class="login-form" action="/auth/google/dev-login" method="post">
+            <div class="form-group">
+                <label for="dev-email">Google Email Address</label>
+                <input type="email" id="dev-email" name="email" placeholder="you@gmail.com" required>
+            </div>
+            <div class="form-group">
+                <label for="dev-name">Display Name (optional)</label>
+                <input type="text" id="dev-name" name="name" placeholder="Your Name">
+            </div>
+            <button type="submit" class="btn btn--primary btn--block">Continue with Test Account</button>
+        </form>
+
+        <div style="margin-top: 18px; text-align: center;">
+            <a href="/login" style="font-size: 13px; color: var(--text-muted); text-decoration: none;">← Back to Standard Sign-In</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

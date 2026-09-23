@@ -48,6 +48,7 @@ class Config:
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_ALLOWED_EMAILS: list = field(default_factory=list)
+    GOOGLE_DEV_MODE: bool = False  # Enable local Google OAuth test simulator
 
     # -- OAuth keys for marketplace APIs (standard naming) --
     EBAY_CLIENT_ID: str = ""
@@ -86,8 +87,11 @@ class Config:
                 elif isinstance(default, int):
                     value = int(value)
                 elif isinstance(default, list):
-                    if value:
-                        value = [v.strip() for v in value.split(",")]
+                    val_str = str(value).strip()
+                    if val_str.startswith("[") and val_str.endswith("]"):
+                        val_str = val_str[1:-1].strip()
+                    if val_str:
+                        value = [v.strip().strip("'\"") for v in val_str.split(",") if v.strip()]
                     else:
                         value = []
                 else:

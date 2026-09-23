@@ -5,6 +5,16 @@ box with placeholder credentials (handy for testing the flow), but to sign
 in with *your* Google account you need one OAuth client in your Google
 Cloud project. It takes about 10 minutes, free tier.
 
+## Quick Local Test Mode (No Google Cloud setup required)
+
+For local development and testing, you can use the built-in Google OAuth dev simulator:
+1. Ensure `GOOGLE_DEV_MODE=true` in `.env` (or leave the default dummy client ID `123456-dummy.apps.googleusercontent.com`).
+2. On the login page, click **"Sign in with Google"** — this will open the local Google Account Selector (`/auth/google/dev-picker`).
+3. Click a pre-configured test account (e.g., Alex Rivera or Jordan Lee) or enter your own test email address.
+4. The system simulates a successful Google OpenID Connect callback, registers the user, attaches them to Default Team, sets the session cookie, and opens the dashboard.
+5. When you are ready for production, follow the steps below to configure live Google Cloud OAuth credentials.
+
+
 ## 1. Create a Google Cloud project
 
 1. Open the [Google Cloud Console](https://console.cloud.google.com/) and

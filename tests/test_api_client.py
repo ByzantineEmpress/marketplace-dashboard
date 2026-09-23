@@ -165,6 +165,74 @@ class MarketplaceApiTest(unittest.TestCase):
         protected_res = self.client.get("/api/settings")
         self.assertEqual(protected_res.status_code, 401)
 
+    def test_08_google_dev_auth_flow(self):
+        """Verify local Google OAuth dev simulation and session issuance."""
+        # 1. Initiating Google auth redirects to dev picker when credentials are dummy/dev mode
+        res_init = self.client.get("/auth/google", follow_redirects=False)
+        self.assertEqual(res_init.status_code, 302)
+        self.assertIn("/auth/google/dev-picker", res_init.headers["location"])
+
+        # 2. Dev picker page renders properly
+        res_picker = self.client.get("/auth/google/dev-picker")
+        self.assertEqual(res_picker.status_code, 200)
+        self.assertIn("Google Sign-In", res_picker.text)
+        self.assertIn("Local Test Mode", res_picker.text)
+
+        # 3. Invalid email rejected with redirect error
+        res_invalid = self.client.post(
+            "/auth/google/dev-login",
+            data={"email": "notanemail", "name": "Fake"},
+            follow_redirects=False,
+        )
+        self.assertEqual(res_invalid.status_code, 303)
+        self.assertIn("error=", res_invalid.headers["location"])
+
+        # 3b. Whitelist restriction test
+        orig_allowed = config.GOOGLE_ALLOWED_EMAILS
+        try:
+            config.GOOGLE_ALLOWED_EMAILS = ["allowed@example.com"]
+            res_denied = self.client.post(
+                "/auth/google/dev-login",
+                data={"email": "denied@example.com", "name": "Denied"},
+                follow_redirects=False,
+            )
+            self.assertEqual(res_denied.status_code, 303)
+            self.assertIn("not+allowed", res_denied.headers["location"])
+        finally:
+            config.GOOGLE_ALLOWED_EMAILS = orig_allowed
+
+        # 4. Valid test user login sets auth_token cookie and creates session
+        test_email = "test.developer@example.com"
+        res_login = self.client.post(
+            "/auth/google/dev-login",
+            data={"email": test_email, "name": "Test Developer"},
+            follow_redirects=False,
+        )
+        self.assertEqual(res_login.status_code, 303)
+        self.assertEqual(res_login.headers["location"], "/dashboard")
+        self.assertIn("auth_token", res_login.cookies)
+
+        # 5. Accessing dashboard and protected APIs with the session cookie
+        dash_res = self.client.get("/dashboard")
+        self.assertEqual(dash_res.status_code, 200)
+        self.assertIn("listing-grid", dash_res.text)
+
+        # 6. Verify user created in DB and assigned to Default Team
+        db = SessionLocal()
+        try:
+            created_user = db.query(User).filter(User.email == test_email).first()
+            self.assertIsNotNone(created_user)
+            self.assertEqual(created_user.provider, "google")
+            self.assertEqual(created_user.name, "Test Developer")
+            membership = (
+                db.query(TeamMembership)
+                .filter(TeamMembership.user_id == created_user.id)
+                .first()
+            )
+            self.assertIsNotNone(membership)
+        finally:
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

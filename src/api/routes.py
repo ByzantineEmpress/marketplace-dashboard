@@ -155,6 +155,11 @@ async def admin_page(request: Request):
 @page_router.get("/auth/google")
 async def google_login_start(request: Request):
     """Send the browser to Google's account-picker / consent screen."""
+    # Check if local test mode is active (explicit flag or dummy credentials)
+    is_dummy = "dummy" in (config.GOOGLE_CLIENT_ID or "").lower()
+    if config.GOOGLE_DEV_MODE or is_dummy:
+        return RedirectResponse(url="/auth/google/dev-picker", status_code=302)
+
     if not config.GOOGLE_CLIENT_ID:
         return RedirectResponse(
             url="/login?error=Google+sign-in+is+not+configured+yet", status_code=302
@@ -181,6 +186,65 @@ async def google_login_start(request: Request):
         httponly=True, samesite="lax", max_age=600,
     )
     return response
+
+
+@page_router.get("/auth/google/dev-picker")
+async def google_dev_picker(request: Request):
+    """Local development/testing Google Account picker."""
+    error = request.query_params.get("error", "")
+    return templates.TemplateResponse(
+        request=request,
+        name="google_dev_picker.html",
+        context={"error": error},
+    )
+
+
+@page_router.post("/auth/google/dev-login")
+async def google_dev_login(request: Request):
+    """Simulate Google OAuth callback for local development."""
+    form = await request.form()
+    email = (form.get("email") or "").strip().lower()
+    name = (form.get("name") or "").strip() or email.split("@")[0].capitalize()
+
+    if not email or "@" not in email:
+        return RedirectResponse(url="/auth/google/dev-picker?error=Please+provide+a+valid+email", status_code=303)
+
+    allowed = [e.strip().lower() for e in config.GOOGLE_ALLOWED_EMAILS if e.strip()]
+    if allowed and email not in allowed:
+        return RedirectResponse(
+            url=f"/auth/google/dev-picker?error=Google+account+{quote(email)}+is+not+allowed+to+sign+in+here",
+            status_code=303,
+        )
+
+    import secrets
+    token = secrets.token_urlsafe(48)  # 64 chars
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.email == email).first()
+        if user is None:
+            user = User(email=email, name=name, provider="google")
+            db.add(user)
+            db.flush()
+        else:
+            if name:
+                user.name = name
+        _ensure_default_team_membership(db, user, role="member")
+        db.add(AuthSession(token=token, user_id=user.id, expires_at=datetime.utcnow() + timedelta(days=7)))
+        db.commit()
+    finally:
+        db.close()
+
+    response = RedirectResponse(url="/dashboard", status_code=303)
+    response.set_cookie(
+        key="auth_token",
+        value=token,
+        httponly=True,
+        samesite="strict",
+        max_age=86400 * 7,
+    )
+    return response
+
 
 @page_router.get("/auth/google/callback")
 async def google_login_callback(request: Request):
