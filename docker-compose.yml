@@ -24,6 +24,8 @@ services:
       - REQUIRE_HTTPS=true
     expose:
       - "8000"
+    security_opt:
+      - no-new-privileges:true
     # healthcheck:
     #   test: ["CMD", "curl", "-f", "http://localhost:8000/"]
     #   interval: 30s
@@ -35,6 +37,13 @@ services:
     image: nginx:alpine
     container_name: marketplace-dashboard-nginx
     restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
     ports:
       - "80:80"
       - "443:443"

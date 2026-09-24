@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Request, Depends, HTTPException, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -169,6 +169,13 @@ def _ensure_user_tenant_membership(db: Session, user, pending_invite: str = ""):
     db.add(TeamMembership(team_id=new_team.id, user_id=user.id, role="owner"))
     return new_team
 
+def _safe_relative_url(url: str, default: str = "/dashboard") -> str:
+    """Ensure a URL is strictly a relative path on the same host to prevent open redirects."""
+    if not url or not url.startswith("/") or url.startswith("//") or "://" in url or "\\" in url:
+        return default
+    return url
+
+
 # ------------------------------------------------------------------ #
 #  PAGE ROUTER — HTML pages served by Jinja2 templates.
 # ------------------------------------------------------------------ #
@@ -178,8 +185,10 @@ page_router = APIRouter()
 @page_router.get("/login")
 async def login_page(request: Request):
     """Login page — POSTs to /api/auth/login."""
+    import secrets
     error = request.query_params.get("error", "")
     invited_to = request.query_params.get("invited_to", "")
+    csrf_token = secrets.token_hex(16)
     return templates.TemplateResponse(
         request=request,
         name="login.html",
@@ -187,6 +196,7 @@ async def login_page(request: Request):
             "error": error,
             "invited_to": invited_to,
             "google_enabled": bool(config.GOOGLE_CLIENT_ID or config.GOOGLE_DEV_MODE),
+            "csrf_token": csrf_token,
         },
     )
 
@@ -207,11 +217,21 @@ async def join_team_page(invite_code: str, request: Request, db: Session = Depen
         if not exists:
             db.add(TeamMembership(team_id=team.id, user_id=current_user["id"], role="member"))
             db.commit()
-        return RedirectResponse(url=f"/dashboard?team={team.id}", status_code=302)
+        dest = _safe_relative_url(f"/dashboard?team={int(team.id)}")
+        return RedirectResponse(url=dest, status_code=302)
 
     # User is not logged in: store invite in cookie and prompt sign in
-    response = RedirectResponse(url=f"/login?invited_to={quote(team.name)}", status_code=302)
-    response.set_cookie(key="pending_invite", value=invite_code, httponly=True, max_age=3600)
+    safe_invited_to = quote(str(team.name)[:50], safe="")
+    dest = _safe_relative_url(f"/login?invited_to={safe_invited_to}", default="/login")
+    response = RedirectResponse(url=dest, status_code=302)
+    response.set_cookie(
+        key="pending_invite",
+        value=invite_code,
+        httponly=True,
+        samesite="lax",
+        max_age=3600,
+        secure=config.REQUIRE_HTTPS,
+    )
     return response
 
 @page_router.get("/dashboard")
@@ -298,11 +318,13 @@ async def google_dev_picker(request: Request):
     """Local development/testing Google Account picker."""
     if not config.GOOGLE_DEV_MODE:
         raise HTTPException(status_code=403, detail="Google dev mode is disabled")
+    import secrets
     error = request.query_params.get("error", "")
+    csrf_token = secrets.token_hex(16)
     return templates.TemplateResponse(
         request=request,
         name="google_dev_picker.html",
-        context={"error": error},
+        context={"error": error, "csrf_token": csrf_token},
     )
 
 
@@ -346,7 +368,8 @@ async def google_dev_login(request: Request):
     finally:
         db.close()
 
-    dest = f"/dashboard?team={joined_team_id}" if (pending_invite and joined_team_id) else "/dashboard"
+    dest = f"/dashboard?team={int(joined_team_id)}" if (pending_invite and joined_team_id) else "/dashboard"
+    dest = _safe_relative_url(dest)
     response = RedirectResponse(url=dest, status_code=303)
     response.set_cookie(
         key="auth_token",
@@ -354,6 +377,7 @@ async def google_dev_login(request: Request):
         httponly=True,
         samesite="strict",
         max_age=86400 * 7,
+        secure=config.REQUIRE_HTTPS,
     )
     if request.cookies.get("pending_invite"):
         response.delete_cookie("pending_invite")
@@ -451,11 +475,13 @@ async def google_login_callback(request: Request):
         db.commit()
     finally:
         db.close()
-    dest = f"/dashboard?team={joined_team_id}" if (pending_invite and joined_team_id) else "/dashboard"
+    dest = f"/dashboard?team={int(joined_team_id)}" if (pending_invite and joined_team_id) else "/dashboard"
+    dest = _safe_relative_url(dest)
     response = RedirectResponse(url=dest, status_code=303)
     response.set_cookie(
         key="auth_token", value=token,
         httponly=True, samesite="strict", max_age=86400 * 7,
+        secure=config.REQUIRE_HTTPS,
     )
     response.delete_cookie("google_oauth_state")
     if request.cookies.get("pending_invite"):
@@ -539,7 +565,8 @@ async def login(request: Request):
             db.commit()
         finally:
             db.close()
-        dest = f"/dashboard?team={joined_team_id}" if joined_team_id else "/dashboard"
+        dest = f"/dashboard?team={int(joined_team_id)}" if joined_team_id else "/dashboard"
+        dest = _safe_relative_url(dest)
         if not is_json:
             response = RedirectResponse(url=dest, status_code=303)
         else:
@@ -580,9 +607,14 @@ async def oauth_callback(platform: str, request: Request):
     try:
         adapter = get_adapter(platform)
     except KeyError:
-        return HTMLResponse(
-            f"<h1>Unknown platform</h1><p>No adapter registered for '{platform}'.</p>"
-            f"<p><a href=\"/admin\">Back to Admin</a></p>",
+        return templates.TemplateResponse(
+            request=request,
+            name="oauth_callback.html",
+            context={
+                "success": False,
+                "platform_name": platform,
+                "error": f"No adapter registered for '{platform}'.",
+            },
             status_code=404,
         )
 
@@ -593,18 +625,15 @@ async def oauth_callback(platform: str, request: Request):
     else:
         result = {"success": False, "error": "No authorization code received."}
 
-    if result.get("success"):
-        return HTMLResponse(
-            f"<h1>✓ {adapter.get_platform_name()} connected</h1>"
-            f"<p>Your account was linked successfully. You can now sync your listings.</p>"
-            f"<p><a href=\"/admin\">Back to Admin</a> · <a href=\"/dashboard\">Go to Dashboard</a></p>"
-        )
-
-    err = result.get("error", "Unknown error")
-    return HTMLResponse(
-        f"<h1>Connection failed</h1><p>{err}</p>"
-        f"<p><a href=\"/admin\">Back to Admin</a></p>",
-        status_code=200,  # content explains the failure — 200 keeps it simple
+    return templates.TemplateResponse(
+        request=request,
+        name="oauth_callback.html",
+        context={
+            "success": bool(result.get("success")),
+            "platform_name": adapter.get_platform_name() if result.get("success") else platform.capitalize(),
+            "error": result.get("error", "Unknown error"),
+        },
+        status_code=200,
     )
 
 @api_router.post("/auth/logout")

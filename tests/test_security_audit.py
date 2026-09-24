@@ -286,6 +286,52 @@ class SecurityAuditTest(unittest.TestCase):
         self.assertEqual(res.status_code, 400)
         self.assertIn("Cannot remove the last owner", res.json().get("error", ""))
 
+    # ----------------------------------------------------------------------
+    # 9. Semgrep Remediations: OAuth Callback, Safe Redirects & CSRF Tokens
+    # ----------------------------------------------------------------------
+    def test_oauth_callback_template_rendering(self):
+        """Verify OAuth callbacks use Jinja2 template and escape malicious strings."""
+        # 1. Unknown platform returns 404 template
+        res = self.client.get("/api/auth/unknown_platform/callback")
+        self.assertEqual(res.status_code, 404)
+        self.assertIn("Connection failed", res.text)
+        self.assertIn("No adapter registered", res.text)
+
+        # 2. XSS in error parameter is escaped by Jinja2
+        malicious_input = "<script>alert(1)</script>"
+        res = self.client.get(f"/api/auth/ebay/callback?error={malicious_input}")
+        self.assertEqual(res.status_code, 200)
+        self.assertNotIn("<script>alert(1)</script>", res.text)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", res.text)
+
+    def test_safe_relative_url(self):
+        """Verify _safe_relative_url prevents open redirects."""
+        from src.api.routes import _safe_relative_url
+        self.assertEqual(_safe_relative_url("/dashboard"), "/dashboard")
+        self.assertEqual(_safe_relative_url("/login?invited_to=Team"), "/login?invited_to=Team")
+        self.assertEqual(_safe_relative_url("https://evil.com"), "/dashboard")
+        self.assertEqual(_safe_relative_url("//evil.com"), "/dashboard")
+        self.assertEqual(_safe_relative_url("\\evil.com"), "/dashboard")
+        self.assertEqual(_safe_relative_url("javascript:alert(1)"), "/dashboard")
+        self.assertEqual(_safe_relative_url("", default="/login"), "/login")
+
+    def test_login_page_has_csrf_token(self):
+        """Verify login page includes a CSRF token hidden input field."""
+        res = self.client.get("/login")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('name="csrf_token"', res.text)
+
+    def test_dev_picker_has_csrf_tokens(self):
+        """Verify dev picker contains csrf_token inputs in all POST forms."""
+        orig_dev_mode = config.GOOGLE_DEV_MODE
+        try:
+            config.GOOGLE_DEV_MODE = True
+            res = self.client.get("/auth/google/dev-picker")
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.text.count('name="csrf_token"'), 3)
+        finally:
+            config.GOOGLE_DEV_MODE = orig_dev_mode
+
 
 if __name__ == "__main__":
     unittest.main()

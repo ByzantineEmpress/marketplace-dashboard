@@ -1,0 +1,25 @@
+{# OAuth Callback Confirmation Page #}
+{% extends "base.html" %}
+
+{% block content %}
+<div class="login-container">
+    <div class="login-card" style="max-width: 480px; text-align: center;">
+        {% if success %}
+        <div style="font-size: 42px; margin-bottom: 12px;" aria-hidden="true">✓</div>
+        <h1 style="font-size: 22px; margin-bottom: 8px;">{{ platform_name }} connected</h1>
+        <p class="login-subtitle" style="margin-bottom: 24px;">Your account was linked successfully. You can now sync your listings.</p>
+        <div style="display: flex; gap: 12px; justify-content: center;">
+            <a href="/admin" class="btn btn--outline">Back to Admin</a>
+            <a href="/dashboard" class="btn btn--primary">Go to Dashboard</a>
+        </div>
+        {% else %}
+        <div style="font-size: 42px; margin-bottom: 12px; color: var(--danger, #ef4444);" aria-hidden="true">⚠</div>
+        <h1 style="font-size: 22px; margin-bottom: 8px;">Connection failed</h1>
+        <div class="flash flash--error" style="text-align: left; margin-bottom: 20px;">{{ error }}</div>
+        <div style="display: flex; gap: 12px; justify-content: center;">
+            <a href="/admin" class="btn btn--primary">Back to Admin</a>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
