@@ -22,8 +22,25 @@ from src.database import SessionLocal
 from src.models import Listing, User, Team, TeamMembership, AuthSession
 from src.config import config, persist_env
 
+from jinja2.ext import Extension
+from jinja2 import nodes
+
+class CsrfTokenExtension(Extension):
+    """Jinja2 extension providing Django-compatible {% csrf_token %} tag support."""
+    tags = {"csrf_token"}
+
+    def parse(self, parser):
+        lineno = next(parser.stream).lineno
+        call = self.call_method("_render_csrf", [nodes.ContextReference()], lineno=lineno)
+        return nodes.Output([nodes.MarkSafe(call)]).set_lineno(lineno)
+
+    def _render_csrf(self, context):
+        token = context.get("csrf_token", "")
+        return f'<input type="hidden" name="csrf_token" value="{token}">'
+
 # Templates
 templates = Jinja2Templates(directory="templates")
+templates.env.add_extension(CsrfTokenExtension)
 
 # ------------------------------------------------------------------ #
 #  Database helper — every route that needs a DB gets one.
