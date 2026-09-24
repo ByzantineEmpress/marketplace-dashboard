@@ -25,12 +25,13 @@
                 {% csrf_token %}
                 <input type="hidden" name="email" value="alex.rivera@gmail.com">
                 <input type="hidden" name="name" value="Alex Rivera">
+                <input type="hidden" name="is_admin" value="1">
                 <button type="submit" class="btn btn--block" style="text-align: left; display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border);">
                     <div>
                         <strong>Alex Rivera</strong>
                         <div style="font-size: 12px; color: var(--text-muted);">alex.rivera@gmail.com</div>
                     </div>
-                    <span style="font-size: 11px; background: var(--accent-soft); color: var(--accent); padding: 2px 6px; border-radius: 4px;">Select</span>
+                    <span style="font-size: 11px; background: #e0f2fe; color: #0284c7; padding: 2px 8px; border-radius: 4px; font-weight: 600;">Admin</span>
                 </button>
             </form>
 
@@ -38,12 +39,13 @@
                 {% csrf_token %}
                 <input type="hidden" name="email" value="jordan.lee@gmail.com">
                 <input type="hidden" name="name" value="Jordan Lee">
+                <input type="hidden" name="is_admin" value="0">
                 <button type="submit" class="btn btn--block" style="text-align: left; display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border);">
                     <div>
                         <strong>Jordan Lee</strong>
                         <div style="font-size: 12px; color: var(--text-muted);">jordan.lee@gmail.com</div>
                     </div>
-                    <span style="font-size: 11px; background: var(--accent-soft); color: var(--accent); padding: 2px 6px; border-radius: 4px;">Select</span>
+                    <span style="font-size: 11px; background: var(--border); color: var(--text-muted); padding: 2px 8px; border-radius: 4px;">Member</span>
                 </button>
             </form>
         </div>
@@ -60,6 +62,10 @@
             <div class="form-group">
                 <label for="dev-name">Display Name (optional)</label>
                 <input type="text" id="dev-name" name="name" placeholder="Your Name">
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; margin: 10px 0 14px;">
+                <input type="checkbox" id="dev-is-admin" name="is_admin" value="1" checked style="width: 16px; height: 16px;">
+                <label for="dev-is-admin" style="font-size: 13px; cursor: pointer; margin: 0;">Grant Admin Privileges (Local Dev)</label>
             </div>
             <button type="submit" class="btn btn--primary btn--block">Continue with Test Account</button>
         </form>

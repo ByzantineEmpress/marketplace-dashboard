@@ -106,6 +106,7 @@ def check_admin(request: Request):
         user.get("provider") == "local"
         or user.get("email") == f"{config.ADMIN_USERNAME}@local"
         or user.get("is_admin") is True
+        or (config.GOOGLE_DEV_MODE and user.get("email") == "alex.rivera@gmail.com")
     )
     if not is_admin:
         raise HTTPException(status_code=403, detail="Admin privileges required")
@@ -257,10 +258,16 @@ async def dashboard_page(request: Request):
     user = require_auth(request)
     if not user:
         return RedirectResponse(url="/login?error=auth_required")
+    is_admin = (
+        user.get("provider") == "local"
+        or user.get("email") == f"{config.ADMIN_USERNAME}@local"
+        or user.get("is_admin") is True
+        or (config.GOOGLE_DEV_MODE and user.get("email") == "alex.rivera@gmail.com")
+    )
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
-        context={"identity": user["name"]},
+        context={"identity": user["name"], "is_admin": is_admin, "active": "dashboard"},
     )
 
 @page_router.get("/admin")
@@ -273,13 +280,14 @@ async def admin_page(request: Request):
         user.get("provider") == "local"
         or user.get("email") == f"{config.ADMIN_USERNAME}@local"
         or user.get("is_admin") is True
+        or (config.GOOGLE_DEV_MODE and user.get("email") == "alex.rivera@gmail.com")
     )
     if not is_admin:
         return RedirectResponse(url="/dashboard?error=admin_privileges_required")
     return templates.TemplateResponse(
         request=request,
         name="admin.html",
-        context={"identity": user["name"]},
+        context={"identity": user["name"], "is_admin": True, "active": "admin"},
     )
 
 # -- Google sign-in (OAuth 2.0 / OpenID Connect) --
@@ -366,17 +374,20 @@ async def google_dev_login(request: Request):
 
     import secrets
     token = secrets.token_urlsafe(48)  # 64 chars
+    is_admin = form.get("is_admin") == "1" or email == "alex.rivera@gmail.com"
 
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.email == email).first()
         if user is None:
-            user = User(email=email, name=name, provider="google")
+            user = User(email=email, name=name, provider="google", is_admin=is_admin)
             db.add(user)
             db.flush()
         else:
             if name:
                 user.name = name
+            if is_admin:
+                user.is_admin = True
         pending_invite = request.cookies.get("pending_invite", "")
         joined_team = _ensure_user_tenant_membership(db, user, pending_invite)
         joined_team_id = joined_team.id if joined_team else None
