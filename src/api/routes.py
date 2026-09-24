@@ -1354,7 +1354,8 @@ async def upload_image(file: UploadFile = File(...), _user: dict = Depends(check
     if not file.filename:
         return JSONResponse(status_code=400, content={"ok": False, "error": "No file uploaded"})
 
-    ext = os.path.splitext(file.filename)[1].lower()
+    sanitized_filename = os.path.basename(file.filename)
+    ext = os.path.splitext(sanitized_filename)[1].lower()
     allowed_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
     if ext not in allowed_exts:
         return JSONResponse(
@@ -1386,10 +1387,12 @@ async def upload_image(file: UploadFile = File(...), _user: dict = Depends(check
     if not is_valid_image(contents, ext):
         return JSONResponse(status_code=400, content={"ok": False, "error": "File content does not match a valid image format"})
 
-    uploads_dir = os.path.join("static", "uploads")
+    uploads_dir = os.path.realpath(os.path.join("static", "uploads"))
     os.makedirs(uploads_dir, exist_ok=True)
     safe_name = f"{uuid.uuid4().hex[:12]}{ext}"
-    dest_path = os.path.join(uploads_dir, safe_name)
+    dest_path = os.path.realpath(os.path.join(uploads_dir, safe_name))
+    if not dest_path.startswith(uploads_dir + os.sep):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid file path"})
     with open(dest_path, "wb") as buffer:
         buffer.write(contents)
 
