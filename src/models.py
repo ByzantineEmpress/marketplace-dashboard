@@ -340,6 +340,7 @@ class User(Base):
     name = Column(String(200), nullable=True)
     # "google" (signed in via Google OAuth) or "local" (username/password)
     provider = Column(String(20), nullable=False, default="local")
+    is_admin = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -348,6 +349,7 @@ class User(Base):
             "email": self.email,
             "name": self.name or self.email,
             "provider": self.provider,
+            "is_admin": bool(self.is_admin or self.provider == "local"),
         }
 
 

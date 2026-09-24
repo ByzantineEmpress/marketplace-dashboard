@@ -9,6 +9,7 @@ structured JSON so the client can handle errors gracefully.
 """
 
 from datetime import datetime, timedelta
+import time
 from urllib.parse import quote
 
 import httpx
@@ -78,6 +79,19 @@ def check_auth(request: Request):
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+def check_admin(request: Request):
+    """FastAPI dependency — raises 403 if user lacks admin privileges; returns user."""
+    user = check_auth(request)
+    is_admin = (
+        user.get("provider") == "local"
+        or user.get("email") == f"{config.ADMIN_USERNAME}@local"
+        or user.get("is_admin") is True
+    )
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="Admin privileges required")
     return user
 
 
@@ -188,6 +202,13 @@ async def admin_page(request: Request):
     user = require_auth(request)
     if not user:
         return RedirectResponse(url="/login?error=auth_required")
+    is_admin = (
+        user.get("provider") == "local"
+        or user.get("email") == f"{config.ADMIN_USERNAME}@local"
+        or user.get("is_admin") is True
+    )
+    if not is_admin:
+        return RedirectResponse(url="/dashboard?error=admin_privileges_required")
     return templates.TemplateResponse(
         request=request,
         name="admin.html",
@@ -202,8 +223,11 @@ async def google_login_start(request: Request):
     force_live = request.query_params.get("live") == "1"
     force_dev = request.query_params.get("dev") == "1"
 
-    if force_dev or (config.GOOGLE_DEV_MODE and not force_live):
-        return RedirectResponse(url="/auth/google/dev-picker", status_code=302)
+    if config.GOOGLE_DEV_MODE:
+        if force_dev or not force_live:
+            return RedirectResponse(url="/auth/google/dev-picker", status_code=302)
+    elif force_dev:
+        return RedirectResponse(url="/login?error=Google+dev+mode+is+disabled", status_code=303)
 
     if not config.GOOGLE_CLIENT_ID:
         return RedirectResponse(
@@ -211,7 +235,9 @@ async def google_login_start(request: Request):
         )
 
     if not force_live and "dummy" in config.GOOGLE_CLIENT_ID.lower():
-        return RedirectResponse(url="/auth/google/dev-picker", status_code=302)
+        if config.GOOGLE_DEV_MODE:
+            return RedirectResponse(url="/auth/google/dev-picker", status_code=302)
+        return RedirectResponse(url="/login?error=Google+client+id+not+configured", status_code=303)
     import secrets
 
     # One-time random token: proves the callback came from our own redirect
@@ -232,6 +258,7 @@ async def google_login_start(request: Request):
     response.set_cookie(
         key="google_oauth_state", value=state,
         httponly=True, samesite="lax", max_age=600,
+        secure=config.REQUIRE_HTTPS,
     )
     return response
 
@@ -239,6 +266,8 @@ async def google_login_start(request: Request):
 @page_router.get("/auth/google/dev-picker")
 async def google_dev_picker(request: Request):
     """Local development/testing Google Account picker."""
+    if not config.GOOGLE_DEV_MODE:
+        raise HTTPException(status_code=403, detail="Google dev mode is disabled")
     error = request.query_params.get("error", "")
     return templates.TemplateResponse(
         request=request,
@@ -250,6 +279,8 @@ async def google_dev_picker(request: Request):
 @page_router.post("/auth/google/dev-login")
 async def google_dev_login(request: Request):
     """Simulate Google OAuth callback for local development."""
+    if not config.GOOGLE_DEV_MODE:
+        raise HTTPException(status_code=403, detail="Google dev mode is disabled")
     form = await request.form()
     email = (form.get("email") or "").strip().lower()
     name = (form.get("name") or "").strip() or email.split("@")[0].capitalize()
@@ -411,25 +442,54 @@ api_router = APIRouter()
 
 # -- Auth --
 
+LOGIN_ATTEMPTS = {}  # ip -> list of timestamps
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_WINDOW_SECONDS = 60
+
+def _is_rate_limited(ip: str) -> bool:
+    now = time.time()
+    attempts = LOGIN_ATTEMPTS.get(ip, [])
+    valid = [t for t in attempts if now - t < LOGIN_WINDOW_SECONDS]
+    LOGIN_ATTEMPTS[ip] = valid
+    return len(valid) >= LOGIN_MAX_ATTEMPTS
+
+def _record_failed_attempt(ip: str):
+    now = time.time()
+    attempts = LOGIN_ATTEMPTS.get(ip, [])
+    attempts.append(now)
+    LOGIN_ATTEMPTS[ip] = attempts
+
 @api_router.post("/auth/login")
 async def login(request: Request):
     """Authenticate admin.
 
     Accepts BOTH JSON bodies (API clients) and classic HTML form posts
     (the login page) — the form has no way to send JSON.
+    Protected with rate limiting and constant-time password check.
     """
+    client_ip = request.client.host if request.client else "unknown"
     content_type = request.headers.get("content-type", "")
     is_json = "application/json" in content_type
+
+    if _is_rate_limited(client_ip):
+        if not is_json:
+            return RedirectResponse(url="/login?error=Too+many+failed+attempts.+Please+wait+60+seconds", status_code=303)
+        return JSONResponse(status_code=429, content={"ok": False, "error": "Too many failed login attempts. Please wait 60 seconds."})
 
     try:
         body = await request.json() if is_json else dict(await request.form())
     except Exception:
         body = {}
 
-    username = body.get("username", "")
-    password = body.get("password", "")
+    username = str(body.get("username", ""))
+    password = str(body.get("password", ""))
 
-    if username == config.ADMIN_USERNAME and password == config.ADMIN_PASSWORD:
+    import hmac
+    valid_user = hmac.compare_digest(username.strip(), config.ADMIN_USERNAME.strip())
+    valid_pass = hmac.compare_digest(password, config.ADMIN_PASSWORD)
+
+    if valid_user and valid_pass:
+        LOGIN_ATTEMPTS.pop(client_ip, None)
         import secrets
         token = secrets.token_urlsafe(48)  # exactly 64 chars — matches require_auth()
         # The password login maps to the local admin user, so Teams work
@@ -438,9 +498,11 @@ async def login(request: Request):
         try:
             user = db.query(User).filter(User.provider == "local").first()
             if user is None:
-                user = User(email=config.ADMIN_USERNAME + "@local", name=username, provider="local")
+                user = User(email=config.ADMIN_USERNAME + "@local", name=username, provider="local", is_admin=True)
                 db.add(user)
                 db.flush()
+            else:
+                user.is_admin = True
             _ensure_default_team_membership(db, user, role="owner")
             pending_invite = request.cookies.get("pending_invite", "")
             joined_team = _process_pending_invite(db, user, pending_invite)
@@ -460,11 +522,13 @@ async def login(request: Request):
             httponly=True,
             samesite="strict",
             max_age=86400 * 7,  # 7 days
+            secure=config.REQUIRE_HTTPS,
         )
         if request.cookies.get("pending_invite"):
             response.delete_cookie("pending_invite")
         return response
 
+    _record_failed_attempt(client_ip)
     if not is_json:
         return RedirectResponse(url="/login?error=Invalid+credentials", status_code=303)
     return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid credentials"})
@@ -564,15 +628,29 @@ SETTINGS_KEYS = (
     "AMAZON_MARKETPLACE_ID",
 )
 
+SECRET_KEYS = {
+    "ADMIN_PASSWORD",
+    "GOOGLE_CLIENT_SECRET",
+    "SMTP_PASSWORD",
+    "EBAY_CLIENT_SECRET",
+    "ETSY_API_SECRET",
+    "POSHMARK_API_KEY",
+    "AMAZON_CLIENT_SECRET",
+    "AMAZON_REFRESH_TOKEN",
+}
+
+def _mask_secret(val: str) -> str:
+    return "••••••••" if val else ""
+
 @api_router.get("/settings")
-async def get_settings(_auth: bool = Depends(check_auth)):
-    """Return the settings the Admin page manages."""
+async def get_settings(_admin: dict = Depends(check_admin)):
+    """Return the settings the Admin page manages (requires admin privileges)."""
     return {
         "settings": {
             "ADMIN_USERNAME": config.ADMIN_USERNAME,
-            "ADMIN_PASSWORD": config.ADMIN_PASSWORD,
+            "ADMIN_PASSWORD": _mask_secret(config.ADMIN_PASSWORD),
             "GOOGLE_CLIENT_ID": config.GOOGLE_CLIENT_ID,
-            "GOOGLE_CLIENT_SECRET": config.GOOGLE_CLIENT_SECRET,
+            "GOOGLE_CLIENT_SECRET": _mask_secret(config.GOOGLE_CLIENT_SECRET),
             "GOOGLE_ALLOWED_EMAILS": ",".join(config.GOOGLE_ALLOWED_EMAILS),
             "GOOGLE_DEV_MODE": config.GOOGLE_DEV_MODE,
             "APP_BASE_URL": config.APP_BASE_URL,
@@ -581,20 +659,20 @@ async def get_settings(_auth: bool = Depends(check_auth)):
             "SMTP_HOST": config.SMTP_HOST,
             "SMTP_PORT": config.SMTP_PORT,
             "SMTP_USER": config.SMTP_USER,
-            "SMTP_PASSWORD": config.SMTP_PASSWORD,
+            "SMTP_PASSWORD": _mask_secret(config.SMTP_PASSWORD),
             "SMTP_FROM": config.SMTP_FROM,
             "SMTP_USE_TLS": config.SMTP_USE_TLS,
             "DEFAULT_REFRESH_INTERVAL_S": config.DEFAULT_REFRESH_INTERVAL_S,
             "EBAY_CLIENT_ID": config.EBAY_CLIENT_ID,
-            "EBAY_CLIENT_SECRET": config.EBAY_CLIENT_SECRET,
+            "EBAY_CLIENT_SECRET": _mask_secret(config.EBAY_CLIENT_SECRET),
             "ETSY_API_KEY": config.ETSY_API_KEY,
-            "ETSY_API_SECRET": config.ETSY_API_SECRET,
+            "ETSY_API_SECRET": _mask_secret(config.ETSY_API_SECRET),
             "POSHMARK_USERNAME": config.POSHMARK_USERNAME,
-            "POSHMARK_API_KEY": config.POSHMARK_API_KEY,
+            "POSHMARK_API_KEY": _mask_secret(config.POSHMARK_API_KEY),
             "AMAZON_SELLER_ID": config.AMAZON_SELLER_ID,
             "AMAZON_CLIENT_ID": config.AMAZON_CLIENT_ID,
-            "AMAZON_CLIENT_SECRET": config.AMAZON_CLIENT_SECRET,
-            "AMAZON_REFRESH_TOKEN": config.AMAZON_REFRESH_TOKEN,
+            "AMAZON_CLIENT_SECRET": _mask_secret(config.AMAZON_CLIENT_SECRET),
+            "AMAZON_REFRESH_TOKEN": _mask_secret(config.AMAZON_REFRESH_TOKEN),
             "AMAZON_MARKETPLACE_ID": config.AMAZON_MARKETPLACE_ID,
         },
         "google_redirect_uri": f"{config.APP_BASE_URL}/auth/google/callback",
@@ -605,12 +683,18 @@ async def get_settings(_auth: bool = Depends(check_auth)):
     }
 
 @api_router.post("/settings")
-async def update_settings(body: dict, _auth: bool = Depends(check_auth)):
-    """Update settings from the Admin page and persist them to .env."""
+async def update_settings(body: dict, _admin: dict = Depends(check_admin)):
+    """Update settings from the Admin page and persist them to .env (admin only)."""
     updated = []
     for key, value in body.items():
         if key not in SETTINGS_KEYS:
             continue  # ignore unknown keys (forward-compatible)
+        # Never overwrite sensitive secret fields if masked with dots or empty
+        if key in SECRET_KEYS:
+            val_str = str(value).strip()
+            if not val_str or "••" in val_str or "****" in val_str:
+                continue
+
         existing = getattr(config, key)
         if isinstance(existing, bool):
             value = value in (True, "true", "1", 1)
@@ -951,7 +1035,7 @@ async def get_accounts(db: Session = Depends(get_db), _auth: bool = Depends(chec
     ]
 
 @api_router.post("/accounts/connect")
-async def connect_account(body: dict, _auth: bool = Depends(check_auth)):
+async def connect_account(body: dict, _admin: dict = Depends(check_admin)):
     """Start an OAuth flow.  Returns the authorisation URL to redirect to.
 
     Body should contain: ``platform`` (e.g. "ebay", "etsy").
@@ -967,7 +1051,7 @@ async def connect_account(body: dict, _auth: bool = Depends(check_auth)):
         return JSONResponse(status_code=400, content={"error": f"Platform '{platform}' not supported yet"})
 
 @api_router.post("/accounts/sync")
-async def sync_account(body: dict, db: Session = Depends(get_db), _auth: bool = Depends(check_auth)):
+async def sync_account(body: dict, db: Session = Depends(get_db), _admin: dict = Depends(check_admin)):
     """Manually trigger a sync for a given marketplace.
 
     Fetches new listings and stores them in the database.
@@ -1119,7 +1203,7 @@ async def add_team_member(team_id: int, body: dict, db: Session = Depends(get_db
 
 @api_router.delete("/teams/{team_id}/members/{user_id}")
 async def remove_team_member(team_id: int, user_id: int, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
-    """Remove a member from a team (you must be in that team)."""
+    """Remove a member from a team (must be team owner, the user leaving, or an administrator)."""
     if team_id not in _user["team_ids"]:
         return JSONResponse(status_code=404, content={"ok": False, "error": "Team not found"})
     membership = (
@@ -1129,6 +1213,17 @@ async def remove_team_member(team_id: int, user_id: int, db: Session = Depends(g
     )
     if not membership:
         return JSONResponse(status_code=404, content={"ok": False, "error": "Member not found"})
+
+    caller_membership = db.query(TeamMembership).filter(
+        TeamMembership.team_id == team_id,
+        TeamMembership.user_id == _user["id"]
+    ).first()
+    is_owner = caller_membership and caller_membership.role == "owner"
+    is_self = _user["id"] == user_id
+    is_admin = bool(_user.get("is_admin") or _user.get("provider") == "local")
+    if not (is_owner or is_self or is_admin):
+        return JSONResponse(status_code=403, content={"ok": False, "error": "Only team owners or administrators can remove other members"})
+
     if membership.role == "owner":
         owner_count = (
             db.query(TeamMembership)
@@ -1190,26 +1285,49 @@ async def join_team_api(body: dict, db: Session = Depends(get_db), _user: dict =
 async def upload_image(file: UploadFile = File(...), _user: dict = Depends(check_auth)):
     """Upload an image file for a listing and store in static/uploads/."""
     import os
-    import shutil
     import uuid
 
     if not file.filename:
         return JSONResponse(status_code=400, content={"ok": False, "error": "No file uploaded"})
 
     ext = os.path.splitext(file.filename)[1].lower()
-    allowed_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg"}
+    allowed_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
     if ext not in allowed_exts:
         return JSONResponse(
             status_code=400,
             content={"ok": False, "error": f"Unsupported image extension '{ext}'. Allowed: {', '.join(sorted(allowed_exts))}"},
         )
 
+    MAX_FILE_SIZE = 15 * 1024 * 1024  # 15 MB
+    contents = await file.read(MAX_FILE_SIZE + 1)
+    if len(contents) > MAX_FILE_SIZE:
+        return JSONResponse(status_code=413, content={"ok": False, "error": "File size exceeds the 15 MB limit"})
+    if len(contents) == 0:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Uploaded file is empty"})
+
+    # Validate image header magic bytes to prevent polyglot / malicious payloads
+    def is_valid_image(data: bytes, extension: str) -> bool:
+        if extension in {".jpg", ".jpeg"}:
+            return data.startswith(b"\xff\xd8\xff")
+        if extension == ".png":
+            return data.startswith(b"\x89PNG\r\n\x1a\n")
+        if extension == ".gif":
+            return data.startswith(b"GIF87a") or data.startswith(b"GIF89a")
+        if extension == ".webp":
+            return len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
+        if extension == ".bmp":
+            return data.startswith(b"BM")
+        return False
+
+    if not is_valid_image(contents, ext):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "File content does not match a valid image format"})
+
     uploads_dir = os.path.join("static", "uploads")
     os.makedirs(uploads_dir, exist_ok=True)
     safe_name = f"{uuid.uuid4().hex[:12]}{ext}"
     dest_path = os.path.join(uploads_dir, safe_name)
     with open(dest_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+        buffer.write(contents)
 
     return {"ok": True, "url": f"/static/uploads/{safe_name}"}
 

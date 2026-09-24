@@ -11,7 +11,7 @@
 
 async function startOAuth(platform) {
     const log = document.getElementById("sync-log");
-    log.innerHTML = `<p>Redirecting to ${platform} for authorisation...</p>`;
+    log.innerHTML = `<p>Redirecting to ${escapeHtml(platform)} for authorisation...</p>`;
 
     try {
         const resp = await fetch("/api/accounts/connect", {
@@ -24,16 +24,16 @@ async function startOAuth(platform) {
         if (data.auth_url) {
             window.location.href = data.auth_url;
         } else {
-            log.innerHTML = `<p class="flash flash--error">Error: ${data.error || "Unknown error"}</p>`;
+            log.innerHTML = `<p class="flash flash--error">Error: ${escapeHtml(data.error || "Unknown error")}</p>`;
         }
     } catch (e) {
-        log.innerHTML = `<p class="flash flash--error">Connection failed: ${e.message}</p>`;
+        log.innerHTML = `<p class="flash flash--error">Connection failed: ${escapeHtml(e.message)}</p>`;
     }
 }
 
 async function syncPlatform(platform) {
     const log = document.getElementById("sync-log");
-    log.innerHTML = `<p>Syncing ${platform} listings...</p>`;
+    log.innerHTML = `<p>Syncing ${escapeHtml(platform)} listings...</p>`;
 
     try {
         const resp = await fetch("/api/accounts/sync", {
@@ -45,13 +45,13 @@ async function syncPlatform(platform) {
 
         if (data.ok) {
             const r = data.result || {};
-            log.innerHTML = `<p class="flash flash--success">✓ Synced ${data.platform}: fetched ${r.listings_fetched ?? 0}, added ${r.listings_added ?? 0}, updated ${r.listings_updated ?? 0}</p>`;
+            log.innerHTML = `<p class="flash flash--success">✓ Synced ${escapeHtml(data.platform || platform)}: fetched ${Number(r.listings_fetched ?? 0)}, added ${Number(r.listings_added ?? 0)}, updated ${Number(r.listings_updated ?? 0)}</p>`;
         } else {
-            const errors = data.errors || [data.error || "Unknown error"];
+            const errors = (data.errors || [data.error || "Unknown error"]).map(err => escapeHtml(String(err)));
             log.innerHTML = `<p class="flash flash--error">✗ Sync failed: ${errors.join("; ")}</p>`;
         }
     } catch (e) {
-        log.innerHTML = `<p class="flash flash--error">Sync error: ${e.message}</p>`;
+        log.innerHTML = `<p class="flash flash--error">Sync error: ${escapeHtml(e.message)}</p>`;
     }
 }
 

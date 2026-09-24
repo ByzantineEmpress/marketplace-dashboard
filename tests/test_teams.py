@@ -164,7 +164,6 @@ def run_teams_e2e():
     # Give friend a session in the DB (simulates their Google sign-in landing here).
     import secrets
     from datetime import datetime, timedelta
-    from src.models import User, AuthSession
     db = SessionLocal()
     u = db.query(User).filter(User.email == "friend@example.com").first()
     check("friend user row exists", u is not None)

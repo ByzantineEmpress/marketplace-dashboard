@@ -97,6 +97,11 @@ def _migrate_existing_db():
         if "written_off_at" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN written_off_at TIMESTAMP"))
 
+        # 1g. users.is_admin column for role-based access control
+        user_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
+        if "is_admin" not in user_cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT 0"))
+
     # 2. A default team that everything (and the local admin) belongs to
     import secrets
     db = SessionLocal()
@@ -110,10 +115,16 @@ def _migrate_existing_db():
             # The local username/password login becomes a real user + owner
             admin = db.query(User).filter(User.provider == "local").first()
             if admin is None:
-                admin = User(email=config.ADMIN_USERNAME + "@local", name="Admin", provider="local")
+                admin = User(email=config.ADMIN_USERNAME + "@local", name="Admin", provider="local", is_admin=True)
                 db.add(admin)
                 db.flush()
+            else:
+                admin.is_admin = True
             db.add(TeamMembership(team_id=default_team.id, user_id=admin.id, role="owner"))
+        else:
+            local_user = db.query(User).filter(User.provider == "local").first()
+            if local_user and not local_user.is_admin:
+                local_user.is_admin = True
 
         # Ensure all existing teams have an invite code
         for t in db.query(Team).filter(Team.invite_code == None).all():  # noqa: E711
