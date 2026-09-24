@@ -1,8 +1,8 @@
 # Main web framework
 fastapi==0.115.0
 uvicorn[standard]==0.30.0
-jinja2==3.1.4
-python-multipart==0.0.9
+jinja2==3.1.6
+python-multipart==0.0.32
 
 # Database
 alembic==1.13.0
@@ -12,7 +12,7 @@ sqlalchemy==2.0.35
 httpx==0.27.0
 
 # Security
-cryptography==42.0.5
+cryptography==50.0.1
 # python-jose[cryptography] — not imported by current code yet; the [cryptography]
 # extra in 0.6.x pulls in pycrypto (needs MSVC to build on Windows). Uncomment
 # once an adapter needs JWT decoding:
@@ -20,8 +20,8 @@ cryptography==42.0.5
 passlib[bcrypt]==1.7.4
 
 # Environment variables
-python-dotenv==1.0.1
+python-dotenv==1.2.3
 
 # Optional: for scraping plugins (installed via 'scraping' extra)
 beautifulsoup4==4.12.3
-requests==2.32.3
+requests==2.34.2
