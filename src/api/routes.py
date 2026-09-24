@@ -95,13 +95,8 @@ def check_admin(request: Request):
     return user
 
 
-def _ensure_default_team_membership(db: Session, user, role: str = "member"):
-    """Make sure a user is in the default team (creating it if needed).
-
-    New sign-ins join the "Default Team" automatically — that's the
-    shared inventory everyone can see by default. The first user in the
-    team becomes its owner; everyone after that joins as a member.
-    """
+def _ensure_admin_team_membership(db: Session, user):
+    """Make sure the local administrator has an owned team."""
     team = db.query(Team).filter(Team.name == "Default Team").first()
     if team is None:
         import secrets
@@ -114,13 +109,7 @@ def _ensure_default_team_membership(db: Session, user, role: str = "member"):
         .first()
     )
     if already is None:
-        has_owner = (
-            db.query(TeamMembership)
-            .filter(TeamMembership.team_id == team.id, TeamMembership.role == "owner")
-            .first()
-            is not None
-        )
-        db.add(TeamMembership(team_id=team.id, user_id=user.id, role=role if not has_owner else "member"))
+        db.add(TeamMembership(team_id=team.id, user_id=user.id, role="owner"))
 
 
 def _process_pending_invite(db: Session, user, invite_code: str):
@@ -138,6 +127,47 @@ def _process_pending_invite(db: Session, user, invite_code: str):
             db.flush()
         return team
     return None
+
+
+def _ensure_user_tenant_membership(db: Session, user, pending_invite: str = ""):
+    """Ensure a user has an isolated workspace/team.
+
+    1. If user has a valid pending invite code, join that invited team as a member.
+    2. If the user already belongs to at least one team, keep their existing teams.
+    3. If the user belongs to no teams and has no invite, create a dedicated
+       personal tenant workspace (e.g. "{User's Name}'s Workspace"), where they
+       are the sole OWNER.
+
+    This guarantees strict tenant isolation: no new user ever gets dumped
+    into another tenant's or the global admin's team!
+    """
+    if pending_invite:
+        joined_team = _process_pending_invite(db, user, pending_invite)
+        if joined_team:
+            return joined_team
+
+    # Check if user already belongs to any team
+    existing_membership = db.query(TeamMembership).filter(TeamMembership.user_id == user.id).first()
+    if existing_membership:
+        return db.get(Team, existing_membership.team_id)
+
+    # Brand-new tenant: create their own private workspace with a unique name
+    import secrets
+    base_name = f"{user.name}'s Workspace" if user.name else "My Workspace"
+    ws_name = base_name
+    counter = 1
+    while db.query(Team).filter(Team.name == ws_name).first():
+        ws_name = f"{base_name} ({secrets.token_hex(2)})"
+        counter += 1
+        if counter > 5:
+            ws_name = f"{base_name} {secrets.token_hex(4)}"
+            break
+
+    new_team = Team(name=ws_name, invite_code=secrets.token_urlsafe(16))
+    db.add(new_team)
+    db.flush()
+    db.add(TeamMembership(team_id=new_team.id, user_id=user.id, role="owner"))
+    return new_team
 
 # ------------------------------------------------------------------ #
 #  PAGE ROUTER — HTML pages served by Jinja2 templates.
@@ -308,16 +338,15 @@ async def google_dev_login(request: Request):
         else:
             if name:
                 user.name = name
-        _ensure_default_team_membership(db, user, role="member")
         pending_invite = request.cookies.get("pending_invite", "")
-        joined_team = _process_pending_invite(db, user, pending_invite)
+        joined_team = _ensure_user_tenant_membership(db, user, pending_invite)
         joined_team_id = joined_team.id if joined_team else None
         db.add(AuthSession(token=token, user_id=user.id, expires_at=datetime.utcnow() + timedelta(days=7)))
         db.commit()
     finally:
         db.close()
 
-    dest = f"/dashboard?team={joined_team_id}" if joined_team_id else "/dashboard"
+    dest = f"/dashboard?team={joined_team_id}" if (pending_invite and joined_team_id) else "/dashboard"
     response = RedirectResponse(url=dest, status_code=303)
     response.set_cookie(
         key="auth_token",
@@ -415,15 +444,14 @@ async def google_login_callback(request: Request):
             db.flush()
         else:
             user.name = name  # keep the display name up to date
-        _ensure_default_team_membership(db, user, role="member")
         pending_invite = request.cookies.get("pending_invite", "")
-        joined_team = _process_pending_invite(db, user, pending_invite)
+        joined_team = _ensure_user_tenant_membership(db, user, pending_invite)
         joined_team_id = joined_team.id if joined_team else None
         db.add(AuthSession(token=token, user_id=user.id, expires_at=datetime.utcnow() + timedelta(days=7)))
         db.commit()
     finally:
         db.close()
-    dest = f"/dashboard?team={joined_team_id}" if joined_team_id else "/dashboard"
+    dest = f"/dashboard?team={joined_team_id}" if (pending_invite and joined_team_id) else "/dashboard"
     response = RedirectResponse(url=dest, status_code=303)
     response.set_cookie(
         key="auth_token", value=token,
@@ -503,7 +531,7 @@ async def login(request: Request):
                 db.flush()
             else:
                 user.is_admin = True
-            _ensure_default_team_membership(db, user, role="owner")
+            _ensure_admin_team_membership(db, user)
             pending_invite = request.cookies.get("pending_invite", "")
             joined_team = _process_pending_invite(db, user, pending_invite)
             joined_team_id = joined_team.id if joined_team else None
@@ -739,22 +767,30 @@ async def get_listings(
 
     query = db.query(Listing)
 
-    # Team scoping: a user sees listings from their own teams, plus
-    # unassigned ones (team_id NULL = shared, e.g. freshly synced).
-    # ?team=<id> narrows the view to one of the user's own teams.
-    if team:
+    # Team scoping: strictly isolated to caller's verified teams.
+    # A user only ever sees listings belonging to their own teams.
+    user_team_ids = _user.get("team_ids") or []
+    # For local admin, auto-claim any legacy unassigned listings into the admin's team
+    if (_user.get("is_admin") or _user.get("provider") == "local") and user_team_ids:
+        unassigned = db.query(Listing).filter(Listing.team_id == None).all()
+        if unassigned:
+            for item in unassigned:
+                item.team_id = user_team_ids[0]
+            db.commit()
+
+    if not user_team_ids:
+        query = query.filter(Listing.id == None)  # Matches nothing
+    elif team:
         try:
             team_id = int(team)
         except (TypeError, ValueError):
             team_id = -1
-        if team_id in _user["team_ids"]:
+        if team_id in user_team_ids:
             query = query.filter(Listing.team_id == team_id)
         else:
-            query = query.filter(Listing.id == None)  # noqa: E711  (matches nothing)
+            query = query.filter(Listing.id == None)  # Matches nothing
     else:
-        query = query.filter(
-            or_(Listing.team_id == None, Listing.team_id.in_(_user["team_ids"]))  # noqa: E711
-        )
+        query = query.filter(Listing.team_id.in_(user_team_ids))
 
     # Filter by platform (primary platform or cross-listed in platforms_json)
     if platform:
@@ -787,13 +823,12 @@ async def get_listings(
     # Paginate
     listings = query.offset((page - 1) * page_size).limit(page_size).all()
 
-    # Attach a human-readable team name to each listing (the UI shows it
-    # on the card). "Shared" means unassigned (team_id NULL).
-    team_names = {t.id: t.name for t in db.query(Team)}
+    # Attach team name from caller's teams only (prevents leaking other tenant team names)
+    team_names = {t.id: t.name for t in db.query(Team).filter(Team.id.in_(user_team_ids)).all()}
     items = []
     for l in listings:
         item = l.to_dict()
-        item["team_name"] = team_names.get(l.team_id) if l.team_id else "Shared"
+        item["team_name"] = team_names.get(l.team_id) if l.team_id else "Unassigned"
         items.append(item)
 
     return {
@@ -809,15 +844,26 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
     from sqlalchemy import func, or_, and_
     from sqlalchemy.sql.functions import coalesce
 
-    # Same team scoping as the listings endpoint.
-    if team:
+    # Same strict team scoping as the listings endpoint.
+    user_team_ids = _user.get("team_ids") or []
+    # For local admin, auto-claim any legacy unassigned listings into the admin's team
+    if (_user.get("is_admin") or _user.get("provider") == "local") and user_team_ids:
+        unassigned = db.query(Listing).filter(Listing.team_id == None).all()
+        if unassigned:
+            for item in unassigned:
+                item.team_id = user_team_ids[0]
+            db.commit()
+
+    if not user_team_ids:
+        scope = (Listing.id == None)
+    elif team:
         try:
             team_id = int(team)
         except (TypeError, ValueError):
             team_id = -1
-        scope = (Listing.team_id == team_id) if team_id in _user["team_ids"] else (Listing.id == None)  # noqa: E711
+        scope = (Listing.team_id == team_id) if team_id in user_team_ids else (Listing.id == None)
     else:
-        scope = or_(Listing.team_id == None, Listing.team_id.in_(_user["team_ids"]))  # noqa: E711
+        scope = Listing.team_id.in_(user_team_ids)
 
     days_int = None
     if days and str(days).lower() not in ("all", "0", "none", ""):
@@ -1019,7 +1065,7 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
 # -- Marketplace accounts (credentials) --
 
 @api_router.get("/accounts")
-async def get_accounts(db: Session = Depends(get_db), _auth: bool = Depends(check_auth)):
+async def get_accounts(db: Session = Depends(get_db), _admin: dict = Depends(check_admin)):
     """Return the list of configured marketplace accounts."""
     from src.models import MarketplaceAccount
 
@@ -1114,8 +1160,16 @@ async def create_team(body: dict, db: Session = Depends(get_db), _user: dict = D
     name = (body.get("name") or "").strip()
     if not name:
         return JSONResponse(status_code=400, content={"ok": False, "error": "Team name is required"})
-    if db.query(Team).filter(Team.name == name).first():
-        return JSONResponse(status_code=400, content={"ok": False, "error": f"Team '{name}' already exists"})
+
+    # Check duplicate team name within this user's teams
+    user_team_names = {
+        t.name.lower()
+        for t in db.query(Team).join(TeamMembership, TeamMembership.team_id == Team.id)
+        .filter(TeamMembership.user_id == _user["id"]).all()
+    }
+    if name.lower() in user_team_names:
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"You already have a team named '{name}'"})
+
     import secrets
     invite_code = secrets.token_urlsafe(16)
     team = Team(name=name, invite_code=invite_code)
@@ -1130,7 +1184,7 @@ async def create_team(body: dict, db: Session = Depends(get_db), _user: dict = D
 
 @api_router.post("/teams/{team_id}/members")
 async def add_team_member(team_id: int, body: dict, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
-    """Add a member to a team by email.
+    """Add a member to a team by email (owner or admin only).
 
     If that person hasn't signed in yet, their user row is created up
     front — when they later sign in (Google) they land in the team
@@ -1138,6 +1192,16 @@ async def add_team_member(team_id: int, body: dict, db: Session = Depends(get_db
     """
     if team_id not in _user["team_ids"]:
         return JSONResponse(status_code=404, content={"ok": False, "error": "Team not found"})
+
+    caller_m = db.query(TeamMembership).filter(
+        TeamMembership.team_id == team_id,
+        TeamMembership.user_id == _user["id"]
+    ).first()
+    is_owner = caller_m and caller_m.role == "owner"
+    is_admin = bool(_user.get("is_admin") or _user.get("provider") == "local")
+    if not (is_owner or is_admin):
+        return JSONResponse(status_code=403, content={"ok": False, "error": "Only team owners or administrators can invite new members"})
+
     email = (body.get("email") or "").strip().lower()
     if not email:
         return JSONResponse(status_code=400, content={"ok": False, "error": "Email is required"})
@@ -1401,16 +1465,20 @@ async def create_manual_listing(body: dict, db: Session = Depends(get_db), _user
             })
             parts_cost_cents += c_cents
 
+    user_team_ids = _user.get("team_ids") or []
+    if not user_team_ids:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "You must belong to a team to create listings"})
+
     team_id = body.get("team_id")
     if team_id:
         try:
             team_id = int(team_id)
-            if team_id not in _user["team_ids"]:
+            if team_id not in user_team_ids:
                 return JSONResponse(status_code=404, content={"ok": False, "error": "Team not found"})
         except (ValueError, TypeError):
             team_id = None
-    if not team_id and _user["team_ids"]:
-        team_id = _user["team_ids"][0]
+    if not team_id:
+        team_id = user_team_ids[0]
 
     sku = (body.get("sku") or "").strip()
     description = (body.get("description") or "").strip()
@@ -1450,14 +1518,24 @@ async def create_manual_listing(body: dict, db: Session = Depends(get_db), _user
     return {"ok": True, "listing": listing.to_dict()}
 
 
+def _check_listing_access(listing, _user: dict, db: Session) -> bool:
+    """Return True if caller has authorized access to this listing within their tenant teams."""
+    if not listing:
+        return False
+    user_team_ids = _user.get("team_ids") or []
+    # If unassigned legacy listing and caller is admin, claim it into admin team
+    if not listing.team_id and (_user.get("is_admin") or _user.get("provider") == "local") and user_team_ids:
+        listing.team_id = user_team_ids[0]
+        db.commit()
+    return bool(listing.team_id and listing.team_id in user_team_ids)
+
+
 @api_router.post("/listings/{listing_id}/mark-sold")
 async def mark_listing_sold(listing_id: int, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
     """Quickly mark a listing as sold (e.g. for a local in-person cash sale)."""
     listing = db.get(Listing, listing_id)
-    if not listing:
+    if not _check_listing_access(listing, _user, db):
         return JSONResponse(status_code=404, content={"ok": False, "error": "Listing not found"})
-    if listing.team_id and listing.team_id not in _user["team_ids"]:
-        return JSONResponse(status_code=403, content={"ok": False, "error": "Not authorized for this team"})
 
     listing.status = "sold"
     listing.is_sold = True
@@ -1472,10 +1550,8 @@ async def mark_listing_sold(listing_id: int, db: Session = Depends(get_db), _use
 async def write_off_listing(listing_id: int, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
     """Mark a listing as written off (unsellable, damaged, obsolete inventory loss)."""
     listing = db.get(Listing, listing_id)
-    if not listing:
+    if not _check_listing_access(listing, _user, db):
         return JSONResponse(status_code=404, content={"ok": False, "error": "Listing not found"})
-    if listing.team_id and listing.team_id not in _user["team_ids"]:
-        return JSONResponse(status_code=403, content={"ok": False, "error": "Not authorized for this team"})
 
     listing.status = "written_off"
     listing.is_sold = False
@@ -1490,10 +1566,8 @@ async def write_off_listing(listing_id: int, db: Session = Depends(get_db), _use
 async def restore_listing(listing_id: int, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
     """Restore a written-off or ended listing back to active status."""
     listing = db.get(Listing, listing_id)
-    if not listing:
+    if not _check_listing_access(listing, _user, db):
         return JSONResponse(status_code=404, content={"ok": False, "error": "Listing not found"})
-    if listing.team_id and listing.team_id not in _user["team_ids"]:
-        return JSONResponse(status_code=403, content={"ok": False, "error": "Not authorized for this team"})
 
     listing.status = "active"
     listing.is_sold = False
@@ -1509,10 +1583,8 @@ async def restore_listing(listing_id: int, db: Session = Depends(get_db), _user:
 async def delete_listing(listing_id: int, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
     """Delete a listing from the dashboard inventory."""
     listing = db.get(Listing, listing_id)
-    if not listing:
+    if not _check_listing_access(listing, _user, db):
         return JSONResponse(status_code=404, content={"ok": False, "error": "Listing not found"})
-    if listing.team_id and listing.team_id not in _user["team_ids"]:
-        return JSONResponse(status_code=403, content={"ok": False, "error": "Not authorized for this team"})
 
     db.delete(listing)
     db.commit()
@@ -1523,23 +1595,21 @@ async def delete_listing(listing_id: int, db: Session = Depends(get_db), _user: 
 async def update_listing(listing_id: int, body: dict, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
     """Update a listing (team assignment, purchase price, parts & repairs, price)."""
     listing = db.get(Listing, listing_id)
-    if not listing:
+    if not _check_listing_access(listing, _user, db):
         return JSONResponse(status_code=404, content={"ok": False, "error": "Listing not found"})
-    if listing.team_id and listing.team_id not in _user["team_ids"]:
-        return JSONResponse(status_code=404, content={"ok": False, "error": "Listing not found"})
+    user_team_ids = _user.get("team_ids") or []
 
     if "team_id" in body:
         new_team = body["team_id"]
         if new_team is None:
-            listing.team_id = None  # unassigned / shared
-        else:
-            try:
-                new_team = int(new_team)
-            except (TypeError, ValueError):
-                return JSONResponse(status_code=400, content={"ok": False, "error": "team_id must be a number"})
-            if new_team not in _user["team_ids"]:
-                return JSONResponse(status_code=404, content={"ok": False, "error": "Team not found"})
-            listing.team_id = new_team
+            return JSONResponse(status_code=400, content={"ok": False, "error": "Listings must be assigned to a valid team"})
+        try:
+            new_team = int(new_team)
+        except (TypeError, ValueError):
+            return JSONResponse(status_code=400, content={"ok": False, "error": "team_id must be a number"})
+        if new_team not in user_team_ids:
+            return JSONResponse(status_code=404, content={"ok": False, "error": "Target team not found or unauthorized"})
+        listing.team_id = new_team
 
     if "purchase_price" in body or "purchase_price_cents" in body:
         purchase_cents = body.get("purchase_price_cents")

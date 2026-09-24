@@ -359,7 +359,7 @@ class Team(Base):
     __tablename__ = "teams"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), unique=True, nullable=False)
+    name = Column(String(100), nullable=False)
     invite_code = Column(String(32), unique=True, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 

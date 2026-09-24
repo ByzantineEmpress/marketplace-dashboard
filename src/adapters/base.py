@@ -155,7 +155,8 @@ class MarketplaceAdapter(ABC):
     # ---------- Listing storage ----------
 
     def store_listings(self, db: SessionLocal,
-                       listings: List[Dict[str, Any]]) -> Dict[str, int]:
+                       listings: List[Dict[str, Any]],
+                       team_id: Optional[int] = None) -> Dict[str, int]:
         """Store (or update) listings in the database.
 
         Returns a summary: ``{"added": N, "updated": M, "failed": K}``
@@ -163,6 +164,14 @@ class MarketplaceAdapter(ABC):
         added = 0
         updated = 0
         failed = 0
+
+        # Resolve fallback team_id if not explicitly provided
+        target_team_id = team_id
+        if not target_team_id:
+            from src.models import Team
+            default_t = db.query(Team).first()
+            if default_t:
+                target_team_id = default_t.id
 
         for data in listings:
             try:
@@ -176,6 +185,8 @@ class MarketplaceAdapter(ABC):
                     # Update existing listing
                     for key, value in data.items():
                         setattr(existing, key, value)
+                    if not existing.team_id and target_team_id:
+                        existing.team_id = target_team_id
                     existing.updated_at = datetime.utcnow()
                     existing.last_fetched = datetime.utcnow()
                     updated += 1
@@ -186,6 +197,8 @@ class MarketplaceAdapter(ABC):
                     data = dict(data)
                     data.setdefault("platform", self.PLATFORM)
                     new_listing = Listing(**data)
+                    if not getattr(new_listing, "team_id", None) and target_team_id:
+                        new_listing.team_id = target_team_id
                     new_listing.created_at = datetime.utcnow()
                     new_listing.updated_at = datetime.utcnow()
                     new_listing.last_fetched = datetime.utcnow()
