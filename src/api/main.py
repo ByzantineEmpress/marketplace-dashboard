@@ -66,6 +66,14 @@ def _startup_warnings() -> list[str]:
             f"ALLOWED_ORIGINS still contains the example placeholder: "
             f"{config.ALLOWED_ORIGINS!r}"
         )
+    elif config.REQUIRE_HTTPS and "localhost" in (config.ALLOWED_ORIGINS or ""):
+        # Easy to miss: APP_BASE_URL is often fixed while this is left behind,
+        # which silently blocks the real origin from calling the API.
+        problems.append(
+            f"ALLOWED_ORIGINS still lists localhost ({config.ALLOWED_ORIGINS!r}) "
+            f"while REQUIRE_HTTPS is on — the production origin will be blocked "
+            f"by CORS."
+        )
     if not config.MAIL_BACKEND:
         problems.append(
             "Outbound email is not configured — email+password signup cannot "
