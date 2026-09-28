@@ -41,10 +41,14 @@ TARGET="$BACKUP_DIR/marketplace-$STAMP.db"
 # Use SQLite's own backup API rather than copying the file. `cp` of a live
 # database can capture a torn state; .backup takes a consistent snapshot and
 # folds in the WAL. This is the whole reason to prefer it.
-if command -v sqlite3 >/dev/null 2>&1; then
-    sqlite3 "$DB_PATH" ".backup '$TARGET'"
-else
-    # Fall back to the container's Python, which always has sqlite3.
+# Use Python's sqlite3 module rather than the sqlite3 CLI.
+#
+# `sudo apt install sqlite3` on Ubuntu 22.04 pulls in the *Unison* file
+# synchroniser as a dependency, so the documented install has a surprising side
+# effect. Python is already present on the instance and its sqlite3 module
+# always supports the online backup API, so prefer it and only fall back to the
+# CLI if Python is somehow unavailable.
+if command -v python3 >/dev/null 2>&1; then
     python3 - "$DB_PATH" "$TARGET" <<'PY'
 import sqlite3, sys
 src = sqlite3.connect(sys.argv[1])
@@ -53,6 +57,11 @@ with dst:
     src.backup(dst)
 src.close(); dst.close()
 PY
+elif command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$DB_PATH" ".backup '$TARGET'"
+else
+    log "ERROR: neither python3 nor sqlite3 is available"
+    exit 1
 fi
 
 if [[ ! -s "$TARGET" ]]; then
@@ -62,8 +71,17 @@ fi
 log "backup written: $TARGET ($(du -h "$TARGET" | cut -f1))"
 
 # Verify the snapshot is actually a usable database before trusting it.
-if command -v sqlite3 >/dev/null 2>&1; then
+if command -v python3 >/dev/null 2>&1; then
+    INTEGRITY="$(python3 -c "
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+print(db.execute('PRAGMA integrity_check').fetchone()[0])
+db.close()
+" "$TARGET")"
+elif command -v sqlite3 >/dev/null 2>&1; then
     INTEGRITY="$(sqlite3 "$TARGET" 'PRAGMA integrity_check;')"
+fi
+if [[ -n "${INTEGRITY:-}" ]]; then
     if [[ "$INTEGRITY" != "ok" ]]; then
         log "ERROR: integrity check failed on $TARGET: $INTEGRITY"
         exit 1

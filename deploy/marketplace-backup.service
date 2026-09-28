@@ -7,7 +7,9 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 # Optional off-host copy target, e.g. an S3 bucket. See deploy/backup-db.sh.
-# EnvironmentFile=-/etc/default/marketplace-backup
+# Create /etc/default/marketplace-backup with:
+#   OFFSITE_CMD='aws s3 cp "$1" s3://my-backups/marketplace/'
+EnvironmentFile=-/etc/default/marketplace-backup
 Environment=REPO_DIR=/opt/marketplace-dashboard
 ExecStart=/usr/local/bin/marketplace-backup
 # Modest hardening: the script only reads the DB and writes into ./data.
