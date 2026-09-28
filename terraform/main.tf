@@ -209,3 +209,87 @@ resource "cloudflare_dns_record" "app" {
 # To adopt them anyway, add cloudflare_zone_setting resources and run
 # `tofu import` first.
 ###############################################################################
+
+###############################################################################
+# Updating an instance that already exists
+#
+# cloud-init runs exactly once, at first boot. Everything below is the update
+# path, so this configuration works both for a first build and for shipping a
+# later revision to a running instance.
+#
+# The update script is idempotent: it detects whether the checkout, the mounted
+# directories, the backup units and the containers already exist and only does
+# what is missing. Running it repeatedly is safe.
+###############################################################################
+
+# The private key used for SSH. When Terraform generated the key pair it has to
+# be materialised here, because an SSH connection needs a file. Written 0600 and
+# gitignored.
+resource "local_sensitive_file" "generated_ssh_key" {
+  count           = local.use_existing_key ? 0 : 1
+  content         = tls_private_key.generated[0].private_key_pem
+  filename        = "${path.module}/generated_ssh_key.pem"
+  file_permission = "0600"
+}
+
+locals {
+  ssh_private_key_path = (
+    var.ssh_private_key_path != "" ? var.ssh_private_key_path : (
+      local.use_existing_key ? "" : local_sensitive_file.generated_ssh_key[0].filename
+    )
+  )
+
+  # Refuse to attempt a deploy we cannot connect for, rather than letting the
+  # provisioner fail later with an opaque SSH timeout.
+  can_deploy = var.deploy_on_apply && local.ssh_private_key_path != ""
+}
+
+resource "null_resource" "deploy" {
+  count = local.can_deploy ? 1 : 0
+
+  # Change deploy_version to trigger an update.
+  triggers = {
+    deploy_version = var.deploy_version
+    instance_id    = aws_lightsail_instance.app.id
+    branch         = var.branch
+    repo           = var.repository_url
+  }
+
+  connection {
+    type        = "ssh"
+    user        = "ubuntu"
+    host        = aws_lightsail_static_ip.app.ip_address
+    private_key = file(local.ssh_private_key_path)
+    timeout     = "5m"
+  }
+
+  # Staged then run, kept as two steps so failures stay distinguishable: a copy
+  # failure is connectivity or key material, a run failure is the deploy.
+  provisioner "file" {
+    source      = "${path.module}/templates/update.sh.tftpl"
+    destination = "/tmp/marketplace-update.sh"
+  }
+
+  provisioner "remote-exec" {
+    # The script is written to disk verbatim and only THEN gets its variables.
+    #
+    # The obvious approach — interpolating repo_dir/branch into the script
+    # during rendering — does not work: the script's own bash parameter
+    # expansions are parsed as Terraform template expressions, and HCL cannot
+    # express a literal dollar-brace (there is no escape for it), so the render
+    # fails outright. Substituting after the file is on the instance keeps the
+    # two languages completely separate, and the script stays readable as bash.
+    inline = [
+      "BASE64=$(base64 -w0 /tmp/marketplace-update.sh)",
+      "printf '%s' \"$BASE64\" | base64 -d | sed -e \"s|@REPO_DIR@|${var.repo_dir}|g\" -e \"s|@BRANCH@|${var.branch}|g\" -e \"s|@DEPLOY_VERSION@|${var.deploy_version}|g\" | sudo tee /usr/local/bin/marketplace-update >/dev/null",
+      "sudo chmod 755 /usr/local/bin/marketplace-update",
+      "sudo /usr/local/bin/marketplace-update",
+      "rm -f /tmp/marketplace-update.sh",
+    ]
+  }
+
+  depends_on = [
+    aws_lightsail_static_ip_attachment.app,
+    aws_lightsail_instance_public_ports.app,
+  ]
+}

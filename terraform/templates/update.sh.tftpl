@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+#
+# Idempotent update for an instance that already exists.
+#
+# cloud-init runs exactly once, at first boot. This script is the update path:
+# Terraform copies it to the instance and runs it whenever deploy_version
+# changes, so `tofu apply` becomes the way to ship a later revision.
+#
+# Safe to run repeatedly — every step detects its own state first. It is also
+# installed at /usr/local/bin/marketplace-update so it can be run by hand.
+#
+# It deliberately does NOT abort the run when Docker cannot rebuild: a readable
+# summary matters more than a green Terraform run, because a non-zero exit here
+# would abort the apply and hide the actual error.
+#
+# @REPO_DIR@, @BRANCH@ and @DEPLOY_VERSION@ are substituted by Terraform AFTER
+# this file has been copied to the instance. Interpolating them during rendering
+# would not work: HCL has no escape for a literal dollar-brace, so the bash
+# parameter expansions below would be parsed as Terraform expressions and the
+# render would fail outright.
+set -uo pipefail
+
+REPO_DIR="@REPO_DIR@"
+BRANCH="@BRANCH@"
+DEPLOY_VERSION="@DEPLOY_VERSION@"
+
+# Docker is at /usr/bin/docker; a non-interactive SSH shell may not have it on
+# PATH, and the ubuntu user's docker group membership is not always applied yet.
+if [ -x /usr/bin/docker ]; then
+    DOCKER=/usr/bin/docker
+elif command -v docker >/dev/null 2>&1; then
+    DOCKER="$(command -v docker)"
+else
+    DOCKER=""
+fi
+
+echo "=============================================================="
+echo " marketplace-dashboard update"
+echo " deploy_version: $DEPLOY_VERSION"
+echo " repo_dir:       $REPO_DIR"
+echo " docker:         ${DOCKER:-NOT INSTALLED}"
+echo "=============================================================="
+
+# ---------- 1. repository ----------
+if [ ! -d "$REPO_DIR/.git" ]; then
+    echo
+    echo ">>> No checkout present."
+    echo "    The instance exists but was never provisioned — cloud-init may have"
+    echo "    failed, or the deploy key was missing. Check:"
+    echo "      sudo cat /var/log/marketplace-bootstrap.log"
+    echo "    Then re-run cloud-init, or clone the repo by hand and run this again."
+    exit 0
+fi
+
+cd "$REPO_DIR" || exit 1
+
+echo
+echo ">>> Fetching $BRANCH"
+BEFORE="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+if ! git -c core.sshCommand="ssh -o StrictHostKeyChecking=accept-new" fetch origin "$BRANCH" --quiet 2>&1; then
+    echo "    WARNING: fetch failed (deploy key or network). Continuing with the"
+    echo "    revision already on disk."
+fi
+git checkout "$BRANCH" --quiet 2>&1 || echo "    WARNING: could not check out $BRANCH"
+if ! git pull --ff-only --quiet 2>&1; then
+    echo "    WARNING: fast-forward pull failed — local commits or edits exist."
+    echo "    Leaving the working tree alone."
+fi
+AFTER="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+if [ "$BEFORE" = "$AFTER" ]; then
+    echo "    Revision unchanged: ${AFTER:0:9}"
+else
+    echo "    Updated ${BEFORE:0:9} -> ${AFTER:0:9}"
+    git --no-pager log --oneline "$BEFORE..$AFTER" 2>/dev/null | head -10 | sed 's/^/      /'
+fi
+
+# ---------- 2. mount ownership ----------
+# A `git pull` never changes these, but a re-provision or a manual chown can,
+# and the failure mode is obscure: a root-owned data/ restart-loops with
+# "unable to open database file", and a root-owned static/uploads/ turns every
+# image upload into a 500 that the browser reports as a generic network error.
+echo
+echo ">>> Mount ownership (the container runs as uid 100)"
+mkdir -p "$REPO_DIR/data" "$REPO_DIR/data/backups" "$REPO_DIR/static/uploads"
+if [ "$(stat -c '%u:%g' "$REPO_DIR/data" 2>/dev/null)" != "100:101" ]; then
+    echo "    Fixing data/"
+    chown -R 100:101 "$REPO_DIR/data"
+    chmod 750 "$REPO_DIR/data" "$REPO_DIR/data/backups"
+fi
+if [ "$(stat -c '%u:%g' "$REPO_DIR/static/uploads" 2>/dev/null)" != "100:101" ]; then
+    echo "    Fixing static/uploads/"
+    chown -R 100:101 "$REPO_DIR/static/uploads"
+    chmod 775 "$REPO_DIR/static/uploads"
+fi
+echo "    data/          $(stat -c '%U:%G %a' "$REPO_DIR/data")"
+echo "    static/uploads $(stat -c '%U:%G %a' "$REPO_DIR/static/uploads")"
+
+# ---------- 3. backup units ----------
+# Reinstalled every run so changes to the script or timer take effect.
+if [ -f "$REPO_DIR/deploy/backup-db.sh" ]; then
+    echo
+    echo ">>> Refreshing backup units"
+    install -m 755 "$REPO_DIR/deploy/backup-db.sh" /usr/local/bin/marketplace-backup
+    install -m 644 "$REPO_DIR/deploy/marketplace-backup.service" /etc/systemd/system/
+    install -m 644 "$REPO_DIR/deploy/marketplace-backup.timer" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now marketplace-backup.timer 2>/dev/null
+    systemctl is-active --quiet marketplace-backup.timer \
+        || echo "    WARNING: backup timer is not active"
+fi
+
+# ---------- 4. containers ----------
+echo
+if [ -z "$DOCKER" ]; then
+    echo ">>> Docker is not installed; skipping the container rebuild."
+    echo "    Re-run cloud-init, or install Docker and run this again."
+    exit 0
+fi
+
+COMPOSE_FILE="$REPO_DIR/docker-compose.lightsail.yml"
+if [ ! -f "$COMPOSE_FILE" ]; then
+    echo ">>> $COMPOSE_FILE not found; nothing to build."
+    exit 0
+fi
+
+# The tunnel token is a required compose variable. Without it `compose up` fails
+# with one opaque line, so check first and say exactly what to do.
+TOKEN="$(grep -E '^CLOUDFLARE_TUNNEL_TOKEN=' "$REPO_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2-)"
+if [ -z "$TOKEN" ]; then
+    echo ">>> CLOUDFLARE_TUNNEL_TOKEN is empty in .env — skipping the rebuild."
+    echo "    Zero Trust -> Networks -> Tunnels -> your tunnel -> install token, then:"
+    echo "      sudo sed -i \"s|^CLOUDFLARE_TUNNEL_TOKEN=.*|CLOUDFLARE_TUNNEL_TOKEN=<token>|\" $REPO_DIR/.env"
+    exit 0
+fi
+
+echo ">>> Rebuilding images"
+if ! (cd "$REPO_DIR" && "$DOCKER" compose -f docker-compose.lightsail.yml build web 2>&1 | tail -5); then
+    echo "    ERROR: image build failed. The running container is untouched."
+    exit 0
+fi
+
+echo
+echo ">>> Recreating containers"
+if ! (cd "$REPO_DIR" && "$DOCKER" compose -f docker-compose.lightsail.yml up -d 2>&1 | tail -8); then
+    echo "    ERROR: compose up failed. Inspect with:"
+    echo "      $DOCKER compose -f docker-compose.lightsail.yml logs --tail=40 web"
+    exit 0
+fi
+
+echo
+echo ">>> Container status"
+(cd "$REPO_DIR" && "$DOCKER" compose -f docker-compose.lightsail.yml ps) 2>&1 | sed 's/^/    /'
+
+# ---------- 5. health ----------
+echo
+echo ">>> App health"
+HEALTHY=0
+for _ in $(seq 1 20); do
+    if (cd "$REPO_DIR" && "$DOCKER" compose -f docker-compose.lightsail.yml exec -T web \
+        curl -fsS -o /dev/null http://localhost:8000/login) 2>/dev/null; then
+        HEALTHY=1
+        break
+    fi
+    sleep 3
+done
+if [ "$HEALTHY" = "1" ]; then
+    echo "    /login responds OK"
+else
+    echo "    WARNING: /login did not respond within 60s. Recent log:"
+    (cd "$REPO_DIR" && "$DOCKER" compose -f docker-compose.lightsail.yml logs --tail=20 web) 2>&1 | sed 's/^/      /'
+fi
+
+# ---------- 6. configuration warnings ----------
+# The app prints a CONFIGURATION WARNINGS banner when something is wrong (HTTPS
+# off, default admin password, dev mode on). Surface it here so it appears in
+# the apply output instead of being buried in the container log.
+WARNINGS="$( (cd "$REPO_DIR" && "$DOCKER" compose -f docker-compose.lightsail.yml logs --tail=80 web) 2>&1 \
+    | grep -A6 'CONFIGURATION WARNINGS' || true )"
+if [ -n "$WARNINGS" ]; then
+    echo
+    echo ">>> ATTENTION — the app reported configuration problems:"
+    echo "$WARNINGS" | sed 's/^/    /'
+fi
+
+echo
+echo "=============================================================="
+echo " Update complete at revision ${AFTER:0:9}"
+echo "=============================================================="

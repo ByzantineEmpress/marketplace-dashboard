@@ -31,3 +31,6 @@ crash.*.log
 # CLI config that may hold API tokens
 .terraformrc
 terraform.rc
+
+# Private key materialised for SSH when Terraform generated the key pair
+generated_ssh_key.pem

@@ -94,6 +94,60 @@ variable "ssh_public_key" {
   default     = ""
 }
 
+variable "ssh_private_key_path" {
+  description = <<-EOT
+    Path to the PRIVATE key used for SSH. Required for `deploy_on_apply`,
+    because updating the instance means logging into it.
+
+    If ssh_public_key is empty (Terraform generated the pair), leave this blank
+    and Terraform writes the generated key to ./generated_ssh_key.pem and uses
+    that instead.
+  EOT
+  type        = string
+  default     = ""
+}
+
+# ─── Updates ──────────────────────────────────────────────────────────────────
+
+variable "deploy_version" {
+  description = <<-EOT
+    The deployment trigger. Change this string and run `apply` to pull the
+    latest revision on the instance, rebuild the image and recreate the
+    containers.
+
+    Why a manual trigger rather than "always": Terraform only re-runs a
+    provisioner when something it depends on changes. Making that explicit
+    keeps `plan` honest — an apply that should not touch the server stays
+    quiet — and means a deploy is a deliberate act rather than a side effect of
+    an unrelated change.
+
+    A date or a git SHA both work.
+  EOT
+  type        = string
+  default     = "v1"
+}
+
+variable "deploy_on_apply" {
+  description = <<-EOT
+    Run the update over SSH when deploy_version changes.
+
+    Requires deploy_on_apply to have somewhere to connect from: the machine
+    running `tofu apply` must be allowed through the Lightsail firewall on port
+    22 (see ssh_allowed_cidrs).
+
+    Set to false if you would rather deploy outside Terraform — the same script
+    is on the instance at /usr/local/bin/marketplace-update.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "branch" {
+  description = "Git branch the instance checks out and updates from."
+  type        = string
+  default     = "main"
+}
+
 # ─── Cloudflare ───────────────────────────────────────────────────────────────
 
 variable "cloudflare_account_id" {

@@ -187,6 +187,59 @@ OFFSITE_CMD='aws s3 cp "$1" s3://your-bucket/marketplace/'
 EOF
 ```
 
+## Updating an existing deployment
+
+`cloud-init` runs **once**, at first boot — so it cannot be the update path.
+Instead, `tofu apply` also runs an idempotent update script over SSH:
+
+```bash
+cd terraform
+# bump deploy_version in terraform.tfvars
+tofu apply
+```
+
+What happens:
+
+1. `git fetch` + `git pull --ff-only` on `main`
+2. Re-check `data/` and `static/uploads/` ownership, fixing it if wrong
+3. Refresh the backup script and timer
+4. `docker compose build web` then `up -d`
+5. Wait for `/login` to answer, and surface any app CONFIGURATION WARNINGS in
+   the apply output
+
+Every step checks its own state first, so re-running with an unchanged
+`deploy_version` does nothing, and running it twice in a row is safe. The
+script is also installed on the instance, so you can deploy without Terraform:
+
+```bash
+ssh ubuntu@<ip> 'sudo /usr/local/bin/marketplace-update'
+```
+
+### Why a manual trigger rather than "always update"
+
+Terraform re-runs a provisioner only when something it depends on changes.
+`deploy_version` makes that explicit. The alternative — reconciling the
+instance to the repo on every apply — would make an unrelated change (a tag, a
+firewall rule) silently redeploy the application, and would make `plan` claim a
+deploy that Terraform cannot actually perform without SSH access.
+
+This does mean **`tofu plan` cannot tell you the server is out of date.** The
+repository revision on the instance is not part of Terraform state. To check:
+
+```bash
+ssh ubuntu@<ip> 'cd /opt/marketplace-dashboard && git log --oneline -1'
+```
+
+### Set `deploy_on_apply = false` if
+
+- You deploy from CI instead (call `/usr/local/bin/marketplace-update` there)
+- The machine running `apply` is not allowed through the firewall on port 22
+- You would rather Terraform never touches the running application
+
+The update is skipped, with a printed explanation, when the private key is
+unavailable or `CLOUDFLARE_TUNNEL_TOKEN` is empty — rather than failing with an
+opaque SSH timeout.
+
 ## Verification status
 
 Be aware of what is and isn't proven here:
@@ -194,13 +247,17 @@ Be aware of what is and isn't proven here:
 **Verified**
 - `tofu validate` passes
 - `tofu fmt` clean
-- Both templates render correctly with representative inputs
+- Both render templates produce correct output
 - The rendered cloud-init passes `bash -n` on Linux
+- **The update script was executed against the live instance twice.** It pulled
+  `44ca2c1b8 -> cb79a14b9`, rebuilt the image, recreated the containers and
+  reported `/login responds OK`. The second run changed nothing and recreated
+  nothing, confirming it is idempotent.
 
 **Not verified**
-- **No `apply` has ever been run.** These files were written and validated
-  without AWS or Cloudflare credentials, so nothing here has created real
-  infrastructure.
+- **`tofu apply` has never been run.** No AWS or Cloudflare credentials were
+  available, so the AWS and Cloudflare resources have not created anything.
+  The update *script* is proven; the Terraform that invokes it is not.
 - `blueprint_id` / `bundle_id` are not confirmed against a live AWS account —
   check them as described above.
 - The Cloudflare tunnel and DNS resources are validated against the provider
