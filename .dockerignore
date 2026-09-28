@@ -1,6 +1,17 @@
+# Keep secrets and local state out of the image, and keep the build context
+# small. Anything not listed here is sent to the daemon as build context.
+
+# Secrets — never bake these into an image
 .env
+.env.*
+!.env.example
+
+# VCS
 .git
 .gitignore
+.gitattributes
+
+# Python bytecode / caches
 __pycache__
 *.pyc
 *.pyo
@@ -9,11 +20,27 @@ __pycache__
 env/
 venv/
 .venv/
+
+# Runtime data. These are bind-mounted at run time, so they must not be copied
+# into the image — and on a deployed instance `data/` is chmod 750 owned by the
+# container's uid, which makes the build fail with "permission denied" if the
+# build context tries to read it. That broke every rebuild until this was
+# excluded.
+data/
+backups/
 marketplace.db*
 *.sqlite*
 *.log
 logs/
+
+# Test and docs are not needed at run time
 tests/
 docs/
+.mypy_cache/
+.pytest_cache/
+
+# Editor / OS noise
 .vscode/
 .idea/
+.DS_Store
+Thumbs.db
