@@ -12,6 +12,7 @@ from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, JSON, F
 from sqlalchemy.orm import declarative_base
 
 from src.database import Base
+from src.db_crypto import EncryptedText
 
 Base  # keep reference for linters
 
@@ -285,21 +286,37 @@ class Listing(Base):
 class MarketplaceAccount(Base):
     """OAuth account/connection for one marketplace platform.
 
-    One row per platform. Tokens are stored here so the adapters can
-    authenticate without re-running the OAuth flow each run.
+    Belongs to ONE user. Two users may each link their own eBay account, which
+    is why the uniqueness is ``(user_id, platform)`` and not ``platform`` alone:
+    the original schema made ``platform`` globally unique, so only a single eBay
+    connection could exist for the entire instance.
+
+    Tokens are encrypted at rest (see src/db_crypto.py). They grant access to a
+    real seller account and the database is copied into backups and snapshots,
+    so plaintext columns would spread working credentials everywhere.
     """
 
     __tablename__ = "marketplace_accounts"
+    __table_args__ = (
+        UniqueConstraint("user_id", "platform", name="uq_marketplace_account_user_platform"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    platform = Column(String(20), nullable=False, unique=True, index=True)
+
+    # Owner. Nullable only so the migration can adopt pre-existing rows; every
+    # row created by the application sets it.
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+
+    platform = Column(String(20), nullable=False, index=True)
 
     shop_id = Column(String(100), nullable=True)
     shop_name = Column(String(100), nullable=True)
 
-    # OAuth tokens
-    access_token = Column(Text, nullable=True)
-    refresh_token = Column(Text, nullable=True)
+    # OAuth tokens — encrypted at rest.
+    access_token = Column(EncryptedText, nullable=True)
+    refresh_token = Column(EncryptedText, nullable=True)
     token_expires_at = Column(DateTime, nullable=True)
     token_data = Column(JSON, nullable=True)   # raw token response (extra claims)
 
@@ -319,6 +336,44 @@ class MarketplaceAccount(Base):
             "token_expires_at": self.token_expires_at.isoformat() if self.token_expires_at else None,
             "last_synced": self.last_synced.isoformat() if self.last_synced else None,
         }
+
+
+class UserMarketplaceCredential(Base):
+    """One API credential belonging to one user for one marketplace.
+
+    These are the keys and secrets a seller generates in their own marketplace
+    developer account — eBay client ID/secret, an Etsy keystring, a Poshmark
+    login. They used to live only in environment variables shared by every user
+    of the instance, which meant one person's credentials were used for
+    everybody's syncs.
+
+    Values are encrypted at rest. Nothing here is ever returned to the browser:
+    the API reports which keys are set, and a masked hint, so a settings page
+    can show state without shipping secrets to the client.
+    """
+
+    __tablename__ = "user_marketplace_credentials"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "platform", "credential_key",
+            name="uq_user_platform_credential",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    platform = Column(String(20), nullable=False, index=True)
+
+    # e.g. "client_id", "client_secret", "api_key", "api_secret",
+    #      "username", "refresh_token"
+    credential_key = Column(String(50), nullable=False)
+
+    value = Column(EncryptedText, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 # ------------------------------------------------------------------ #

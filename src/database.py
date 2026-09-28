@@ -128,6 +128,16 @@ def _migrate_existing_db():
         if "password_hash" not in user_cols:
             conn.execute(text("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)"))
 
+    # 1j. marketplace_accounts must be per-user.
+    #
+    # The original schema had UNIQUE(platform), which allowed exactly ONE eBay
+    # connection for the whole instance, and no user_id at all — so every
+    # adapter query was global and two users would overwrite each other's
+    # tokens. SQLite cannot drop a UNIQUE constraint in place, so the table is
+    # rebuilt: create_all() is invoked again after DROP so the new shape comes
+    # from the model rather than hand-written DDL that could drift from it.
+    _rebuild_marketplace_accounts_for_users()
+
     # 2. A default team that everything (and the local admin) belongs to
     import secrets
     db = SessionLocal()
@@ -219,3 +229,90 @@ def _migrate_existing_db():
         db.commit()
     finally:
         db.close()
+
+
+def _rebuild_marketplace_accounts_for_users():
+    """Convert marketplace_accounts to a per-user table.
+
+    Before this, ``platform`` was UNIQUE and there was no ``user_id``, so the
+    instance could hold exactly ONE eBay connection, shared by everybody, and
+    every adapter query was global. SQLite cannot remove a UNIQUE constraint
+    with ALTER TABLE, so the table must be rebuilt.
+
+    The rebuild is driven by ``Base.metadata.create_all`` rather than hand
+    written DDL, so the resulting schema cannot drift from the model.
+
+    Any existing rows are preserved and adopted by the local administrator:
+    they predate per-user ownership, and there is no other honest way to decide
+    who they belonged to. The table is empty on every deployment so far, but the
+    copy is written anyway so the step is safe in general.
+
+    Idempotent: returns immediately once ``user_id`` is present.
+    """
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        exists = conn.execute(
+            text(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='marketplace_accounts'"
+            )
+        ).fetchone()
+        if not exists:
+            return
+
+        cols = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(marketplace_accounts)"))
+        }
+        if "user_id" in cols:
+            return  # already migrated
+
+        rows = [
+            dict(r._mapping)
+            for r in conn.execute(text("SELECT * FROM marketplace_accounts"))
+        ]
+        conn.execute(text("DROP TABLE marketplace_accounts"))
+
+    # Recreate from the model, so the shape comes from src/models.py.
+    Base.metadata.create_all(bind=engine)
+
+    if not rows:
+        return
+
+    with engine.begin() as conn:
+        owner = conn.execute(
+            text("SELECT id FROM users WHERE provider='local' ORDER BY id LIMIT 1")
+        ).fetchone()
+        owner_id = owner[0] if owner else None
+        for row in rows:
+            conn.execute(
+                text(
+                    "INSERT INTO marketplace_accounts "
+                    "(user_id, platform, shop_id, shop_name, access_token, "
+                    " refresh_token, token_expires_at, token_data, is_connected, "
+                    " last_synced) "
+                    "VALUES (:user_id, :platform, :shop_id, :shop_name, "
+                    " :access_token, :refresh_token, :token_expires_at, "
+                    " :token_data, :is_connected, :last_synced)"
+                ),
+                {
+                    "user_id": owner_id,
+                    "platform": row.get("platform"),
+                    "shop_id": row.get("shop_id"),
+                    "shop_name": row.get("shop_name"),
+                    # Values written before EncryptedText existed are plaintext;
+                    # re-inserting them this way leaves them readable, and they
+                    # are encrypted the next time the row is written.
+                    "access_token": row.get("access_token"),
+                    "refresh_token": row.get("refresh_token"),
+                    "token_expires_at": row.get("token_expires_at"),
+                    "token_data": row.get("token_data"),
+                    "is_connected": row.get("is_connected", 0),
+                    "last_synced": row.get("last_synced"),
+                },
+            )
+        print(
+            f"[migration] marketplace_accounts rebuilt for per-user ownership; "
+            f"{len(rows)} existing row(s) assigned to user_id={owner_id}"
+        )

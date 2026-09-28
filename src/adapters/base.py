@@ -78,15 +78,59 @@ class MarketplaceAdapter(ABC):
         """Return a CSS class or SVG path for the platform logo."""
         ...
 
+    def credentials_for(self, db, user_id, keys, platform=None):
+        """Resolve this adapter's API credentials for one user.
+
+        Credentials are per-user: each seller generates their own keys in their
+        own marketplace developer account. They live in
+        ``user_marketplace_credentials``, encrypted at rest.
+
+        Instance-wide values from ``config`` are used as a fallback so a
+        deployment that still has credentials in ``.env`` keeps working, and so
+        the local admin does not have to re-enter what is already configured.
+
+        Returns a dict with one entry per requested key, ``None`` where nothing
+        is configured.
+        """
+        platform_name = platform or self.PLATFORM
+        resolved = {}
+
+        rows = {}
+        if db is not None and user_id is not None:
+            from src.models import UserMarketplaceCredential
+
+            for row in (
+                db.query(UserMarketplaceCredential)
+                .filter(
+                    UserMarketplaceCredential.user_id == user_id,
+                    UserMarketplaceCredential.platform == platform_name,
+                )
+                .all()
+            ):
+                rows[row.credential_key] = row.value
+
+        for key in keys:
+            if rows.get(key):
+                resolved[key] = rows[key]
+                continue
+            # Fall back to the instance-wide setting of the same name.
+            resolved[key] = getattr(config, key.upper(), "") or None
+
+        return resolved
+
     # ---------- Token management ----------
 
-    def get_token(self, db: SessionLocal) -> Optional[Dict[str, Any]]:
-        """Get the stored OAuth token data for this platform.
+    def get_token(self, db: SessionLocal, user_id=None) -> Optional[Dict[str, Any]]:
+        """Get the stored OAuth token data for this platform and user.
 
-        Returns ``None`` if the platform is not connected,
-        or the token dict if it is.
+        Returns ``None`` if this user has not connected the platform.
+
+        ``user_id`` is required in practice; it is optional only so existing
+        callers keep working during the transition. Passing ``None`` looks at
+        rows with no owner, which will not match anything the application
+        creates.
         """
-        account = db.query(MarketplaceAccount).filter_by(platform=self.PLATFORM).first()
+        account = self._find_account(db, user_id)
         if not account or not account.is_connected:
             return None
 
@@ -97,7 +141,7 @@ class MarketplaceAdapter(ABC):
             if not refresh_result.get("success"):
                 return None
             # Reload account after refresh
-            account = db.query(MarketplaceAccount).filter_by(platform=self.PLATFORM).first()
+            account = self._find_account(db, user_id)
 
         token_data = (account.token_data or {})
         return {
@@ -105,6 +149,17 @@ class MarketplaceAdapter(ABC):
             "refresh_token": account.refresh_token,
             **token_data,
         }
+
+    def _find_account(self, db, user_id):
+        """The account row for this platform owned by ``user_id``."""
+        query = db.query(MarketplaceAccount).filter(
+            MarketplaceAccount.platform == self.PLATFORM
+        )
+        if user_id is None:
+            query = query.filter(MarketplaceAccount.user_id.is_(None))
+        else:
+            query = query.filter(MarketplaceAccount.user_id == user_id)
+        return query.first()
 
     def refresh_token(self, db: SessionLocal, account: MarketplaceAccount) -> Dict[str, Any]:
         """Refresh an expired access token using the stored refresh token.
@@ -118,15 +173,18 @@ class MarketplaceAdapter(ABC):
                      token_expires_in: int = None,
                      extra_data: dict = None,
                      shop_id: str = None,
-                     shop_name: str = None) -> MarketplaceAccount:
-        """Store OAuth tokens for this platform in the database.
+                     shop_name: str = None,
+                     user_id=None) -> MarketplaceAccount:
+        """Store OAuth tokens for this platform and user.
 
-        Creates or updates the marketplace account record.
+        Creates or updates the marketplace account record **for this user**.
+        Scoping matters: without it, two users connecting the same marketplace
+        would overwrite each other's tokens.
         """
-        account = db.query(MarketplaceAccount).filter_by(platform=self.PLATFORM).first()
+        account = self._find_account(db, user_id)
 
         if not account:
-            account = MarketplaceAccount(platform=self.PLATFORM)
+            account = MarketplaceAccount(platform=self.PLATFORM, user_id=user_id)
 
         account.access_token = access_token
         account.refresh_token = refresh_token
