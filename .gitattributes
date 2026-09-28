@@ -1,0 +1,35 @@
+# Line endings are pinned here rather than left to each machine's
+# core.autocrlf setting. Without this, a Windows contributor with
+# core.autocrlf=false could commit CRLF line endings, which breaks the
+# shell scripts on Linux with the classic:
+#   /usr/local/bin/marketplace-backup: /usr/bin/env: bad interpreter: No such file or directory
+# That error is a carriage return hiding at the end of the shebang line.
+
+# Shell scripts must keep LF — CRLF breaks the shebang and every heredoc.
+*.sh            text eol=lf
+*.service       text eol=lf
+*.timer         text eol=lf
+
+# Container and CI definitions: LF is expected by docker/build tooling.
+Dockerfile      text eol=lf
+*.dockerfile    text eol=lf
+docker-compose*.yml  text eol=lf
+*.yml           text eol=lf
+
+# Python is fine either way but LF is conventional and avoids diff noise.
+*.py            text eol=lf
+
+# Web assets.
+*.js            text eol=lf
+*.css           text eol=lf
+*.html          text eol=lf
+
+# Data files that must never be rewritten.
+*.db            binary
+*.db-wal        binary
+*.db-shm        binary
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.webp          binary
