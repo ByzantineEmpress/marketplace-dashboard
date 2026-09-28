@@ -1,0 +1,70 @@
+{# Self-serve signup — email + password.
+
+   Mirrors the Google flow: creating an account does NOT put you in a team.
+   You are sent to /onboarding to start your own workspace or ask to join
+   someone else's. #}
+{% extends "base.html" %}
+
+{% block content %}
+<div class="login-container">
+    <div class="login-card">
+        <h1>Create your account</h1>
+        <p class="login-subtitle">Your own inventory, or join an existing team</p>
+
+        {% if invited_to %}
+        <div class="flash flash--success" style="margin-bottom: 16px;">
+            🎉 You have been invited to join <strong>{{ invited_to }}</strong>! Create an account to accept.
+        </div>
+        {% endif %}
+
+        {% if error %}
+        <div class="flash flash--error">{{ error }}</div>
+        {% endif %}
+
+        <form class="login-form" action="/api/auth/signup" method="post">
+            {% csrf_token %}
+            <div class="form-group">
+                <label for="name">Your name</label>
+                <input type="text" id="name" name="name" autocomplete="name" maxlength="200">
+            </div>
+            <div class="form-group">
+                <label for="email">Email address</label>
+                <input type="email" id="email" name="email" required autocomplete="email" maxlength="255">
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required
+                       autocomplete="new-password" minlength="{{ min_password_length }}">
+                <div class="section-desc" style="margin-top: 4px;">
+                    At least {{ min_password_length }} characters.
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="confirm_password">Confirm password</label>
+                <input type="password" id="confirm_password" name="confirm_password" required
+                       autocomplete="new-password" minlength="{{ min_password_length }}">
+            </div>
+            <button type="submit" class="btn btn--primary btn--block">Create account</button>
+        </form>
+
+        {% if google_enabled %}
+        <div class="login-divider"><span>or</span></div>
+        <a class="btn btn--google btn--block" href="/auth/google">
+            <svg class="google-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.24h5.92c-.26 1.37-.87 2.53-1.83 3.39l2.94 2.29c1.71-1.57 2.69-3.88 2.69-6.67z"/>
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-2.94-2.29c-.81.57-1.84.95-3.1.95-2.36 0-4.36-1.58-5.12-3.72H3.79v4.13C5.61 21.63 8.6 23 12 23z"/>
+                <path fill="#FBBC05" d="M6.86 14.28c-.44-.82-.69-1.76-.69-2.78s.25-1.96.69-2.78V4.79H3.79C2.71 6.22 2 8.06 2 10s.71 3.78 1.79 5.21l3.07-2.32z"/>
+                <path fill="#EA4335" d="M12 5.98c1.33 0 2.54.46 3.49 1.36l2.61-2.6C17.46 2.98 14.97 2 12 2 8.61 2 5.62 3.38 3.79 5.61l3.07 2.32C7.64 6.44 9.64 5.98 12 5.98z"/>
+            </svg>
+            Sign up with Google
+        </a>
+        {% endif %}
+
+        <div style="margin-top: 18px; text-align: center;">
+            <a href="/login" style="font-size: 13px; color: var(--text-muted); text-decoration: none;">
+                Already have an account? Sign in
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

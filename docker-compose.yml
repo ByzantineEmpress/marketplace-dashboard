@@ -7,53 +7,87 @@ services:
     container_name: marketplace-dashboard
     restart: unless-stopped
     volumes:
+      # Bind-mounting the checkout means the *host* files are what run, not the
+      # code baked into the image — so `git pull` + restart is enough to deploy,
+      # and a stale image can never serve old code. It also persists the SQLite
+      # database and static/uploads on the host.
+      #
+      # There used to be a second mount, `db-data:/app`, which was a bug: in
+      # Compose the named volume is mounted after the bind mount and therefore
+      # HID the application code. A plain volume at /app cannot serve as
+      # "database storage" anyway, since the database lives inside /app.
       - .:/app
-      # Persist SQLite database outside the container
-      - db-data:/app
     environment:
       - APP_HOST=0.0.0.0
       - APP_PORT=8000
-      - DATABASE_URL=sqlite:///./marketplace.db
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///./marketplace.db}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme123}
+      # No default: a production deploy with the shipped password is the single
+      # worst thing that can happen here. Compose will fail loudly if unset.
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env before deploying}
+      # Hard-coded placeholder origins break CORS and the OAuth redirect
+      # checks. These come from .env so they match the real domain.
+      - APP_BASE_URL=${APP_BASE_URL:?set APP_BASE_URL in .env, e.g. https://your-domain.com}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:?set ALLOWED_ORIGINS in .env, e.g. https://your-domain.com}
+      # Must be true in production: the auth cookie is only marked Secure when
+      # this is on, and HSTS is disabled when it is off.
+      - REQUIRE_HTTPS=${REQUIRE_HTTPS:-true}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - GOOGLE_ALLOWED_EMAILS=${GOOGLE_ALLOWED_EMAILS:-}
+      - GOOGLE_DEV_MODE=${GOOGLE_DEV_MODE:-false}
       - EBAY_CLIENT_ID=${EBAY_CLIENT_ID:-${EBUY_CLIENT_ID:-}}
       - EBAY_CLIENT_SECRET=${EBAY_CLIENT_SECRET:-${EBUY_CLIENT_SECRET:-}}
       - ETSY_API_KEY=${ETSY_API_KEY:-${ESY_API_KEY:-}}
       - ETSY_API_SECRET=${ETSY_API_SECRET:-${ESY_API_SECRET:-}}
-      - ALLOWED_ORIGINS=http://localhost,https://your-domain.com
-      - REQUIRE_HTTPS=true
+      # Outbound email — required for email signup to complete
+      - MAIL_BACKEND=${MAIL_BACKEND:-}
+      - MAIL_PROVIDER=${MAIL_PROVIDER:-}
+      - MAIL_API_KEY=${MAIL_API_KEY:-}
+      - MAIL_API_URL=${MAIL_API_URL:-}
+      - MAIL_FROM=${MAIL_FROM:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
     expose:
       - "8000"
     security_opt:
       - no-new-privileges:true
-    # healthcheck:
-    #   test: ["CMD", "curl", "-f", "http://localhost:8000/"]
-    #   interval: 30s
-    #   timeout: 5s
-    #   retries: 3
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/login"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
-  # ---- Nginx reverse proxy ----
-  nginx:
-    image: nginx:alpine
-    container_name: marketplace-dashboard-nginx
-    restart: unless-stopped
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    tmpfs:
-      - /var/cache/nginx
-      - /var/run
-      - /tmp
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/ssl:/etc/nginx/ssl:ro  # self-signed or Let's Encrypt certs
-    depends_on:
-      - web
-    # Only expose if SSL certs exist
-    # command: ["nginx", "-g", "daemon off;"]
-
-volumes:
-  db-data:
+  # ---- Optional local reverse proxy ----
+  #
+  # NOT needed behind Cloudflare Tunnel or a Cloudflare-proxied origin, and it
+  # is commented out by default because it fails to start without certificates:
+  # it bind-mounts ./nginx/ssl, which does not exist in the repo, so the
+  # container would mount an empty/missing path and nginx would exit.
+  #
+  # Enable this only if you terminate TLS on this host instead of at the edge.
+  #
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: marketplace-dashboard-nginx
+  #   restart: unless-stopped
+  #   read_only: true
+  #   security_opt:
+  #     - no-new-privileges:true
+  #   tmpfs:
+  #     - /var/cache/nginx
+  #     - /var/run
+  #     - /tmp
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./nginx/ssl:/etc/nginx/ssl:ro   # must contain fullchain.pem/privkey.pem
+  #   depends_on:
+  #     - web

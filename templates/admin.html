@@ -256,10 +256,60 @@
 
     <!-- Outbound Email (SMTP) -->
     <section class="admin-section">
-        <h2>Outbound Email (SMTP)</h2>
+        <h2>Outbound Email</h2>
+
+        <div class="settings-form" id="mail-backend-settings">
+            <p>
+                Required for email signup: a new account is only created once the
+                confirmation link is opened, so these settings must work.
+            </p>
+            <div class="settings-grid">
+                <div class="settings-col">
+                    <div class="form-group">
+                        <label for="mail-backend">Transport</label>
+                        <select id="mail-backend" class="input-mono">
+                            <option value="">Disabled</option>
+                            <option value="http">Provider API (recommended)</option>
+                            <option value="smtp">SMTP server</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="mail-provider">API Provider</label>
+                        <select id="mail-provider" class="input-mono">
+                            <option value="resend">Resend</option>
+                            <option value="brevo">Brevo</option>
+                            <option value="postmark">Postmark</option>
+                            <option value="generic">Other (generic JSON API)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="settings-col">
+                    <div class="form-group">
+                        <label for="mail-api-url">API Endpoint URL (generic provider only)</label>
+                        <input type="text" id="mail-api-url" placeholder="https://api.example.com/send" class="input-mono" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="mail-api-key">API Key</label>
+                        <input type="password" id="mail-api-key" placeholder="••••••••••••••••" class="input-mono" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="mail-from">From Address (shown to recipients)</label>
+                        <input type="text" id="mail-from" placeholder="noreply@mail.yourdomain.com" class="input-mono">
+                    </div>
+                </div>
+            </div>
+            <div class="settings-actions">
+                <button class="btn btn--primary" id="save-mail-settings">Save Email Settings</button>
+                <span id="mail-settings-status" class="settings-status"></span>
+            </div>
+        </div>
+
+        <div class="settings-divider"></div>
+
         <div class="settings-form" id="smtp-settings">
             <p>
-                Optional SMTP mail credentials to dispatch automated team invitations and price alerts directly to teammates' inboxes.
+                SMTP credentials — used when Transport is set to <em>SMTP server</em>,
+                and for dispatching team invitations and price alerts.
             </p>
             <div class="settings-grid">
                 <div class="settings-col">
@@ -298,6 +348,104 @@
                 <span id="smtp-settings-status" class="settings-status"></span>
             </div>
         </div>
+
+        <div class="settings-divider"></div>
+        <p class="section-desc">
+            Signup confirmation emails need working outbound email — until this is
+            configured, nobody can complete an email signup. Send a test to prove
+            delivery before relying on it.
+        </p>
+        <div class="form-group form-group--inline">
+            <input type="email" id="smtp-test-recipient" placeholder="you@example.com" autocomplete="off">
+            <button class="btn" id="send-test-email">Send test email</button>
+        </div>
+        <span id="smtp-test-status" class="settings-status"></span>
+
+        <div class="settings-divider"></div>
+        <p class="section-desc">
+            <strong>Sending quota</strong> — signup mail stops working once the
+            provider's daily or monthly limit is reached, and signups will fail
+            at that point. Worth a glance before you expect new users.
+        </p>
+        <div id="mail-usage">
+            <p>Loading quota…</p>
+        </div>
+        <div class="settings-actions">
+            <button class="btn btn--sm" id="refresh-mail-usage">Refresh quota</button>
+            <span id="mail-usage-status" class="settings-status"></span>
+        </div>
+    </section>
+
+    <!-- Upload storage -->
+    <section class="admin-section">
+        <h2>Listing Images</h2>
+        <p class="section-desc">
+            Where uploaded listing images are stored. <strong>Local disk</strong> is
+            fine on a machine with a persistent volume, but on an ephemeral
+            container filesystem the images are lost on every redeploy — use
+            <strong>S3</strong> there.
+        </p>
+        <div class="settings-grid">
+            <div class="settings-col">
+                <div class="form-group">
+                    <label for="upload-backend">Storage</label>
+                    <select id="upload-backend" class="input-mono">
+                        <option value="local">Local disk (static/uploads)</option>
+                        <option value="s3">S3 bucket</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="s3-bucket">S3 Bucket</label>
+                    <input type="text" id="s3-bucket" placeholder="my-marketplace-images" class="input-mono">
+                </div>
+                <div class="form-group">
+                    <label for="s3-region">S3 Region</label>
+                    <input type="text" id="s3-region" placeholder="us-east-1" class="input-mono">
+                </div>
+            </div>
+            <div class="settings-col">
+                <div class="form-group">
+                    <label for="s3-access-key-id">Access Key ID</label>
+                    <input type="text" id="s3-access-key-id" class="input-mono" autocomplete="off">
+                    <div class="section-desc" style="margin-top: 4px;">
+                        Leave both credentials blank on EC2/Lightsail to use the
+                        instance role instead.
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="s3-secret-access-key">Secret Access Key</label>
+                    <input type="password" id="s3-secret-access-key" placeholder="••••••••••••" class="input-mono" autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="s3-public-base-url">Public Base URL (optional)</label>
+                    <input type="text" id="s3-public-base-url" placeholder="https://cdn.example.com" class="input-mono">
+                </div>
+                <div class="form-group">
+                    <label for="s3-endpoint-url">Custom Endpoint (optional)</label>
+                    <input type="text" id="s3-endpoint-url" placeholder="for R2 / MinIO / Wasabi" class="input-mono">
+                </div>
+            </div>
+        </div>
+        <div class="settings-actions">
+            <button class="btn btn--primary" id="save-upload-settings">Save Image Storage</button>
+            <span id="upload-settings-status" class="settings-status"></span>
+        </div>
+    </section>
+
+    <!-- Join requests (people asking to join a team you own) -->
+    <section class="admin-section">
+        <h2>Join Requests <span id="join-requests-badge" class="team-role-badge"></span></h2>
+        <p class="section-desc">
+            People who entered your email address and asked to join a team you own.
+            Approving adds them as a member of that team and shows them its listings;
+            declining is recorded and they are not told which team it was.
+        </p>
+        <div id="join-requests-list">
+            <p>Loading join requests...</p>
+        </div>
+        <div class="teams-actions">
+            <span id="join-requests-status" class="settings-status"></span>
+        </div>
     </section>
 
     <!-- Teams (shared inventory) -->
@@ -305,8 +453,9 @@
         <h2>Teams</h2>
         <p class="section-desc">
             Teams share one inventory. Everyone you add here (by email) can sign in —
-            with Google — and see the same listings. New sign-ins join the
-            <em>Default Team</em> automatically, so sharing works out of the box.
+            with Google — and see the same listings. Anyone who signs in <em>without</em>
+            an invite gets their own private workspace, so new accounts never see
+            another team's inventory.
         </p>
         <div id="teams-list">
             <p>Loading teams...</p>
@@ -317,6 +466,22 @@
                 <button class="btn btn--primary" id="create-team">Create Team</button>
             </div>
             <span id="teams-status" class="settings-status"></span>
+        </div>
+    </section>
+
+    <!-- Users & admin access -->
+    <section class="admin-section">
+        <h2>Users</h2>
+        <p class="section-desc">
+            Everyone with an account on this instance. Admins can open this page,
+            manage marketplace credentials, and assign admin rights to others.
+            Revoking admin does not remove anyone from their teams.
+        </p>
+        <div id="users-list">
+            <p>Loading users...</p>
+        </div>
+        <div class="teams-actions">
+            <span id="users-status" class="settings-status"></span>
         </div>
     </section>
 

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Marketplace Dashboard database backup nightly
+
+[Timer]
+# 03:15 local time, with a little jitter so it never collides with other jobs.
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=marketplace-backup.service
+
+[Install]
+WantedBy=timers.target

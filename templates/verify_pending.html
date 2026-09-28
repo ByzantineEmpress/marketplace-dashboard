@@ -1,0 +1,54 @@
+{# Holding page while a signup waits for its email address to be confirmed.
+
+   No account, team or membership exists at this point — only a pending
+   signup. Clicking the emailed link is what creates the account. #}
+{% extends "base.html" %}
+
+{% block content %}
+<div class="login-container">
+    <div class="login-card">
+        <h1>Check your email</h1>
+        <p class="login-subtitle">
+            {% if email %}We sent a confirmation link to <strong>{{ email }}</strong>.{% else %}We sent you a confirmation link.{% endif %}
+        </p>
+
+        {% if expired %}
+        <div class="flash flash--error">
+            That link has expired. Send yourself a new one below — links last
+            {{ expires_minutes }} minutes.
+        </div>
+        {% elif sent %}
+        <div class="flash flash--success">A new confirmation link is on its way.</div>
+        {% endif %}
+
+        <div id="verify-status" class="settings-status"></div>
+
+        {% if not smtp_configured %}
+        <div class="flash flash--error" style="margin-bottom: 12px;">
+            <strong>Outbound email isn't configured yet.</strong>
+            An administrator needs to set the SMTP details in
+            <em>Admin → Outbound Email</em> before confirmation emails can be
+            delivered. Nothing has been created for this address.
+        </div>
+        {% endif %}
+
+        <p class="section-desc">
+            Click the link in the email to finish creating your account. Until
+            then no account or workspace exists for this address, and the link
+            can only be used once.
+        </p>
+
+        <form id="resend-form" class="login-form" action="/api/auth/resend-verification" method="post">
+            {% csrf_token %}
+            <input type="hidden" name="email" value="{{ email }}">
+            <button type="submit" class="btn btn--block" id="resend-btn">Send a new link</button>
+        </form>
+
+        <div style="margin-top: 18px; text-align: center;">
+            <a href="/login" style="font-size: 13px; color: var(--text-muted); text-decoration: none;">
+                Back to sign in
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -9,6 +9,7 @@ structured JSON so the client can handle errors gracefully.
 """
 
 from datetime import datetime, timedelta
+import secrets
 import time
 from urllib.parse import quote
 
@@ -18,8 +19,30 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from src.database import SessionLocal
-from src.models import Listing, User, Team, TeamMembership, AuthSession
+from src.auth_passwords import (
+    MIN_PASSWORD_LENGTH,
+    hash_password,
+    validate_password_strength,
+    verify_password,
+)
+from src.email_verification import (
+    MAX_VERIFICATION_SENDS,
+    VERIFICATION_TTL_MINUTES,
+    new_token,
+    token_fingerprint,
+)
+from src import mailer, storage
+from src.database import SessionLocal, new_invite_code
+from src.models import (
+    AuthSession,
+    Listing,
+    PendingSignup,
+    RateLimitEvent,
+    Team,
+    TeamJoinRequest,
+    TeamMembership,
+    User,
+)
 from src.config import config, persist_env
 
 from jinja2.ext import Extension
@@ -118,7 +141,8 @@ def _ensure_admin_team_membership(db: Session, user):
     team = db.query(Team).filter(Team.name == "Default Team").first()
     if team is None:
         import secrets
-        team = Team(name="Default Team", invite_code=secrets.token_urlsafe(16))
+        team = Team(name="Default Team", invite_code=_new_invite_code(),
+                    created_by_email=f"{config.ADMIN_USERNAME}@local".lower())
         db.add(team)
         db.flush()
     already = (
@@ -130,9 +154,39 @@ def _ensure_admin_team_membership(db: Session, user):
         db.add(TeamMembership(team_id=team.id, user_id=user.id, role="owner"))
 
 
+def _new_invite_code() -> str:
+    """Generate a team invite code with full cryptographic entropy.
+
+    16 bytes from ``secrets`` (a CSPRNG) = 128 bits, rendered as 22 URL-safe
+    characters. That is far beyond guessing range: even at a million requests
+    per second the expected search is ~10^22 years, so the code alone is a
+    sufficient bearer credential for joining a team.
+
+    All invite-code creation goes through here so the strength can never
+    silently regress in one call site but not another.
+    """
+    return new_invite_code()
+
+
+# Minimum acceptable invite-code length. Codes are 22 chars; anything shorter
+# is treated as invalid without a database lookup, so a legacy or hand-made
+# short code can never be matched — and there is nothing to brute-force.
+INVITE_CODE_MIN_LENGTH = 20
+
+
+def _looks_like_invite_code(code) -> bool:
+    """Cheap structural pre-check for an invite code (no DB access)."""
+    return isinstance(code, str) and len(code) >= INVITE_CODE_MIN_LENGTH
+
+
+# How long an unauthenticated visitor's invite is remembered in the
+# ``pending_invite`` cookie before it is discarded.
+PENDING_INVITE_MAX_AGE_S = 15 * 60
+
+
 def _process_pending_invite(db: Session, user, invite_code: str):
     """If an invite_code is provided, add user to that team as a member."""
-    if not invite_code:
+    if not _looks_like_invite_code(invite_code):
         return None
     team = db.query(Team).filter(Team.invite_code == invite_code).first()
     if team:
@@ -181,7 +235,11 @@ def _ensure_user_tenant_membership(db: Session, user, pending_invite: str = ""):
             ws_name = f"{base_name} {secrets.token_hex(4)}"
             break
 
-    new_team = Team(name=ws_name, invite_code=secrets.token_urlsafe(16))
+    new_team = Team(
+        name=ws_name,
+        invite_code=_new_invite_code(),
+        created_by_email=(user.email or "").lower() or None,
+    )
     db.add(new_team)
     db.flush()
     db.add(TeamMembership(team_id=new_team.id, user_id=user.id, role="owner"))
@@ -213,8 +271,31 @@ async def login_page(request: Request):
         context={
             "error": error,
             "invited_to": invited_to,
+            "verified": request.query_params.get("verified") == "1",
+            "verified_email": request.query_params.get("email", ""),
             "google_enabled": bool(config.GOOGLE_CLIENT_ID or config.GOOGLE_DEV_MODE),
             "csrf_token": csrf_token,
+        },
+    )
+
+
+@page_router.get("/signup")
+async def signup_page(request: Request):
+    """Self-serve account creation (email + password).
+
+    Mirrors the Google path: signing up creates an account with no team, and
+    /onboarding then asks whether to start a workspace or request to join one.
+    """
+    import secrets
+    return templates.TemplateResponse(
+        request=request,
+        name="signup.html",
+        context={
+            "error": request.query_params.get("error", ""),
+            "invited_to": request.query_params.get("invited_to", ""),
+            "google_enabled": bool(config.GOOGLE_CLIENT_ID or config.GOOGLE_DEV_MODE),
+            "csrf_token": secrets.token_hex(16),
+            "min_password_length": MIN_PASSWORD_LENGTH,
         },
     )
 
@@ -222,6 +303,8 @@ async def login_page(request: Request):
 @page_router.get("/join/{invite_code}")
 async def join_team_page(invite_code: str, request: Request, db: Session = Depends(get_db)):
     """Accept a shareable team invite link."""
+    if not _looks_like_invite_code(invite_code):
+        return RedirectResponse(url="/login?error=Invalid+or+expired+team+invite+link", status_code=302)
     team = db.query(Team).filter(Team.invite_code == invite_code).first()
     if not team:
         return RedirectResponse(url="/login?error=Invalid+or+expired+team+invite+link", status_code=302)
@@ -238,7 +321,10 @@ async def join_team_page(invite_code: str, request: Request, db: Session = Depen
         dest = _safe_relative_url(f"/dashboard?team={int(team.id)}")
         return RedirectResponse(url=dest, status_code=302)
 
-    # User is not logged in: store invite in cookie and prompt sign in
+    # User is not logged in: store invite in cookie and prompt sign in.
+    # 15 minutes is enough to finish a sign-in (including the Google round
+    # trip) but keeps the window in which a forgotten cookie could silently
+    # attach a later sign-in to this team as short as practical.
     safe_invited_to = quote(str(team.name)[:50], safe="")
     dest = _safe_relative_url(f"/login?invited_to={safe_invited_to}", default="/login")
     response = RedirectResponse(url=dest, status_code=302)
@@ -247,7 +333,7 @@ async def join_team_page(invite_code: str, request: Request, db: Session = Depen
         value=invite_code,
         httponly=True,
         samesite="lax",
-        max_age=3600,
+        max_age=PENDING_INVITE_MAX_AGE_S,
         secure=config.REQUIRE_HTTPS,
     )
     return response
@@ -319,7 +405,7 @@ async def google_login_start(request: Request):
     # (CSRF protection). Stored in a short-lived cookie, checked on return.
     state = secrets.token_urlsafe(16)
     url = (
-        "https://accounts.google.com/oauth2/v2/auth?"
+        "https://accounts.google.com/o/oauth2/v2/auth?"
         "client_id=" + quote(config.GOOGLE_CLIENT_ID)
         + "&redirect_uri=" + quote(f"{config.APP_BASE_URL}/auth/google/callback")
         + "&response_type=code"
@@ -389,21 +475,20 @@ async def google_dev_login(request: Request):
             if is_admin:
                 user.is_admin = True
         pending_invite = request.cookies.get("pending_invite", "")
-        joined_team = _ensure_user_tenant_membership(db, user, pending_invite)
-        joined_team_id = joined_team.id if joined_team else None
+        # Same routing rule as the real Google callback, so the simulator
+        # cannot drift from production behaviour.
+        dest = _resolve_signin_destination(db, user, pending_invite)
         db.add(AuthSession(token=token, user_id=user.id, expires_at=datetime.utcnow() + timedelta(days=7)))
         db.commit()
     finally:
         db.close()
 
-    dest = f"/dashboard?team={int(joined_team_id)}" if (pending_invite and joined_team_id) else "/dashboard"
-    dest = _safe_relative_url(dest)
     response = RedirectResponse(url=dest, status_code=303)
     response.set_cookie(
         key="auth_token",
         value=token,
         httponly=True,
-        samesite="strict",
+        samesite="lax",
         max_age=86400 * 7,
         secure=config.REQUIRE_HTTPS,
     )
@@ -497,24 +582,82 @@ async def google_login_callback(request: Request):
         else:
             user.name = name  # keep the display name up to date
         pending_invite = request.cookies.get("pending_invite", "")
-        joined_team = _ensure_user_tenant_membership(db, user, pending_invite)
-        joined_team_id = joined_team.id if joined_team else None
+        dest = _resolve_signin_destination(db, user, pending_invite)
         db.add(AuthSession(token=token, user_id=user.id, expires_at=datetime.utcnow() + timedelta(days=7)))
         db.commit()
     finally:
         db.close()
-    dest = f"/dashboard?team={int(joined_team_id)}" if (pending_invite and joined_team_id) else "/dashboard"
-    dest = _safe_relative_url(dest)
     response = RedirectResponse(url=dest, status_code=303)
     response.set_cookie(
         key="auth_token", value=token,
-        httponly=True, samesite="strict", max_age=86400 * 7,
+        # Lax (not strict): this cookie is set on a response to a navigation
+        # arriving from accounts.google.com. With SameSite=Strict the browser
+        # withholds it on the immediately following /dashboard request, so the
+        # user bounces straight back to /login?error=auth_required.
+        httponly=True, samesite="lax", max_age=86400 * 7,
         secure=config.REQUIRE_HTTPS,
     )
     response.delete_cookie("google_oauth_state")
     if request.cookies.get("pending_invite"):
         response.delete_cookie("pending_invite")
     return response
+
+
+def _resolve_signin_destination(db: Session, user, pending_invite: str = "") -> str:
+    """Decide where a freshly signed-in user should land.
+
+    Single source of truth for both the real Google callback and the local
+    dev-login simulator, so the two cannot drift apart:
+
+    * an invited user joins that team (explicit invite link);
+    * a user who already belongs to a team goes to the dashboard;
+    * a genuinely new account goes to /onboarding, where they choose between
+      their own private workspace and asking to join someone else's team.
+
+    Returns the destination path. Membership changes are flushed, not
+    committed — the caller owns the transaction.
+    """
+    if pending_invite:
+        joined_team = _ensure_user_tenant_membership(db, user, pending_invite)
+        if joined_team is not None:
+            return _safe_relative_url(f"/dashboard?team={int(joined_team.id)}")
+
+    has_team = (
+        db.query(TeamMembership)
+        .filter(TeamMembership.user_id == user.id)
+        .first()
+        is not None
+    )
+    return "/dashboard" if has_team else "/onboarding"
+
+
+# -- Onboarding: new accounts pick a team instead of being auto-enrolled --
+
+@page_router.get("/onboarding")
+async def onboarding_page(request: Request):
+    """First-run chooser for a brand-new account.
+
+    A new sign-in deliberately gets *no* team: they either create their own
+    private workspace or ask to join someone else's. Anyone who already
+    belongs to a team is sent straight to the dashboard.
+    """
+    user = require_auth(request)
+    if not user:
+        return RedirectResponse(url="/login?error=auth_required", status_code=302)
+    if user.get("team_ids"):
+        return RedirectResponse(url="/dashboard", status_code=302)
+    return templates.TemplateResponse(
+        request=request,
+        name="onboarding.html",
+        context={
+            "identity": user["name"],
+            "is_admin": bool(user.get("is_admin")),
+            "active": "",
+            "description_max": DESCRIPTION_MAX_LENGTH,
+            "error": request.query_params.get("error", ""),
+        },
+    )
+
 
 # ------------------------------------------------------------------ #
 #  API ROUTER — JSON endpoints consumed by the JS front-end.
@@ -541,19 +684,268 @@ def _record_failed_attempt(ip: str):
     attempts.append(now)
     LOGIN_ATTEMPTS[ip] = attempts
 
+
+# ------------------------------------------------------------------ #
+#  Rate limiting for team join requests.
+#
+#  Join requests are the one place an authenticated stranger can cause
+#  something to appear in front of another user, so they are limited on
+#  four independent axes. Each axis is checked before anything is written;
+#  exceeding any one of them refuses the request.
+#
+#  NOTE: counters live in the database (rate_limit_events), not in process
+#  memory. An in-memory counter is per-worker, so running N uvicorn workers
+#  would silently multiply every limit by N. Persisting them keeps the limits
+#  honest no matter how many workers or containers are running.
+#
+#  SQLite serialises writers, so each check is one small transaction. At this
+#  app's scale that is negligible; if it ever isn't, swap this module's two
+#  functions for Redis and nothing else needs to change.
+# ------------------------------------------------------------------ #
+
+# (label, max events, window seconds) — the window is also the cooldown.
+RATE_LIMITS = {
+    "user_burst": (1, 10 * 60),          # one attempt per 10 minutes
+    "user_daily": (5, 24 * 60 * 60),     # 5 per day per account
+    "team_hourly": (3, 60 * 60),         # 3 per hour per target team
+    "team_daily": (10, 24 * 60 * 60),    # 10 per day per target team
+    "ip_daily": (10, 24 * 60 * 60),      # 10 per day per source address
+    "global_daily": (200, 24 * 60 * 60),  # ceiling for the whole instance
+
+    # Self-serve signup. Creating an account is cheap for us but expensive in
+    # bcrypt CPU, and it is the front door to the whole app, so it is capped
+    # per source address and overall.
+    "signup_ip_hourly": (3, 60 * 60),         # 3 signups per hour per IP
+    "signup_ip_daily": (10, 24 * 60 * 60),    # 10 per day per IP
+    "signup_global_daily": (50, 24 * 60 * 60),  # 50 per day for the instance
+
+    # Resending a confirmation mail is an amplifier aimed at a third party's
+    # inbox, so it is capped per address as well as per source.
+    "resend_email_hourly": (3, 60 * 60),
+    "resend_ip_hourly": (5, 60 * 60),
+}
+
+# Longest window in RATE_LIMITS; anything older is pruned on each write.
+_RATE_MAX_WINDOW_S = max(window for _, window in RATE_LIMITS.values())
+
+# Kept so existing tests that call `_RATE_BUCKETS.clear()` keep working; the
+# real counters now live in the database (see _rate_prune()).
+_RATE_BUCKETS: dict[str, list[float]] = {}
+
+
+def _rate_check(key: str, limit: str, db: Session | None = None) -> bool:
+    """Record an event for ``key`` if it is within the named limit.
+
+    Returns True when allowed (and records it), False when the limit is hit.
+    """
+    max_events, window = RATE_LIMITS[limit]
+    bucket = f"{limit}:{key}"
+    cutoff = datetime.utcnow() - timedelta(seconds=window)
+
+    own_session = db is None
+    session = None
+    try:
+        session = db if db is not None else SessionLocal()
+        # Prune expired rows opportunistically so the table stays small.
+        session.query(RateLimitEvent).filter(
+            RateLimitEvent.created_at < datetime.utcnow() - timedelta(seconds=_RATE_MAX_WINDOW_S)
+        ).delete(synchronize_session=False)
+
+        used = (
+            session.query(RateLimitEvent)
+            .filter(RateLimitEvent.bucket == bucket, RateLimitEvent.created_at >= cutoff)
+            .count()
+        )
+        if used >= max_events:
+            session.commit()
+            return False
+
+        session.add(RateLimitEvent(bucket=bucket, created_at=datetime.utcnow()))
+        session.commit()
+        return True
+    except Exception:
+        # Never let a limiter failure take down login/signup. Fail open, but
+        # say so in the log rather than silently. Note `session` may still be
+        # None here if even opening the session failed.
+        if session is not None:
+            try:
+                session.rollback()
+            except Exception:
+                pass
+        print(f"[ratelimit] check failed for {bucket!r}; allowing request")
+        return True
+    finally:
+        if own_session and session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+
+def _rate_retry_after(key: str, limit: str) -> int:
+    """Seconds until this key may act again (for the error message)."""
+    max_events, window = RATE_LIMITS[limit]
+    bucket = f"{limit}:{key}"
+    cutoff = datetime.utcnow() - timedelta(seconds=window)
+    session = None
+    try:
+        session = SessionLocal()
+        oldest = (
+            session.query(RateLimitEvent.created_at)
+            .filter(RateLimitEvent.bucket == bucket, RateLimitEvent.created_at >= cutoff)
+            .order_by(RateLimitEvent.created_at.asc())
+            .first()
+        )
+    except Exception:
+        return 0
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+    if not oldest or oldest[0] is None:
+        return 0
+    elapsed = (datetime.utcnow() - oldest[0]).total_seconds()
+    return max(1, int(window - elapsed))
+
+
+def _rate_prune() -> int:
+    """Delete every recorded event. Used by tests and maintenance."""
+    session = SessionLocal()
+    try:
+        removed = session.query(RateLimitEvent).delete(synchronize_session=False)
+        session.commit()
+        return removed
+    finally:
+        session.close()
+
+
+def client_ip(request: Request) -> str:
+    """Best available client address, honouring the reverse proxy.
+
+    Behind Cloudflare every request arrives from the same edge IP, so raw
+    ``request.client.host`` would put *all* visitors in one rate-limit bucket
+    — the IP limits would throttle everyone together and an attacker could
+    exhaust them for everybody.
+
+    ``CF-Connecting-IP`` is preferred because Cloudflare sets it to the true
+    caller and overwrites anything the client sent. ``X-Forwarded-For`` is the
+    fallback for other proxies; only its first (left-most) entry is trusted,
+    since the rest are client-supplied and trivially spoofed.
+
+    Spoofing is only possible if a request reaches the origin *without* going
+    through the proxy, which is why the origin should be firewalled to your
+    proxy's addresses.
+    """
+    cf_ip = request.headers.get("cf-connecting-ip", "").strip()
+    if cf_ip:
+        return cf_ip
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip:
+        return real_ip
+    return request.client.host if request.client else "unknown"
+
+
+# Free-text limits for a join request description.
+DESCRIPTION_MAX_LENGTH = 300
+DESCRIPTION_MIN_LENGTH = 3
+
+
+def _sanitize_description(raw) -> str:
+    """Return a safe one-line description, or "" if unusable.
+
+    Deliberately strict — this text is stored and later displayed to another
+    user (the team owner):
+
+    * non-strings are coerced, never trusted as objects;
+    * control characters (including NUL, CR, LF and tabs) are stripped so the
+      value cannot forge log lines or break out of the UI element;
+    * angle brackets are removed so no markup — script, img, svg — survives to
+      the stored value even before Jinja's autoescaping is applied;
+    * the result is collapsed to a single spaced line and hard-truncated.
+    """
+    if not isinstance(raw, str):
+        return ""
+    # Drop C0/C1 control characters and DEL.
+    cleaned = "".join(ch for ch in raw if ch.isprintable() and ch not in "\r\n\t")
+    # Remove markup delimiters entirely rather than relying on escaping alone.
+    cleaned = cleaned.replace("<", "").replace(">", "")
+    # Collapse runs of whitespace into single spaces.
+    cleaned = " ".join(cleaned.split())
+    if len(cleaned) > DESCRIPTION_MAX_LENGTH:
+        cleaned = cleaned[:DESCRIPTION_MAX_LENGTH].rstrip()
+    return cleaned
+
+
+def _authenticate_credentials(db, username: str, password: str):
+    """Resolve a username/password attempt to a User, or None.
+
+    Two kinds of account can sign in this way:
+
+    * the bootstrap administrator from .env (ADMIN_USERNAME / ADMIN_PASSWORD,
+      stored as provider "local"), and
+    * a self-serve account created at /signup (provider "password"), which
+      matches on **email** and is verified against its bcrypt hash.
+
+    Google accounts are deliberately not reachable here — a password cannot
+    be set on an account whose identity was proven by Google.
+    """
+    import hmac
+
+    # --- 1. bootstrap administrator ---
+    if hmac.compare_digest(username, config.ADMIN_USERNAME.strip()) and \
+            hmac.compare_digest(password, config.ADMIN_PASSWORD):
+        admin = db.query(User).filter(User.provider == "local").first()
+        if admin is None:
+            admin = User(
+                email=f"{config.ADMIN_USERNAME}@local",
+                name=username,
+                provider="local",
+                is_admin=True,
+            )
+            db.add(admin)
+            db.flush()
+        else:
+            admin.is_admin = True
+        return admin
+
+    # --- 2. self-serve password account ---
+    if not username or not password:
+        return None
+    candidate = (
+        db.query(User)
+        .filter(User.email == username.lower(), User.provider == "password")
+        .first()
+    )
+    if candidate is None:
+        # Spend roughly the same time as a real check so the response does not
+        # reveal whether the address exists.
+        verify_password(password, "$2b$12$" + "." * 53)
+        return None
+    if verify_password(password, candidate.password_hash or ""):
+        return candidate
+    return None
+
+
 @api_router.post("/auth/login")
 async def login(request: Request):
-    """Authenticate admin.
+    """Authenticate a local account.
 
     Accepts BOTH JSON bodies (API clients) and classic HTML form posts
     (the login page) — the form has no way to send JSON.
     Protected with rate limiting and constant-time password check.
     """
-    client_ip = request.client.host if request.client else "unknown"
+    peer_ip = client_ip(request)
     content_type = request.headers.get("content-type", "")
     is_json = "application/json" in content_type
 
-    if _is_rate_limited(client_ip):
+    if _is_rate_limited(peer_ip):
         if not is_json:
             return RedirectResponse(url="/login?error=Too+many+failed+attempts.+Please+wait+60+seconds", status_code=303)
         return JSONResponse(status_code=429, content={"ok": False, "error": "Too many failed login attempts. Please wait 60 seconds."})
@@ -563,58 +955,331 @@ async def login(request: Request):
     except Exception:
         body = {}
 
-    username = str(body.get("username", ""))
+    username = str(body.get("username", "")).strip()
     password = str(body.get("password", ""))
 
-    import hmac
-    valid_user = hmac.compare_digest(username.strip(), config.ADMIN_USERNAME.strip())
-    valid_pass = hmac.compare_digest(password, config.ADMIN_PASSWORD)
+    db = SessionLocal()
+    try:
+        user = _authenticate_credentials(db, username, password)
+        if user is None:
+            _record_failed_attempt(peer_ip)
+            if not is_json:
+                # Deliberately generic about *which* part was wrong (that would
+                # leak whether an address is registered), but point at the two
+                # things people actually get wrong.
+                return RedirectResponse(
+                    url="/login?error=That+email+address+and+password+didn%27t+match"
+                        "+an+account.+If+you+signed+up+with+Google%2C+use+the"
+                        "+Google+button+below.",
+                    status_code=303,
+                )
+            return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid credentials"})
 
-    if valid_user and valid_pass:
-        LOGIN_ATTEMPTS.pop(client_ip, None)
-        import secrets
+        LOGIN_ATTEMPTS.pop(peer_ip, None)
         token = secrets.token_urlsafe(48)  # exactly 64 chars — matches require_auth()
-        # The password login maps to the local admin user, so Teams work
-        # for them too (they own the default team).
-        db = SessionLocal()
-        try:
-            user = db.query(User).filter(User.provider == "local").first()
-            if user is None:
-                user = User(email=config.ADMIN_USERNAME + "@local", name=username, provider="local", is_admin=True)
-                db.add(user)
-                db.flush()
-            else:
-                user.is_admin = True
-            _ensure_admin_team_membership(db, user)
-            pending_invite = request.cookies.get("pending_invite", "")
-            joined_team = _process_pending_invite(db, user, pending_invite)
-            joined_team_id = joined_team.id if joined_team else None
-            db.add(AuthSession(token=token, user_id=user.id, expires_at=datetime.utcnow() + timedelta(days=7)))
-            db.commit()
-        finally:
-            db.close()
-        dest = f"/dashboard?team={int(joined_team_id)}" if joined_team_id else "/dashboard"
-        dest = _safe_relative_url(dest)
-        if not is_json:
-            response = RedirectResponse(url=dest, status_code=303)
-        else:
-            response = JSONResponse(content={"ok": True, "token": token})
-        response.set_cookie(
-            key="auth_token",
-            value=token,
-            httponly=True,
-            samesite="strict",
-            max_age=86400 * 7,  # 7 days
-            secure=config.REQUIRE_HTTPS,
-        )
-        if request.cookies.get("pending_invite"):
-            response.delete_cookie("pending_invite")
-        return response
 
-    _record_failed_attempt(client_ip)
-    if not is_json:
-        return RedirectResponse(url="/login?error=Invalid+credentials", status_code=303)
-    return JSONResponse(status_code=401, content={"ok": False, "error": "Invalid credentials"})
+        # The bootstrap admin signs in with a username, not an email, and must
+        # always own its team. Self-serve accounts go through the same routing
+        # as a Google sign-in.
+        if user.provider == "local":
+            _ensure_admin_team_membership(db, user)
+            already_has_team = True
+        else:
+            already_has_team = (
+                db.query(TeamMembership)
+                .filter(TeamMembership.user_id == user.id)
+                .first()
+                is not None
+            )
+
+        if already_has_team:
+            joined = _process_pending_invite(
+                db, user, request.cookies.get("pending_invite", ""))
+            dest = (
+                _safe_relative_url(f"/dashboard?team={int(joined.id)}")
+                if joined is not None
+                else "/dashboard"
+            )
+        else:
+            dest = _resolve_signin_destination(db, user, "")
+
+        db.add(AuthSession(
+            token=token,
+            user_id=user.id,
+            expires_at=datetime.utcnow() + timedelta(days=7),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    response = (
+        RedirectResponse(url=dest, status_code=303)
+        if not is_json
+        else JSONResponse(content={"ok": True, "token": token})
+    )
+    # SameSite=lax (not strict): the cookie is set on a response to a
+    # navigation that may have arrived cross-site, and strict would withhold
+    # it on the very next request.
+    response.set_cookie(
+        key="auth_token",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=86400 * 7,  # 7 days
+        secure=config.REQUIRE_HTTPS,
+    )
+    if request.cookies.get("pending_invite"):
+        response.delete_cookie("pending_invite")
+    return response
+
+
+@api_router.post("/auth/signup")
+async def signup(request: Request):
+    """Create a self-serve account with an email address and password.
+
+    The new account is deliberately given NO team: like the Google flow, it is
+    routed to /onboarding to choose between its own workspace and asking to
+    join an existing team.
+    """
+    peer_ip = client_ip(request)
+    content_type = request.headers.get("content-type", "")
+    is_json = "application/json" in content_type
+
+    try:
+        body = await request.json() if is_json else dict(await request.form())
+    except Exception:
+        body = {}
+
+    def failure(message: str, status: int = 400):
+        if is_json:
+            return JSONResponse(status_code=status, content={"ok": False, "error": message})
+        return RedirectResponse(url=f"/signup?error={quote(message)}", status_code=303)
+
+    email = str(body.get("email", "")).strip().lower()
+    name = str(body.get("name", "")).strip()
+    password = str(body.get("password", ""))
+    confirm = str(body.get("confirm_password", body.get("password_confirm", "")))
+
+    # --- validation (before consuming rate-limit budget) ---
+    if not email or "@" not in email or len(email) > 255 or " " in email or email.startswith("@"):
+        return failure("Enter a valid email address")
+    if name and len(name) > 200:
+        return failure("That name is too long")
+    strength_error = validate_password_strength(password)
+    if strength_error:
+        return failure(strength_error)
+    if confirm and confirm != password:
+        return failure("Those passwords do not match")
+    # Never allow a self-serve account to collide with the bootstrap admin's
+    # synthetic address.
+    if email == f"{config.ADMIN_USERNAME}@local".lower():
+        return failure("That address is reserved")
+
+    # --- rate limits ---
+    for limit in ("signup_ip_hourly", "signup_ip_daily", "signup_global_daily"):
+        key = peer_ip if limit != "signup_global_daily" else "all"
+        if not _rate_check(key, limit):
+            retry = _rate_retry_after(key, limit)
+            if is_json:
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "ok": False,
+                        "error": "Too many signups. Please try again later.",
+                        "retry_after_seconds": retry,
+                    },
+                    headers={"Retry-After": str(retry)},
+                )
+            return RedirectResponse(
+                url="/signup?error=Too+many+signups.+Please+try+again+later",
+                status_code=303,
+            )
+
+    db = SessionLocal()
+    try:
+        existing = db.query(User).filter(User.email == email).first()
+        if existing is not None:
+            # Deliberately vague: do not confirm which addresses are taken.
+            return failure("That email address cannot be used to sign up")
+
+        # Nothing is created yet — no user, no team, no membership. Only a
+        # pending record holding the (hashed) password and the confirmation
+        # token. The account is created when the emailed link is opened.
+        token = new_token()
+        now = datetime.utcnow()
+        pending = db.query(PendingSignup).filter(PendingSignup.email == email).first()
+        if pending is None:
+            pending = PendingSignup(email=email, send_count=0)
+            db.add(pending)
+        pending.name = name or email.split("@")[0]
+        pending.password_hash = hash_password(password)
+        pending.token_hash = token_fingerprint(token)
+        pending.expires_at = now + timedelta(minutes=VERIFICATION_TTL_MINUTES)
+        pending.send_count = (pending.send_count or 0) + 1
+        pending.last_sent_at = now
+        db.commit()
+        pending_id = pending.id
+    finally:
+        db.close()
+
+    verify_url = f"{config.APP_BASE_URL}/verify-email?token={quote(token)}"
+    sent, send_error = mailer.send_verification_email(
+        email, name or "", verify_url, VERIFICATION_TTL_MINUTES)
+
+    if not sent:
+        # Without a delivered link the signup cannot complete, so say so
+        # plainly rather than showing a "check your inbox" wall.
+        detail = send_error or "Outbound email is not configured"
+        return failure(
+            f"We could not send the confirmation email ({detail}). "
+            f"Please try again later."
+        )
+
+    if is_json:
+        return JSONResponse(content={
+            "ok": True,
+            "pending": True,
+            "redirect": f"/verify-pending?email={quote(email)}",
+            "expires_minutes": VERIFICATION_TTL_MINUTES,
+        })
+    return RedirectResponse(
+        url=f"/verify-pending?email={quote(email)}&sent=1", status_code=303)
+
+
+@api_router.post("/auth/resend-verification")
+async def resend_verification(request: Request):
+    """Re-send the confirmation email for a pending signup."""
+    peer_ip = client_ip(request)
+    content_type = request.headers.get("content-type", "")
+    is_json = "application/json" in content_type
+
+    try:
+        body = await request.json() if is_json else dict(await request.form())
+    except Exception:
+        body = {}
+
+    email = str(body.get("email", "")).strip().lower()
+    if not email:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Email is required"})
+
+    # A resend is a mail amplifier, so it is limited tightly per address and
+    # per source. The response is the same whether or not anything matched.
+    generic = {"ok": True, "message": "If that signup is pending, a new link is on its way."}
+    for limit, key in (("resend_email_hourly", email), ("resend_ip_hourly", peer_ip)):
+        if not _rate_check(key, limit):
+            retry = _rate_retry_after(key, limit)
+            return JSONResponse(
+                status_code=429,
+                content={"ok": False, "error": "Too many resend attempts. Please wait.",
+                         "retry_after_seconds": retry},
+                headers={"Retry-After": str(retry)},
+            )
+
+    db = SessionLocal()
+    try:
+        pending = db.query(PendingSignup).filter(PendingSignup.email == email).first()
+        if pending is None:
+            return generic if is_json else RedirectResponse(
+                url=f"/verify-pending?email={quote(email)}&sent=1", status_code=303)
+        if (pending.send_count or 0) >= MAX_VERIFICATION_SENDS:
+            return JSONResponse(
+                status_code=429,
+                content={"ok": False, "error": "Too many confirmation emails sent for this address. Please sign up again later."},
+            )
+        token = new_token()
+        pending.token_hash = token_fingerprint(token)
+        pending.expires_at = datetime.utcnow() + timedelta(minutes=VERIFICATION_TTL_MINUTES)
+        pending.send_count = (pending.send_count or 0) + 1
+        pending.last_sent_at = datetime.utcnow()
+        name = pending.name or ""
+        db.commit()
+    finally:
+        db.close()
+
+    verify_url = f"{config.APP_BASE_URL}/verify-email?token={quote(token)}"
+    mailer.send_verification_email(email, name, verify_url, VERIFICATION_TTL_MINUTES)
+
+    if is_json:
+        return generic
+    return RedirectResponse(
+        url=f"/verify-pending?email={quote(email)}&sent=1", status_code=303)
+
+
+@page_router.get("/verify-email")
+async def verify_email(token: str = "", request: Request = None):
+    """Confirm an address and only now create the account."""
+    if not token:
+        return RedirectResponse(url="/login?error=That+confirmation+link+is+invalid", status_code=302)
+
+    fingerprint = token_fingerprint(token)
+    created_user_id = None
+    db = SessionLocal()
+    try:
+        pending = (
+            db.query(PendingSignup)
+            .filter(PendingSignup.token_hash == fingerprint)
+            .first()
+        )
+        if pending is None:
+            return RedirectResponse(
+                url="/login?error=That+confirmation+link+is+invalid+or+has+already+been+used",
+                status_code=302,
+            )
+        if pending.is_expired():
+            email = pending.email
+            db.delete(pending)
+            db.commit()
+            return RedirectResponse(
+                url=f"/verify-pending?email={quote(email)}&expired=1", status_code=302
+            )
+        # Someone else may have completed a signup for this address in the
+        # meantime; never overwrite a real account.
+        if db.query(User).filter(User.email == pending.email).first() is not None:
+            db.delete(pending)
+            db.commit()
+            return RedirectResponse(
+                url="/login?error=An+account+already+exists+for+that+address.+Please+sign+in",
+                status_code=302,
+            )
+
+        user = User(
+            email=pending.email,
+            name=pending.name,
+            # NOT "local": that provider is treated as admin by check_admin().
+            provider="password",
+            password_hash=pending.password_hash,
+            is_admin=False,
+        )
+        db.add(user)
+        db.flush()
+        created_user_id = user.id
+        email = pending.email
+        # Single use: the pending row is consumed.
+        db.delete(pending)
+        db.commit()
+    finally:
+        db.close()
+
+    return RedirectResponse(
+        url=f"/login?verified=1&email={quote(email)}", status_code=302)
+
+
+@page_router.get("/verify-pending")
+async def verify_pending_page(request: Request):
+    """'Check your inbox' holding page for an unconfirmed signup."""
+    import secrets
+    return templates.TemplateResponse(
+        request=request,
+        name="verify_pending.html",
+        context={
+            "email": request.query_params.get("email", ""),
+            "sent": request.query_params.get("sent") == "1",
+            "expired": request.query_params.get("expired") == "1",
+            "smtp_configured": mailer.smtp_configured(),
+            "expires_minutes": VERIFICATION_TTL_MINUTES,
+            "csrf_token": secrets.token_hex(16),
+        },
+    )
 
 # -- OAuth callbacks (marketplace redirect targets) --
 
@@ -711,12 +1376,29 @@ SETTINGS_KEYS = (
     "AMAZON_CLIENT_SECRET",
     "AMAZON_REFRESH_TOKEN",
     "AMAZON_MARKETPLACE_ID",
+    # Outbound email: transport choice and provider API
+    "MAIL_BACKEND",
+    "MAIL_PROVIDER",
+    "MAIL_API_KEY",
+    "MAIL_API_URL",
+    "MAIL_FROM",
+    # Upload storage
+    "UPLOAD_BACKEND",
+    "S3_BUCKET",
+    "S3_REGION",
+    "S3_ENDPOINT_URL",
+    "S3_PUBLIC_BASE_URL",
+    "S3_FORCE_DOWNLOAD",
+    "S3_ACCESS_KEY_ID",
+    "S3_SECRET_ACCESS_KEY",
 )
 
 SECRET_KEYS = {
     "ADMIN_PASSWORD",
     "GOOGLE_CLIENT_SECRET",
     "SMTP_PASSWORD",
+    "MAIL_API_KEY",
+    "S3_SECRET_ACCESS_KEY",
     "EBAY_CLIENT_SECRET",
     "ETSY_API_SECRET",
     "POSHMARK_API_KEY",
@@ -747,6 +1429,19 @@ async def get_settings(_admin: dict = Depends(check_admin)):
             "SMTP_PASSWORD": _mask_secret(config.SMTP_PASSWORD),
             "SMTP_FROM": config.SMTP_FROM,
             "SMTP_USE_TLS": config.SMTP_USE_TLS,
+            "MAIL_BACKEND": config.MAIL_BACKEND,
+            "MAIL_PROVIDER": config.MAIL_PROVIDER,
+            "MAIL_API_KEY": _mask_secret(config.MAIL_API_KEY),
+            "MAIL_API_URL": config.MAIL_API_URL,
+            "MAIL_FROM": config.MAIL_FROM,
+            "UPLOAD_BACKEND": config.UPLOAD_BACKEND,
+            "S3_BUCKET": config.S3_BUCKET,
+            "S3_REGION": config.S3_REGION,
+            "S3_ENDPOINT_URL": config.S3_ENDPOINT_URL,
+            "S3_PUBLIC_BASE_URL": config.S3_PUBLIC_BASE_URL,
+            "S3_FORCE_DOWNLOAD": config.S3_FORCE_DOWNLOAD,
+            "S3_ACCESS_KEY_ID": config.S3_ACCESS_KEY_ID,
+            "S3_SECRET_ACCESS_KEY": _mask_secret(config.S3_SECRET_ACCESS_KEY),
             "DEFAULT_REFRESH_INTERVAL_S": config.DEFAULT_REFRESH_INTERVAL_S,
             "EBAY_CLIENT_ID": config.EBAY_CLIENT_ID,
             "EBAY_CLIENT_SECRET": _mask_secret(config.EBAY_CLIENT_SECRET),
@@ -803,6 +1498,110 @@ async def update_settings(body: dict, _admin: dict = Depends(check_admin)):
         persist_env({k: getattr(config, k) for k in updated})
 
     return {"ok": True, "updated": updated}
+
+
+@api_router.get("/settings/mail-usage")
+async def get_mail_usage(_admin: dict = Depends(check_admin)):
+    """Report the email provider's sending quota (admin only).
+
+    Signup mail silently stops working once the daily or monthly cap is hit,
+    so surfacing it here means you find out before a real signup does.
+    """
+    usage, reason = mailer.fetch_provider_usage()
+    if usage is None:
+        return {
+            "ok": False,
+            "available": False,
+            "reason": reason,
+            "backend": mailer.mail_backend() or "disabled",
+        }
+    return {"ok": True, "available": True, "usage": usage}
+
+
+@api_router.post("/settings/test-email")
+async def send_test_email(body: dict, _admin: dict = Depends(check_admin)):
+    """Send a test message so an admin can prove SMTP works.
+
+    Saving settings alone cannot tell you whether delivery succeeds, so this
+    reports the actual SMTP result instead of pretending.
+    """
+    to = (body.get("to") or "").strip().lower()
+    if not to or "@" not in to:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Enter a valid recipient address"})
+    if not mailer.smtp_configured():
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": "Set an SMTP host and username (or From address) first, then save."},
+        )
+    ok, error = mailer.send_test_email(to)
+    if not ok:
+        return JSONResponse(status_code=502, content={"ok": False, "error": f"Send failed — {error}"})
+    return {"ok": True, "message": f"Test email sent to {to}"}
+
+# -- Users & admin assignment (admin only) --
+
+@api_router.get("/users")
+async def list_users(db: Session = Depends(get_db), _admin: dict = Depends(check_admin)):
+    """List the accounts on this instance so an admin can grant admin rights.
+
+    Deliberately admin-only: it exposes every user's email address.
+    """
+    users = db.query(User).order_by(User.id).all()
+    return {
+        "users": [u.to_dict() for u in users],
+        "total": len(users),
+        "current_user_id": _admin["id"],
+    }
+
+
+@api_router.post("/users/{user_id}/admin")
+async def set_user_admin(
+    user_id: int,
+    body: dict,
+    db: Session = Depends(get_db),
+    _admin: dict = Depends(check_admin),
+):
+    """Grant or revoke admin privileges for a user (admin only)."""
+    target = db.get(User, user_id)
+    if target is None:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "User not found"})
+
+    make_admin = bool(body.get("is_admin"))
+
+    # A local-provider account is always treated as an admin (see check_admin),
+    # so revoking it would be a lie — the flag would have no effect.
+    if target.provider == "local" and not make_admin:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": "The local administrator always has admin access"},
+        )
+
+    # Don't let an admin lock themselves out of the Admin page.
+    if target.id == _admin["id"] and not make_admin:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": "You cannot revoke your own admin access"},
+        )
+
+    # Never remove the last remaining admin.
+    if not make_admin:
+        remaining = (
+            db.query(User)
+            .filter(User.is_admin == True)  # noqa: E712
+            .filter(User.id != target.id)
+            .count()
+        )
+        if remaining == 0:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "error": "At least one admin must remain"},
+            )
+
+    target.is_admin = make_admin
+    db.commit()
+    db.refresh(target)
+    return {"ok": True, "user": target.to_dict()}
+
 
 # -- Listings --
 
@@ -1184,7 +1983,7 @@ async def get_teams(db: Session = Depends(get_db), _user: dict = Depends(check_a
     result = []
     for t in teams:
         if not t.invite_code:
-            t.invite_code = secrets.token_urlsafe(16)
+            t.invite_code = _new_invite_code()
             db.commit()
         roles = {
             m.user_id: m.role
@@ -1228,8 +2027,9 @@ async def create_team(body: dict, db: Session = Depends(get_db), _user: dict = D
         return JSONResponse(status_code=400, content={"ok": False, "error": f"You already have a team named '{name}'"})
 
     import secrets
-    invite_code = secrets.token_urlsafe(16)
-    team = Team(name=name, invite_code=invite_code)
+    invite_code = _new_invite_code()
+    team = Team(name=name, invite_code=invite_code,
+                created_by_email=(_user.get("email") or "").lower() or None)
     db.add(team)
     db.flush()
     db.add(TeamMembership(team_id=team.id, user_id=_user["id"], role="owner"))
@@ -1278,7 +2078,7 @@ async def add_team_member(team_id: int, body: dict, db: Session = Depends(get_db
     team = db.get(Team, team_id)
     if not team.invite_code:
         import secrets
-        team.invite_code = secrets.token_urlsafe(16)
+        team.invite_code = _new_invite_code()
     db.commit()
 
     invite_url = f"{config.APP_BASE_URL}/join/{team.invite_code}"
@@ -1293,28 +2093,14 @@ async def add_team_member(team_id: int, body: dict, db: Session = Depends(get_db
     )
 
     email_sent = False
-    if config.SMTP_HOST and config.SMTP_USER:
-        try:
-            import smtplib
-            from email.message import EmailMessage
-            msg = EmailMessage()
-            msg["Subject"] = invite_subject
-            msg["From"] = config.SMTP_FROM or config.SMTP_USER
-            msg["To"] = email
-            msg.set_content(invite_body)
-            with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=10) as server:
-                if config.SMTP_USE_TLS:
-                    server.starttls()
-                if config.SMTP_PASSWORD:
-                    server.login(config.SMTP_USER, config.SMTP_PASSWORD)
-                server.send_message(msg)
-            email_sent = True
-        except Exception:
-            email_sent = False
+    email_error = ""
+    if mailer.smtp_configured():
+        email_sent, email_error = mailer.send_email(email, invite_subject, invite_body)
 
     return {
         "ok": True,
         "email_sent": email_sent,
+        "email_error": email_error,
         "invite_url": invite_url,
         "invite_subject": invite_subject,
         "invite_body": invite_body,
@@ -1371,7 +2157,7 @@ async def regenerate_invite_code(team_id: int, db: Session = Depends(get_db), _u
         return JSONResponse(status_code=403, content={"ok": False, "error": "Only team owners can regenerate invite links"})
     import secrets
     team = db.get(Team, team_id)
-    team.invite_code = secrets.token_urlsafe(16)
+    team.invite_code = _new_invite_code()
     db.commit()
     return {
         "ok": True,
@@ -1384,7 +2170,7 @@ async def regenerate_invite_code(team_id: int, db: Session = Depends(get_db), _u
 async def join_team_api(body: dict, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
     """Join a team via invite code."""
     code = (body.get("invite_code") or "").strip()
-    if not code:
+    if not _looks_like_invite_code(code):
         return JSONResponse(status_code=400, content={"ok": False, "error": "Invite code is required"})
     team = db.query(Team).filter(Team.invite_code == code).first()
     if not team:
@@ -1400,13 +2186,257 @@ async def join_team_api(body: dict, db: Session = Depends(get_db), _user: dict =
     return {"ok": True, "team": team.to_dict()}
 
 
+# -- Team join requests (ask to join by naming the owner's email) --
+#
+# Deliberately never reveals a team name to a requester before approval, so
+# knowing an owner's address proves nothing about the team behind it.
+
+@api_router.post("/onboarding/create-team")
+async def onboarding_create_team(db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
+    """Give a new account its own private workspace."""
+    if _user.get("team_ids"):
+        return {"ok": True, "already_onboarded": True, "redirect": "/dashboard"}
+    db_user = db.query(User).filter(User.id == _user["id"]).first()
+    if db_user is None:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "User not found"})
+    team = _ensure_user_tenant_membership(db, db_user, "")
+    db.commit()
+    return {"ok": True, "redirect": "/dashboard", "team_id": team.id if team else None}
+
+
+@api_router.post("/onboarding/request-access")
+async def onboarding_request_access(
+    body: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user: dict = Depends(check_auth),
+):
+    """Ask to join a team by naming its creator's email address.
+
+    Rate limited per requester, per target team, per source IP and globally.
+    The response never discloses whether the address matched a team.
+    """
+    # Generic response used for both "sent" and "no match", so this endpoint
+    # cannot be used to enumerate which emails own teams.
+    generic_ok = {
+        "ok": True,
+        "message": "Request sent. The team owner will review it.",
+    }
+
+    owner_email = (body.get("owner_email") or "").strip().lower()
+    description = _sanitize_description(body.get("description"))
+
+    if not owner_email or "@" not in owner_email or len(owner_email) > 255:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Enter a valid email address"})
+    if len(description) < DESCRIPTION_MIN_LENGTH:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": f"Please add a short note (at least {DESCRIPTION_MIN_LENGTH} characters)"},
+        )
+
+    # --- rate limits (all four axes, checked before any write) ---
+    requester_key = str(_user["id"])
+    peer_ip = client_ip(request)
+
+    for limit, key in (
+        ("user_burst", requester_key),
+        ("user_daily", requester_key),
+        ("ip_daily", peer_ip),
+        ("global_daily", "all"),
+    ):
+        if not _rate_check(key, limit):
+            retry = _rate_retry_after(key, limit)
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "ok": False,
+                    "error": "Too many join requests. Please try again later.",
+                    "retry_after_seconds": retry,
+                },
+                headers={"Retry-After": str(retry)},
+            )
+
+    # Find teams whose creator matches. No name is returned to the caller.
+    candidate_teams = (
+        db.query(Team)
+        .filter(Team.created_by_email == owner_email)
+        .all()
+    )
+
+    # A requester may not ask to join a team they are already in.
+    my_team_ids = set(_user.get("team_ids") or [])
+    created = 0
+    for team in candidate_teams:
+        if team.id in my_team_ids:
+            continue
+        # Per-target-team limits, applied only to teams that actually exist so
+        # a wrong address cannot consume another team's budget.
+        if not _rate_check(str(team.id), "team_hourly"):
+            retry = _rate_retry_after(str(team.id), "team_hourly")
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "ok": False,
+                    "error": "This team has received too many requests. Please try again later.",
+                    "retry_after_seconds": retry,
+                },
+                headers={"Retry-After": str(retry)},
+            )
+        if not _rate_check(str(team.id), "team_daily"):
+            retry = _rate_retry_after(str(team.id), "team_daily")
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "ok": False,
+                    "error": "This team has received too many requests. Please try again later.",
+                    "retry_after_seconds": retry,
+                },
+                headers={"Retry-After": str(retry)},
+            )
+
+        # One open request per (team, requester): re-submitting updates the note.
+        existing = (
+            db.query(TeamJoinRequest)
+            .filter(
+                TeamJoinRequest.team_id == team.id,
+                TeamJoinRequest.requester_user_id == _user["id"],
+                TeamJoinRequest.status == TeamJoinRequest.STATUS_PENDING,
+            )
+            .first()
+        )
+        if existing is not None:
+            existing.description = description
+            existing.owner_email = owner_email
+            created += 1
+            continue
+
+        db.add(TeamJoinRequest(
+            team_id=team.id,
+            requester_user_id=_user["id"],
+            owner_email=owner_email,
+            description=description,
+            status=TeamJoinRequest.STATUS_PENDING,
+        ))
+        created += 1
+
+    db.commit()
+    # Same shape whether or not anything matched.
+    return generic_ok
+
+
+@api_router.get("/join-requests")
+async def list_join_requests(
+    team: str = None,
+    db: Session = Depends(get_db),
+    _user: dict = Depends(check_auth),
+):
+    """Pending join requests for teams the caller owns (owners only)."""
+    owned_ids = [
+        m.team_id
+        for m in db.query(TeamMembership).filter(
+            TeamMembership.user_id == _user["id"],
+            TeamMembership.role == "owner",
+        )
+    ]
+    if not owned_ids:
+        return {"requests": [], "pending_count": 0}
+
+    query = db.query(TeamJoinRequest).filter(TeamJoinRequest.team_id.in_(owned_ids))
+    if team:
+        try:
+            wanted = int(team)
+        except (TypeError, ValueError):
+            wanted = -1
+        if wanted not in owned_ids:
+            return JSONResponse(status_code=404, content={"ok": False, "error": "Team not found"})
+        query = query.filter(TeamJoinRequest.team_id == wanted)
+
+    rows = query.order_by(TeamJoinRequest.created_at.desc()).limit(200).all()
+
+    requester_ids = {r.requester_user_id for r in rows}
+    requesters = {
+        u.id: u
+        for u in db.query(User).filter(User.id.in_(requester_ids or [0])).all()
+    }
+
+    items = []
+    for r in rows:
+        requester = requesters.get(r.requester_user_id)
+        items.append({
+            **r.to_dict(),
+            "requester_name": (requester.name or requester.email) if requester else "(removed user)",
+            "requester_email": requester.email if requester else "",
+        })
+    pending = sum(1 for r in rows if r.status == TeamJoinRequest.STATUS_PENDING)
+    return {"requests": items, "pending_count": pending}
+
+
+@api_router.post("/join-requests/{request_id}/{decision}")
+async def decide_join_request(
+    request_id: int,
+    decision: str,
+    db: Session = Depends(get_db),
+    _user: dict = Depends(check_auth),
+):
+    """Approve or deny a join request. Only an owner of that team may decide."""
+    if decision not in ("approve", "deny"):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Unknown decision"})
+
+    join_request = db.get(TeamJoinRequest, request_id)
+    if join_request is None:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Request not found"})
+
+    # Authorisation is re-derived from the DB, never from the request body.
+    membership = (
+        db.query(TeamMembership)
+        .filter(
+            TeamMembership.team_id == join_request.team_id,
+            TeamMembership.user_id == _user["id"],
+            TeamMembership.role == "owner",
+        )
+        .first()
+    )
+    if membership is None:
+        return JSONResponse(status_code=403, content={"ok": False, "error": "Only the team owner can decide this request"})
+
+    if join_request.status != TeamJoinRequest.STATUS_PENDING:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "That request has already been decided"})
+
+    if decision == "approve":
+        already = (
+            db.query(TeamMembership)
+            .filter(
+                TeamMembership.team_id == join_request.team_id,
+                TeamMembership.user_id == join_request.requester_user_id,
+            )
+            .first()
+        )
+        if already is None:
+            db.add(TeamMembership(
+                team_id=join_request.team_id,
+                user_id=join_request.requester_user_id,
+                role="member",
+            ))
+        join_request.status = TeamJoinRequest.STATUS_APPROVED
+    else:
+        join_request.status = TeamJoinRequest.STATUS_DENIED
+
+    join_request.decided_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True, "status": join_request.status}
+
+
 # -- Image uploads --
 
 @api_router.post("/upload")
 async def upload_image(file: UploadFile = File(...), _user: dict = Depends(check_auth)):
-    """Upload an image file for a listing and store in static/uploads/."""
+    """Upload an image for a listing.
+
+    Stored to local disk or an S3 bucket depending on UPLOAD_BACKEND. The
+    returned URL is what the front-end should use, so callers do not need to
+    know which backend is active.
+    """
     import os
-    import uuid
 
     if not file.filename:
         return JSONResponse(status_code=400, content={"ok": False, "error": "No file uploaded"})
@@ -1444,16 +2474,17 @@ async def upload_image(file: UploadFile = File(...), _user: dict = Depends(check
     if not is_valid_image(contents, ext):
         return JSONResponse(status_code=400, content={"ok": False, "error": "File content does not match a valid image format"})
 
-    uploads_dir = os.path.realpath(os.path.join("static", "uploads"))
-    os.makedirs(uploads_dir, exist_ok=True)
-    safe_name = f"{uuid.uuid4().hex[:12]}{ext}"
-    dest_path = os.path.realpath(os.path.join(uploads_dir, safe_name))
-    if not dest_path.startswith(uploads_dir + os.sep):
-        return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid file path"})
-    with open(dest_path, "wb") as buffer:
-        buffer.write(contents)
+    # Storage location is pluggable: local disk, or an S3 bucket. Validation
+    # above is unchanged either way.
+    try:
+        url = storage.save_image(contents, ext)
+    except storage.StorageError as exc:
+        return JSONResponse(
+            status_code=502,
+            content={"ok": False, "error": f"Could not store the image — {exc}"},
+        )
 
-    return {"ok": True, "url": f"/static/uploads/{safe_name}"}
+    return {"ok": True, "url": url}
 
 
 # -- Listings (creation, update, delete, local sales) --

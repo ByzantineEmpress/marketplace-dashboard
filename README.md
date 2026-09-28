@@ -9,6 +9,51 @@ system for extra features.
 
 ![Dashboard](docs/images/ui_smoke_dashboard.png)
 
+## Accounts and teams
+
+People can join in two ways, and **neither one puts them into someone else's
+inventory**:
+
+- **Sign in with Google** — one click, no password to manage.
+- **Sign up with email + password** — at `/signup`. This one sends a
+  confirmation link and **no account exists until it is clicked** (see
+  *Outbound email* below).
+
+Either way a brand-new account has **no team**. It lands on **`/onboarding`**
+and chooses between:
+
+1. **Create my own workspace** — a private team it owns outright.
+2. **Ask to join a team** — enter the *email address of the person who runs
+   the team*, plus a short note. The owner approves or declines under
+   **Admin → Join Requests**. Team names are never disclosed to the requester.
+
+A shared invite link (Admin → Teams) skips the chooser and joins that team
+directly.
+
+### Outbound email (required for email signup)
+
+Email signup cannot complete without working outbound email, because the
+account is only created when the confirmation link is opened. Configure it
+in **Admin → Outbound Email**, then use **Send test email** to prove
+delivery. Verification links are single-use and expire after 60 minutes.
+
+Two transports are supported — pick whichever suits you:
+
+**Provider API (recommended).** `MAIL_BACKEND=http`, then set
+`MAIL_PROVIDER` to `resend`, `brevo`, `postmark`, or `generic` (a plain JSON
+endpoint), plus `MAIL_API_KEY`.
+
+**SMTP.** `MAIL_BACKEND=smtp` with `SMTP_HOST` / `SMTP_USER` /
+`SMTP_PASSWORD`.
+
+Either way set `MAIL_FROM` to an address on **a domain you own and have
+verified with your provider** — for example
+`noreply@mail.yourdomain.com`. Verification requires three DNS records (SPF,
+DKIM, DMARC) which your provider generates for you. Do not use a personal
+mailbox as the sender: it will be rewritten or rejected, and it exposes your
+address to every recipient. A subdomain such as `mail.yourdomain.com` keeps
+sending reputation separate from your main domain.
+
 ## Quick start (one click, Windows)
 
 1. Keep **start-marketplace-dashboard.bat** on your Desktop.
@@ -51,6 +96,8 @@ Prefer the command line or Docker? See [docs/SETUP.md](docs/SETUP.md).
 | Document | What it covers |
 |---|---|
 | [docs/SETUP.md](docs/SETUP.md) | Install (one-click, manual, Docker), marketplace credentials, troubleshooting |
+| [docs/EMAIL.md](docs/EMAIL.md) | Outbound email: domain + DNS (SPF/DKIM/DMARC), providers, verification |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Deploying: host choice, Cloudflare, uploads, rate limiting, backups |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every `.env` key and admin-page setting |
 | [docs/GOOGLE-LOGIN.md](docs/GOOGLE-LOGIN.md) | Creating the Google OAuth client, step by step |
 | [docs/TEAMS.md](docs/TEAMS.md) | How Teams work — user guide |
@@ -62,11 +109,27 @@ Prefer the command line or Docker? See [docs/SETUP.md](docs/SETUP.md).
 ## Tests
 
 ```bash
-python tests/test_ui_wiring.py       # static: JS getElementById vs HTML ids
-python -m unittest tests/test_api_client.py  # automated in-process API test suite
-python tests/test_teams.py           # API end-to-end (server must be running)
-node tests/ui_smoke_test.js          # real-browser UI smoke test (needs Node)
+python tests/test_ui_wiring.py                    # static: JS getElementById vs HTML ids
+python -m unittest tests.test_api_client          # in-process API + auth/onboarding suite
+python -m unittest tests.test_email_verification  # signup confirmation: tokens, expiry, resends
+python -m unittest tests.test_mailer_smtp         # real SMTP delivery + provider usage API
+python -m unittest tests.test_google_callback     # Google callback routing (stubs Google HTTP)
+python -m unittest tests.test_multitenancy        # tenant isolation: no cross-team leakage
+python -m unittest tests.test_security_audit      # auth, RBAC and hardening checks
+python -m unittest tests.test_rate_limiting       # limits persist across workers
+python -m unittest tests.test_storage             # local + S3 image storage (stubbed S3)
+python tests/test_teams.py                        # API end-to-end (server must be running)
+node tests/ui_smoke_test.js                       # real-browser UI smoke test (needs Node)
 ```
+
+The `unittest` suites accept a throwaway database, which is the safe way to
+run them against a machine that has real data:
+
+```bash
+DATABASE_URL=sqlite:///./tmp-test.db python -m unittest tests.test_api_client
+```
+
+Without that override they write into `marketplace.db`.
 
 ## Project layout
 

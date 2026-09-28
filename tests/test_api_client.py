@@ -5,16 +5,27 @@ a separate server process or external dependencies.
 """
 
 import os
+import secrets
 import sys
 import unittest
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from starlette.testclient import TestClient
 from src.api.main import app
+from src.api.routes import INVITE_CODE_MIN_LENGTH
 from src.config import config
 from src.database import init_db, SessionLocal
-from src.models import Listing, Team, TeamMembership, User
+from src.models import (
+    AuthSession,
+    Listing,
+    PendingSignup,
+    Team,
+    TeamJoinRequest,
+    TeamMembership,
+    User,
+)
 
 
 class MarketplaceApiTest(unittest.TestCase):
@@ -227,29 +238,76 @@ class MarketplaceApiTest(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(res_login.status_code, 303)
-        self.assertEqual(res_login.headers["location"], "/dashboard")
+        # A brand-new account is NOT auto-enrolled into any team: it is sent to
+        # the onboarding chooser instead, so it can never land in someone
+        # else's shared inventory by signing in.
+        self.assertEqual(res_login.headers["location"], "/onboarding")
         self.assertIn("auth_token", res_login.cookies)
+        # The session cookie must be SameSite=lax, not strict: it is set on a
+        # response to a navigation arriving from accounts.google.com, and a
+        # strict cookie is withheld on the following /dashboard request, which
+        # bounces the user to /login?error=auth_required. TestClient does not
+        # enforce SameSite, so assert the attribute itself.
+        set_cookie = res_login.headers.get("set-cookie", "")
+        self.assertIn("auth_token=", set_cookie)
+        self.assertIn("samesite=lax", set_cookie.lower())
+        self.assertIn("httponly", set_cookie.lower())
 
-        # 5. Accessing dashboard and protected APIs with the session cookie
-        dash_res = self.client.get("/dashboard")
-        self.assertEqual(dash_res.status_code, 200)
-        self.assertIn("listing-grid", dash_res.text)
-
-        # 6. Verify user created in DB and assigned to Default Team
+        # 5. The new account owns no team yet
         db = SessionLocal()
         try:
             created_user = db.query(User).filter(User.email == test_email).first()
             self.assertIsNotNone(created_user)
             self.assertEqual(created_user.provider, "google")
             self.assertEqual(created_user.name, "Test Developer")
-            membership = (
+            self.assertEqual(
                 db.query(TeamMembership)
                 .filter(TeamMembership.user_id == created_user.id)
-                .first()
+                .count(),
+                0,
+                "a fresh sign-in must not be placed in any team",
             )
-            self.assertIsNotNone(membership)
         finally:
             db.close()
+
+        # 6. Onboarding page renders both choices
+        onb = self.client.get("/onboarding")
+        self.assertEqual(onb.status_code, 200)
+        self.assertIn("Create my own workspace", onb.text)
+        self.assertIn("Ask to join a team", onb.text)
+
+        # 7. Choosing "my own workspace" creates it and lands on the dashboard
+        made = self.client.post("/api/onboarding/create-team")
+        self.assertEqual(made.status_code, 200)
+        self.assertTrue(made.json()["ok"])
+        self.assertEqual(made.json()["redirect"], "/dashboard")
+
+        db = SessionLocal()
+        try:
+            created_user = db.query(User).filter(User.email == test_email).first()
+            memberships = (
+                db.query(TeamMembership)
+                .filter(TeamMembership.user_id == created_user.id)
+                .all()
+            )
+            self.assertEqual(len(memberships), 1)
+            self.assertEqual(memberships[0].role, "owner")
+            own_team = db.query(Team).filter(Team.id == memberships[0].team_id).first()
+            self.assertIn("Workspace", own_team.name)
+            # The creator is recorded so others can request access by email.
+            self.assertEqual((own_team.created_by_email or "").lower(), test_email)
+        finally:
+            db.close()
+
+        # 8. Accessing dashboard and protected APIs with the session cookie
+        dash_res = self.client.get("/dashboard")
+        self.assertEqual(dash_res.status_code, 200)
+        self.assertIn("listing-grid", dash_res.text)
+
+        # 9. A user who already has a team skips onboarding entirely
+        again = self.client.get("/onboarding", follow_redirects=False)
+        self.assertEqual(again.status_code, 302)
+        self.assertEqual(again.headers["location"], "/dashboard")
 
     def test_09_team_invites_and_join_flow(self):
         """Verify team creation, shareable invite token generation, and join flow."""
@@ -291,6 +349,22 @@ class MarketplaceApiTest(unittest.TestCase):
         self.assertIn("/login?invited_to=", join_res.headers["location"])
         self.assertIn("Collab", join_res.headers["location"])
         self.assertEqual(join_res.cookies.get("pending_invite"), new_invite_code)
+
+        # 4b. The remembered invite must be short-lived (15 minutes) and the
+        #     code itself must carry full cryptographic entropy.
+        set_cookie = join_res.headers.get("set-cookie", "")
+        self.assertIn("pending_invite=", set_cookie)
+        self.assertIn("max-age=900", set_cookie.lower())
+        self.assertIn("httponly", set_cookie.lower())
+        self.assertIn("samesite=lax", set_cookie.lower())
+        # 16 bytes -> 22 url-safe chars, and never a short/weak code
+        self.assertEqual(len(new_invite_code), 22)
+        self.assertGreaterEqual(len(new_invite_code), INVITE_CODE_MIN_LENGTH)
+
+        # 4c. A too-short / malformed code must be rejected outright
+        short_res = self.client.get("/join/abc123", follow_redirects=False)
+        self.assertEqual(short_res.status_code, 302)
+        self.assertIn("error=Invalid", short_res.headers["location"])
 
         # 5. User signs in with Google dev login with pending invite cookie present
         invited_email = "newmember@example.com"
@@ -432,6 +506,450 @@ class MarketplaceApiTest(unittest.TestCase):
         self.assertIn("poshmark_redirect_uri", s_data)
         self.assertIn("amazon_redirect_uri", s_data)
 
+    def test_12b_admin_assignment_is_admin_only(self):
+        """Only admins may list users or grant admin rights.
+
+        The /api/users endpoints expose every account's email address and can
+        hand out admin access, so a non-admin must be refused.
+        """
+        # 1. Admin (local account) can list users
+        self.client.post(
+            "/api/auth/login",
+            json={"username": config.ADMIN_USERNAME, "password": config.ADMIN_PASSWORD},
+        )
+        res = self.client.get("/api/users")
+        self.assertEqual(res.status_code, 200)
+        payload = res.json()
+        self.assertIn("users", payload)
+        self.assertGreaterEqual(payload["total"], 1)
+        admin_row = next(u for u in payload["users"] if u["provider"] == "local")
+        self.assertTrue(admin_row["is_admin"])
+
+        # 2. The local admin can never be demoted via the API
+        res_locked = self.client.post(
+            f"/api/users/{admin_row['id']}/admin", json={"is_admin": False}
+        )
+        self.assertEqual(res_locked.status_code, 400)
+
+        # 3. Unknown users are a 404, not a 500
+        res_missing = self.client.post("/api/users/99999999/admin", json={"is_admin": True})
+        self.assertEqual(res_missing.status_code, 404)
+
+        # 4. A non-admin session is refused with 403
+        db = SessionLocal()
+        try:
+            plain = db.query(User).filter(User.provider == "google", User.is_admin == False).first()  # noqa: E712
+            if plain is None:
+                self.skipTest("no non-admin google user available")
+            plain_token = secrets.token_urlsafe(48)
+            db.add(AuthSession(
+                token=plain_token,
+                user_id=plain.id,
+                expires_at=datetime.utcnow() + timedelta(days=1),
+            ))
+            db.commit()
+            plain_id = plain.id
+        finally:
+            db.close()
+
+        self.client.cookies.clear()
+        self.client.cookies.set("auth_token", plain_token)
+        self.assertEqual(self.client.get("/api/users").status_code, 403)
+        self.assertEqual(
+            self.client.post(f"/api/users/{admin_row['id']}/admin", json={"is_admin": True}).status_code,
+            403,
+        )
+        # A non-admin also cannot promote themselves
+        self.assertEqual(
+            self.client.post(f"/api/users/{plain_id}/admin", json={"is_admin": True}).status_code,
+            403,
+        )
+
+        # 5. Clean up the extra session so later tests start clean
+        db = SessionLocal()
+        try:
+            db.query(AuthSession).filter(AuthSession.token == plain_token).delete()
+            db.commit()
+        finally:
+            db.close()
+
+    def test_12c_join_requests_are_sanitized_rate_limited_and_owner_scoped(self):
+        """Ask-to-join: sanitisation, rate limits, and owner-only approval.
+
+        Covers the request-by-owner-email flow added for onboarding.
+        """
+        admin_email = f"{config.ADMIN_USERNAME}@local"
+        requester_email = "join.request.candidate@example.com"
+
+        db = SessionLocal()
+        try:
+            owner = db.query(User).filter(User.provider == "local").first()
+            self.assertIsNotNone(owner)
+            # A team owned by the local admin, discoverable by creator email.
+            team = db.query(Team).filter(Team.name == "Test Join Flow Team").first()
+            if team is None:
+                team = Team(name="Test Join Flow Team", invite_code=secrets.token_urlsafe(16),
+                            created_by_email=admin_email)
+                db.add(team)
+                db.flush()
+                db.add(TeamMembership(team_id=team.id, user_id=owner.id, role="owner"))
+            else:
+                team.created_by_email = admin_email
+
+            requester = db.query(User).filter(User.email == requester_email).first()
+            if requester is None:
+                requester = User(email=requester_email, name="Join Candidate", provider="google")
+                db.add(requester)
+                db.flush()
+
+            requester_token = secrets.token_urlsafe(48)
+            db.add(AuthSession(token=requester_token, user_id=requester.id,
+                               expires_at=datetime.utcnow() + timedelta(days=1)))
+            db.commit()
+            team_id, requester_id = team.id, requester.id
+        finally:
+            db.close()
+
+        try:
+            # --- requester submits, with markup and control characters ---
+            self.client.cookies.clear()
+            self.client.cookies.set("auth_token", requester_token)
+            nasty = "<script>alert(1)</script>\n\x00 I am Jamie\r\n<img src=x onerror=alert(2)>"
+            res = self.client.post("/api/onboarding/request-access", json={
+                "owner_email": admin_email,
+                "description": nasty,
+            })
+            self.assertEqual(res.status_code, 200)
+            self.assertTrue(res.json()["ok"])
+            # The response must not reveal whether a team matched.
+            self.assertNotIn("team", res.json())
+            self.assertNotIn("Test Join Flow Team", res.text)
+
+            db = SessionLocal()
+            try:
+                stored = (
+                    db.query(TeamJoinRequest)
+                    .filter(
+                        TeamJoinRequest.team_id == team_id,
+                        TeamJoinRequest.requester_user_id == requester_id,
+                    )
+                    .order_by(TeamJoinRequest.id.desc())
+                    .first()
+                )
+                self.assertIsNotNone(stored, "request was not stored")
+                self.assertEqual(stored.status, "pending")
+                # Sanitised: no angle brackets, no control characters, single line
+                self.assertNotIn("<", stored.description)
+                self.assertNotIn(">", stored.description)
+                self.assertNotIn("\n", stored.description)
+                self.assertNotIn("\r", stored.description)
+                self.assertNotIn("\x00", stored.description)
+                self.assertIn("alert(1)", stored.description)  # text survives, markup does not
+                self.assertLessEqual(len(stored.description), 300)
+            finally:
+                db.close()
+
+            # --- a short description is rejected ---
+            short = self.client.post("/api/onboarding/request-access", json={
+                "owner_email": admin_email, "description": "x",
+            })
+            self.assertEqual(short.status_code, 400)
+
+            # --- a malformed email is rejected ---
+            bad_email = self.client.post("/api/onboarding/request-access", json={
+                "owner_email": "not-an-email", "description": "hello there",
+            })
+            self.assertEqual(bad_email.status_code, 400)
+
+            # --- an unknown but valid address gets the SAME generic answer,
+            #     so this endpoint cannot enumerate team owners ---
+            unknown = self.client.post("/api/onboarding/request-access", json={
+                "owner_email": "nobody.owns.this@example.com", "description": "hello there",
+            })
+            # may be 429 if the burst limit already tripped; otherwise identical
+            self.assertIn(unknown.status_code, (200, 429))
+
+            # --- rate limit: the per-account burst is 1 per 10 minutes, so a
+            #     second request from the same account must be refused ---
+            second = self.client.post("/api/onboarding/request-access", json={
+                "owner_email": admin_email, "description": "another attempt",
+            })
+            self.assertEqual(second.status_code, 429)
+            self.assertIn("retry_after_seconds", second.json())
+            self.assertIn("Retry-After", second.headers)
+
+            # --- a non-owner may NOT read or decide requests ---
+            non_owner = self.client.get("/api/join-requests")
+            self.assertEqual(non_owner.status_code, 200)
+            self.assertEqual(non_owner.json()["pending_count"], 0)
+            self.assertEqual(non_owner.json()["requests"], [])
+            forbidden = self.client.post(f"/api/join-requests/{stored.id}/approve")
+            self.assertEqual(forbidden.status_code, 403)
+
+            # --- the owner sees it, including the sanitised note ---
+            self.client.post(
+                "/api/auth/login",
+                json={"username": config.ADMIN_USERNAME, "password": config.ADMIN_PASSWORD},
+            )
+            owner_view = self.client.get("/api/join-requests")
+            self.assertEqual(owner_view.status_code, 200)
+            payload = owner_view.json()
+            mine = [r for r in payload["requests"] if r["id"] == stored.id]
+            self.assertEqual(len(mine), 1, "owner cannot see the pending request")
+            self.assertEqual(mine[0]["requester_email"], requester_email)
+            self.assertIn("alert(1)", mine[0]["description"])
+            self.assertGreaterEqual(payload["pending_count"], 1)
+
+            # --- approve adds the requester to that team only ---
+            approve = self.client.post(f"/api/join-requests/{stored.id}/approve")
+            self.assertEqual(approve.status_code, 200)
+            self.assertEqual(approve.json()["status"], "approved")
+
+            db = SessionLocal()
+            try:
+                membership = (
+                    db.query(TeamMembership)
+                    .filter(TeamMembership.team_id == team_id,
+                            TeamMembership.user_id == requester_id)
+                    .first()
+                )
+                self.assertIsNotNone(membership, "approval did not add the member")
+                self.assertEqual(membership.role, "member")
+            finally:
+                db.close()
+
+            # --- deciding twice is refused ---
+            again = self.client.post(f"/api/join-requests/{stored.id}/approve")
+            self.assertEqual(again.status_code, 400)
+
+            # --- the requester now belongs to exactly one team ---
+            db = SessionLocal()
+            try:
+                count = (db.query(TeamMembership)
+                         .filter(TeamMembership.user_id == requester_id).count())
+                self.assertEqual(count, 1, "approval must add exactly one membership")
+            finally:
+                db.close()
+        finally:
+            # --- cleanup so later tests are unaffected ---
+            db = SessionLocal()
+            try:
+                db.query(TeamJoinRequest).filter(TeamJoinRequest.team_id == team_id).delete()
+                db.query(TeamMembership).filter(TeamMembership.team_id == team_id).delete()
+                db.query(AuthSession).filter(AuthSession.user_id == requester_id).delete()
+                db.query(Team).filter(Team.id == team_id).delete()
+                db.query(User).filter(User.id == requester_id).delete()
+                db.commit()
+            finally:
+                db.close()
+            self.client.cookies.clear()
+
+    def test_12d_description_sanitizer(self):
+        """Direct unit checks on the join-request description sanitizer."""
+        from src.api.routes import (
+            DESCRIPTION_MAX_LENGTH,
+            _sanitize_description,
+        )
+
+        # Markup is removed entirely; harmless wording is preserved.
+        self.assertEqual(
+            _sanitize_description("<b>Jamie</b> from the workshop"),
+            "bJamie/b from the workshop",
+        )
+        # Control characters and newlines cannot survive.
+        self.assertNotIn("\n", _sanitize_description("line one\nline two"))
+        self.assertNotIn("\r", _sanitize_description("cr\rhere"))
+        self.assertNotIn("\t", _sanitize_description("tab\there"))
+        self.assertNotIn("\x00", _sanitize_description("nul\x00here"))
+        # No angle brackets survive, so no markup can be stored.
+        for probe in ("<script>alert(1)</script>", "<img src=x onerror=alert(1)>", "a<b>c"):
+            cleaned = _sanitize_description(probe)
+            self.assertNotIn("<", cleaned)
+            self.assertNotIn(">", cleaned)
+        # Whitespace is collapsed. Note tabs/newlines are *deleted* rather than
+        # converted to spaces, so "b\tc" becomes "bc" — deliberate: a
+        # multi-line paste must not silently become two words.
+        self.assertEqual(_sanitize_description("a   b"), "a b")
+        self.assertEqual(_sanitize_description("a b\tc"), "a bc")
+        self.assertLessEqual(len(_sanitize_description("x" * 5000)), DESCRIPTION_MAX_LENGTH)
+        # Non-strings never raise and never become text.
+        for bad in (None, 123, [], {}, object()):
+            self.assertEqual(_sanitize_description(bad), "")
+
+    def test_12e_password_signup_requires_email_verification(self):
+        """Self-serve signup withholds the account until the address is confirmed.
+
+        Full behaviour (tokens, expiry, resends) lives in
+        tests/test_email_verification.py; this checks the pieces that matter
+        for the rest of the API surface.
+        """
+        import re as _re
+
+        from src import mailer
+        from src.api import routes as routes_module
+
+        # Signup is rate limited per IP; clear the buckets so this test is not
+        # at the mercy of how many other tests created accounts.
+        routes_module._rate_prune()
+        self.client.cookies.clear()
+        outbox = []
+        mailer.OUTBOX = outbox
+
+        email = f"signup_{secrets.token_hex(4)}@example.com"
+        password = "correct-horse-battery"
+
+        try:
+            # --- the page renders, with a CSRF token the POST will need ---
+            page = self.client.get("/signup")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("Create your account", page.text)
+            csrf = _re.search(r'name="csrf_token"\s+value="([^"]+)"', page.text)
+            self.assertIsNotNone(csrf, "signup form has no CSRF token")
+            token = csrf.group(1)
+
+            # --- weak password is refused ---
+            weak = self.client.post("/api/auth/signup", data={
+                "csrf_token": token, "email": email, "name": "Signup Person",
+                "password": "short", "confirm_password": "short",
+            }, follow_redirects=False)
+            self.assertEqual(weak.status_code, 303)
+            self.assertIn("error=", weak.headers["location"])
+
+            # --- mismatched confirmation is refused ---
+            mismatch = self.client.post("/api/auth/signup", data={
+                "csrf_token": token, "email": email, "name": "Signup Person",
+                "password": password, "confirm_password": password + "x",
+            }, follow_redirects=False)
+            self.assertEqual(mismatch.status_code, 303)
+            self.assertIn("error=", mismatch.headers["location"])
+
+            # --- malformed email is refused ---
+            bad_email = self.client.post("/api/auth/signup", data={
+                "csrf_token": token, "email": "not-an-email", "name": "X",
+                "password": password, "confirm_password": password,
+            }, follow_redirects=False)
+            self.assertEqual(bad_email.status_code, 303)
+            self.assertIn("error=", bad_email.headers["location"])
+
+            # --- nothing above should have created a pending signup or mail ---
+            self.assertEqual(len(outbox), 0)
+
+            # --- the real thing: pending, not an account ---
+            created = self.client.post("/api/auth/signup", data={
+                "csrf_token": token, "email": email, "name": "Signup Person",
+                "password": password, "confirm_password": password,
+            }, follow_redirects=False)
+            self.assertEqual(created.status_code, 303)
+            self.assertIn("/verify-pending", created.headers["location"])
+            # No session is issued while unverified.
+            self.assertNotIn("auth_token=", created.headers.get("set-cookie", ""))
+            self.assertEqual(len(outbox), 1)
+            self.assertEqual(outbox[0]["to"], email)
+
+            db = SessionLocal()
+            try:
+                # The key guarantee: no user row exists yet.
+                self.assertIsNone(db.query(User).filter(User.email == email).first(),
+                                  "signup created a user before verification")
+                pending = db.query(PendingSignup).filter(
+                    PendingSignup.email == email).first()
+                self.assertIsNotNone(pending)
+                # Stored as a digest, never the raw token.
+                self.assertEqual(len(pending.token_hash), 64)
+                self.assertTrue(pending.password_hash.startswith("$2b$"))
+                self.assertNotIn(password, pending.password_hash)
+                pending_id = pending.id
+            finally:
+                db.close()
+
+            # --- an unverified account cannot sign in ---
+            self.client.cookies.clear()
+            login = self.client.post(
+                "/api/auth/login", json={"username": email, "password": password})
+            self.assertEqual(login.status_code, 401)
+
+            # --- the emitted link completes the signup ---
+            link = _re.search(r"/verify-email\?token=([A-Za-z0-9_\-%]+)", outbox[0]["body"])
+            self.assertIsNotNone(link, "no verification link in the email")
+            verified = self.client.get(f"/verify-email?token={link.group(1)}",
+                                       follow_redirects=False)
+            self.assertEqual(verified.status_code, 302)
+            self.assertIn("verified=1", verified.headers["location"])
+
+            db = SessionLocal()
+            try:
+                user = db.query(User).filter(User.email == email).first()
+                self.assertIsNotNone(user, "verification did not create the user")
+                # Must not carry the admin-implying provider.
+                self.assertEqual(user.provider, "password")
+                self.assertFalse(bool(user.is_admin), "signup granted admin")
+                self.assertEqual(
+                    db.query(TeamMembership).filter(
+                        TeamMembership.user_id == user.id).count(),
+                    0, "signup must not place the account in any team")
+                user_id = user.id
+            finally:
+                db.close()
+
+            # --- now they can sign in, and are sent to onboarding ---
+            self.client.cookies.clear()
+            good = self.client.post("/api/auth/login",
+                                    json={"username": email, "password": password})
+            self.assertEqual(good.status_code, 200)
+            self.assertTrue(good.json()["ok"])
+            self.assertEqual(len(good.json()["token"]), 64)
+            self.client.cookies.set("auth_token", good.json()["token"])
+            onb = self.client.get("/onboarding", follow_redirects=False)
+            self.assertEqual(onb.status_code, 200)
+
+            # --- and are refused admin-only endpoints ---
+            self.assertEqual(self.client.get("/api/users").status_code, 403)
+            self.assertEqual(self.client.get("/api/settings").status_code, 403)
+            self.assertEqual(
+                self.client.post("/api/users/1/admin", json={"is_admin": True}).status_code, 403)
+
+            # --- a wrong password is rejected ---
+            self.client.cookies.clear()
+            bad = self.client.post("/api/auth/login",
+                                   json={"username": email, "password": "wrong"})
+            self.assertEqual(bad.status_code, 401)
+
+            # --- a Google account cannot be signed into with a password ---
+            db = SessionLocal()
+            try:
+                g = User(email=f"google_acct_{secrets.token_hex(4)}@example.com",
+                         name="Google Acct", provider="google", password_hash=None)
+                db.add(g)
+                db.commit()
+                g_email, g_id = g.email, g.id
+            finally:
+                db.close()
+            self.client.cookies.clear()
+            self.assertEqual(
+                self.client.post("/api/auth/login",
+                                 json={"username": g_email, "password": ""}).status_code,
+                401)
+
+            # --- cleanup ---
+            db = SessionLocal()
+            try:
+                db.query(AuthSession).filter(
+                    AuthSession.user_id.in_([user_id, g_id])).delete(synchronize_session=False)
+                db.query(TeamMembership).filter(
+                    TeamMembership.user_id.in_([user_id, g_id])).delete(synchronize_session=False)
+                db.query(PendingSignup).filter(PendingSignup.id == pending_id).delete(
+                    synchronize_session=False)
+                db.query(User).filter(User.id.in_([user_id, g_id])).delete(synchronize_session=False)
+                db.query(Team).filter(Team.created_by_email == email).delete(synchronize_session=False)
+                db.commit()
+            finally:
+                db.close()
+        finally:
+            mailer.OUTBOX = None
+            routes_module._rate_prune()
+            routes_module.LOGIN_ATTEMPTS.clear()
+            self.client.cookies.clear()
+
     def test_12_live_google_oauth_redirect(self):
         """Verify redirect to accounts.google.com when live Google OAuth is enabled."""
         orig_dev_mode = config.GOOGLE_DEV_MODE
@@ -444,7 +962,7 @@ class MarketplaceApiTest(unittest.TestCase):
             res = self.client.get("/auth/google", follow_redirects=False)
             self.assertEqual(res.status_code, 302)
             loc = res.headers.get("location", "")
-            self.assertIn("accounts.google.com/oauth2/v2/auth", loc)
+            self.assertIn("accounts.google.com/o/oauth2/v2/auth", loc)
             self.assertIn(config.GOOGLE_CLIENT_ID, loc)
             self.assertIn("scope=openid%20email%20profile", loc)
             self.assertIn("google_oauth_state", res.cookies)
@@ -453,7 +971,7 @@ class MarketplaceApiTest(unittest.TestCase):
             config.GOOGLE_DEV_MODE = True
             res_forced = self.client.get("/auth/google?live=1", follow_redirects=False)
             self.assertEqual(res_forced.status_code, 302)
-            self.assertIn("accounts.google.com/oauth2/v2/auth", res_forced.headers.get("location", ""))
+            self.assertIn("accounts.google.com/o/oauth2/v2/auth", res_forced.headers.get("location", ""))
         finally:
             config.GOOGLE_DEV_MODE = orig_dev_mode
             config.GOOGLE_CLIENT_ID = orig_client_id

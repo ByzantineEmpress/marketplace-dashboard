@@ -338,8 +338,16 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     name = Column(String(200), nullable=True)
-    # "google" (signed in via Google OAuth) or "local" (username/password)
-    provider = Column(String(20), nullable=False, default="local")
+    # "google"      — signed in via Google OAuth
+    # "local"       — the bootstrap administrator from .env (ADMIN_USERNAME)
+    # "password"    — a self-serve account with an email + password
+    #
+    # NOTE: "local" is treated as admin by check_admin() for backwards
+    # compatibility, so self-serve accounts must never be created with it —
+    # that would hand every new signup full admin rights.
+    provider = Column(String(20), nullable=False, default="password")
+    # bcrypt hash for provider == "password". Null for OAuth accounts.
+    password_hash = Column(String(255), nullable=True)
     is_admin = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -353,6 +361,56 @@ class User(Base):
         }
 
 
+class RateLimitEvent(Base):
+    """One recorded rate-limited action, used to enforce limits across workers.
+
+    Kept in the database rather than in process memory: with more than one
+    uvicorn worker (or more than one container) an in-memory counter is
+    per-process, so every limit is silently multiplied by the number of
+    workers. That turns "5 signups per day" into "5 per worker per day" and
+    makes the limit meaningless.
+
+    Rows are short-lived — anything older than the longest window is pruned
+    as part of each check.
+    """
+
+    __tablename__ = "rate_limit_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # "<limit name>:<subject key>", e.g. "signup_ip_daily:203.0.113.7"
+    bucket = Column(String(200), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class PendingSignup(Base):
+    """A signup that is waiting for its email address to be confirmed.
+
+    Deliberately separate from ``users``: while a signup is pending, **no**
+    user, team or membership exists. Only clicking the emailed link creates
+    the real account. This also reserves the address, so two people cannot
+    race for the same one.
+    """
+
+    __tablename__ = "pending_signups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    name = Column(String(200), nullable=True)
+    # bcrypt hash; the plaintext password is never stored or emailed.
+    password_hash = Column(String(255), nullable=False)
+    # SHA-256 of the token that was emailed. The raw token is never stored, so
+    # a leaked database cannot be used to confirm someone else's address.
+    token_hash = Column(String(64), nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    # How many times the confirmation mail has been sent for this signup.
+    send_count = Column(Integer, nullable=False, default=1)
+    last_sent_at = Column(DateTime, nullable=True)
+
+    def is_expired(self) -> bool:
+        return datetime.utcnow() > self.expires_at
+
+
 class Team(Base):
     """A group of users who share one inventory."""
 
@@ -361,6 +419,9 @@ class Team(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
     invite_code = Column(String(32), unique=True, nullable=True, index=True)
+    # Email of whoever created the team. Used to let a prospective member ask
+    # to join by naming the team creator, without disclosing team names.
+    created_by_email = Column(String(255), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -368,6 +429,45 @@ class Team(Base):
             "id": self.id,
             "name": self.name,
             "invite_code": self.invite_code,
+            "created_by_email": self.created_by_email,
+        }
+
+
+class TeamJoinRequest(Base):
+    """A pending request from a user asking to join someone else's team.
+
+    The requester names the team creator's email address and supplies a short
+    description of who they are. The owner approves or denies it. Deliberately
+    does NOT reveal the team name to the requester before approval.
+    """
+
+    __tablename__ = "team_join_requests"
+
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_DENIED = "denied"
+
+    id = Column(Integer, primary_key=True, index=True)
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True)
+    requester_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Denormalised so the owner can be found without walking memberships, and
+    # so a request stays attributable if the owner later changes.
+    owner_email = Column(String(255), nullable=False, index=True)
+    # Sanitised, length-capped free text. Rendered with autoescaping on.
+    description = Column(String(400), nullable=False, default="")
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    decided_at = Column(DateTime, nullable=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "team_id": self.team_id,
+            "requester_user_id": self.requester_user_id,
+            "owner_email": self.owner_email,
+            "description": self.description,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 

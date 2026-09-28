@@ -79,7 +79,44 @@ class Config:
     DEFAULT_CURRENCY: str = "CAD"
     DEFAULT_CURRENCY_SYMBOL: str = "$"
 
-    # -- Outbound Email (SMTP) for Team Invites & Alerts --
+    # -- Uploads --
+    # Where listing images are stored.
+    #   "local" — static/uploads/ on disk. Only durable if that path is a
+    #             persistent volume; on an ephemeral filesystem images vanish
+    #             on every redeploy.
+    #   "s3"    — an S3 (or S3-compatible) bucket.
+    UPLOAD_BACKEND: str = "local"
+    S3_BUCKET: str = ""
+    S3_REGION: str = ""
+    # Optional custom endpoint for S3-compatible services (MinIO, R2, Wasabi).
+    S3_ENDPOINT_URL: str = ""
+    # Credentials. On EC2/Lightsail an instance role is preferable — leave
+    # these blank and boto3 will use the role automatically.
+    S3_ACCESS_KEY_ID: str = ""
+    S3_SECRET_ACCESS_KEY: str = ""
+    # Public base URL objects are served from. Defaults to the bucket's own
+    # HTTPS URL. Set this to a CDN/custom domain if you front the bucket.
+    S3_PUBLIC_BASE_URL: str = ""
+    # Adds Content-Disposition: attachment, which can mitigate stored-XSS if
+    # the bucket is ever served from the app's own origin.
+    S3_FORCE_DOWNLOAD: bool = False
+
+    # -- Outbound Email --
+    # Backend: "smtp" (any SMTP server) or "http" (a provider API).
+    # Leave both this and the keys below empty to disable outbound email;
+    # email signup then refuses to create accounts rather than pretending.
+    MAIL_BACKEND: str = ""          # "smtp" | "http" | "" (disabled)
+    # For MAIL_BACKEND=http, pick the API shape:
+    #   resend | brevo | postmark | generic
+    MAIL_PROVIDER: str = ""
+    MAIL_API_KEY: str = ""
+    # Only needed for MAIL_PROVIDER=generic: the endpoint to POST JSON to.
+    MAIL_API_URL: str = ""
+    # The address recipients see. Use your own domain, e.g.
+    # noreply@mail.yourdomain.com — never a personal mailbox.
+    MAIL_FROM: str = ""
+
+    # -- SMTP (used when MAIL_BACKEND=smtp) --
     SMTP_HOST: str = ""
     SMTP_PORT: int = 587
     SMTP_USER: str = ""

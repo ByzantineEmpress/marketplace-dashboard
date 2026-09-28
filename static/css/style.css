@@ -1032,6 +1032,44 @@ code {
 
 .team-role-badge--owner { color: var(--accent-text); background: var(--accent-soft); }
 .team-role-badge--member { color: var(--text-muted); background: var(--bg-inset); }
+.team-role-badge--admin { color: var(--accent-text); background: var(--accent-soft); }
+.team-role-badge--pending { color: #b45309; background: #fef3c7; }
+.team-role-badge--approved { color: #15803d; background: #dcfce7; }
+.team-role-badge--denied { color: var(--text-muted); background: var(--bg-inset); }
+
+/* One user row in the Admin -> Users list */
+.user-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* Outbound email quota display */
+.usage-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 12px;
+    font-size: 13px;
+}
+.usage-row strong { font-weight: 650; }
+.usage-bar {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--bg-inset);
+    overflow: hidden;
+}
+.usage-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 999px;
+    transition: width 0.2s ease;
+}
+.usage-bar-fill--warn { background: #d97706; }
+.usage-bar-fill--critical { background: #dc2626; }
+
 
 .team-members {
     list-style: none;

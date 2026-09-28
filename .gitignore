@@ -19,6 +19,10 @@ ENV/
 *.db-wal
 *.sqlite3
 
+# Database backups (created before schema/membership repairs)
+backups/
+*.bak-*
+
 # IDE
 .vscode/
 .idea/

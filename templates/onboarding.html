@@ -1,0 +1,64 @@
+{# First-run chooser for a brand-new account.
+
+   A new sign-in has no team. They either create their own private workspace
+   or ask to join an existing team by naming its creator's email address.
+   Team names are never shown here — the owner decides. #}
+{% extends "base.html" %}
+
+{% block content %}
+<div class="login-container">
+    <div class="login-card" style="max-width: 520px;">
+        <h1>Welcome, {{ identity }}</h1>
+        <p class="login-subtitle">Where should your listings live?</p>
+
+        {% if error %}
+        <div class="flash flash--error">{{ error }}</div>
+        {% endif %}
+
+        <div id="onboarding-status" class="settings-status"></div>
+
+        <!-- Option 1: own workspace -->
+        <div class="team-card" style="margin-top: 12px;">
+            <div class="team-header"><strong>Create my own workspace</strong></div>
+            <p class="section-desc" style="margin: 6px 0 10px;">
+                A private inventory only you can see. You can invite people later,
+                and the team switcher will appear once you have more than one.
+            </p>
+            <button class="btn btn--primary btn--block" id="create-own-team">Create my workspace</button>
+        </div>
+
+        <div class="login-divider"><span>or</span></div>
+
+        <!-- Option 2: ask to join an existing team -->
+        <div class="team-card">
+            <div class="team-header"><strong>Ask to join a team</strong></div>
+            <p class="section-desc" style="margin: 6px 0 10px;">
+                Enter the email address of the person who runs the team. They will
+                get your request and can approve or decline it.
+            </p>
+            <div class="form-group">
+                <label for="owner-email">Team owner's email address</label>
+                <input type="email" id="owner-email" placeholder="owner@example.com"
+                       autocomplete="off" maxlength="255">
+            </div>
+            <div class="form-group">
+                <label for="join-description">A short note about who you are</label>
+                <textarea id="join-description" rows="3" maxlength="{{ description_max }}"
+                          placeholder="e.g. I'm Jamie, I share the workshop with Alex."></textarea>
+                <div class="section-desc" style="margin-top: 4px;">
+                    <span id="description-count">0</span>/{{ description_max }} characters
+                </div>
+            </div>
+            <button class="btn btn--block" id="request-access">Send join request</button>
+        </div>
+
+        <div style="margin-top: 18px; text-align: center;">
+            <a href="/logout" style="font-size: 13px; color: var(--text-muted); text-decoration: none;">Sign out</a>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/onboarding.js"></script>
+{% endblock %}

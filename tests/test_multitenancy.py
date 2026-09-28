@@ -235,16 +235,47 @@ class MultiTenancyTest(unittest.TestCase):
     # 3. Onboarding & Workspace Isolation
     # ------------------------------------------------------------------
     def test_new_self_serve_user_gets_isolated_workspace(self):
-        """A new Google user signing up without an invite gets their own private workspace."""
+        """A new Google user signing up without an invite gets their own private workspace.
+
+        Since onboarding was introduced, a brand-new account is NOT enrolled
+        into any team at sign-in: it is routed to /onboarding and chooses. The
+        isolation guarantee is unchanged — they can only ever end up owning
+        their own workspace, never inside Alice's or Bob's.
+        """
         new_email = f"clara_{secrets.token_hex(4)}@test.com"
-        res = self.client.post("/auth/google/dev-login", data={"email": new_email, "name": "Clara"})
-        self.assertEqual(res.status_code, 200)
+        res = self.client.post(
+            "/auth/google/dev-login",
+            data={"email": new_email, "name": "Clara"},
+            follow_redirects=False,
+        )
+        # New accounts are routed to the onboarding chooser, not the dashboard.
+        self.assertEqual(res.status_code, 303)
+        self.assertEqual(res.headers["location"], "/onboarding")
 
         clara_user = self.db.query(User).filter(User.email == new_email).first()
         self.assertIsNotNone(clara_user)
 
-        # Verify Clara belongs to her own team and NOT Alice's or Bob's
-        clara_memberships = self.db.query(TeamMembership).filter(TeamMembership.user_id == clara_user.id).all()
+        # Onboarded users have no team yet — that is the isolation guarantee.
+        clara_memberships = self.db.query(TeamMembership).filter(
+            TeamMembership.user_id == clara_user.id).all()
+        self.assertEqual(len(clara_memberships), 0,
+                         "a new sign-in must not be placed in any team")
+
+        # Act explicitly as Clara. The shared TestClient still carries the
+        # admin's cookie from earlier requests in this class, so relying on the
+        # login response would exercise the wrong account.
+        clara_token = self._login_as(clara_user)
+        self.client.cookies.set("auth_token", clara_token)
+
+        # They choose "create my own workspace" on the onboarding page.
+        created = self.client.post("/api/onboarding/create-team")
+        self.assertEqual(created.status_code, 200)
+        self.assertTrue(created.json()["ok"])
+        self.assertNotIn("already_onboarded", created.json())
+
+        self.db.expire_all()
+        clara_memberships = self.db.query(TeamMembership).filter(
+            TeamMembership.user_id == clara_user.id).all()
         self.assertEqual(len(clara_memberships), 1)
 
         clara_team_id = clara_memberships[0].team_id
@@ -253,10 +284,18 @@ class MultiTenancyTest(unittest.TestCase):
         self.assertEqual(clara_memberships[0].role, "owner")
 
         # Clara should see 0 listings initially
-        clara_token = self._login_as(clara_user)
-        self.client.cookies.set("auth_token", clara_token)
         list_res = self.client.get("/api/listings")
         self.assertEqual(list_res.json()["total"], 0)
+
+        # Clean up the workspace so repeated runs don't accumulate debris.
+        self.db.query(TeamMembership).filter(
+            TeamMembership.team_id == clara_team_id).delete()
+        self.db.query(Team).filter(Team.id == clara_team_id).delete()
+        self.db.query(AuthSession).filter(
+            AuthSession.user_id == clara_user.id).delete()
+        self.db.query(User).filter(User.id == clara_user.id).delete()
+        self.db.commit()
+        self.client.cookies.clear()
 
     def test_invite_onboarding_joins_specific_team_only(self):
         """A new user accepting Alice's invite joins Alice's team and CANNOT see Bob's team."""

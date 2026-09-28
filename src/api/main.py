@@ -4,6 +4,7 @@ Wire together routers, middleware, startup/shutdown logic,
 and configure security headers for OWASP compliance.
 """
 
+import json
 import os
 from contextlib import asynccontextmanager
 
@@ -26,6 +27,58 @@ os.makedirs("static/js", exist_ok=True)
 os.makedirs("static/img", exist_ok=True)
 os.makedirs("static/uploads", exist_ok=True)
 
+def _startup_warnings() -> list[str]:
+    """Return configuration warnings worth surfacing at boot.
+
+    These are the mistakes that are easy to ship and hard to notice: the app
+    keeps working, but a security control is silently off. They are logged
+    rather than fatal so a local dev run is never blocked.
+    """
+    problems = []
+    base = (config.APP_BASE_URL or "").rstrip("/")
+
+    if base and not base.startswith("https://") and config.REQUIRE_HTTPS:
+        problems.append(
+            f"APP_BASE_URL is {base!r} but REQUIRE_HTTPS is on — OAuth "
+            f"callbacks and secure cookies will not work behind TLS."
+        )
+    if base.startswith("http://localhost") and config.REQUIRE_HTTPS:
+        problems.append(
+            "APP_BASE_URL still points at localhost while REQUIRE_HTTPS is on."
+        )
+    if not config.REQUIRE_HTTPS:
+        problems.append(
+            "REQUIRE_HTTPS is off: the auth cookie is not marked Secure and "
+            "HSTS is disabled. Fine locally, not for a public deployment."
+        )
+    if config.ADMIN_PASSWORD == "changeme123":
+        problems.append(
+            "ADMIN_PASSWORD is still the shipped default — change it before "
+            "exposing this instance."
+        )
+    if config.GOOGLE_DEV_MODE:
+        problems.append(
+            "GOOGLE_DEV_MODE is ON: the local test account picker is enabled "
+            "and can mint admin sessions. Turn it off in production."
+        )
+    if "your-domain.com" in (config.ALLOWED_ORIGINS or ""):
+        problems.append(
+            f"ALLOWED_ORIGINS still contains the example placeholder: "
+            f"{config.ALLOWED_ORIGINS!r}"
+        )
+    if not config.MAIL_BACKEND:
+        problems.append(
+            "Outbound email is not configured — email+password signup cannot "
+            "complete (Google sign-in still works)."
+        )
+    if not config.SECRET_KEY or config.SECRET_KEY.startswith("change-this"):
+        problems.append(
+            "SECRET_KEY is unset or the placeholder, so it is regenerated on "
+            "every start."
+        )
+    return problems
+
+
 # ---------- Application factory ----------
 
 @asynccontextmanager
@@ -44,6 +97,15 @@ async def lifespan(app: FastAPI):
     loaded = discover_and_load_plugins(app)
     for name in loaded:
         print(f"[plugin] Loaded: {name}")
+
+    # 3. Report configuration problems loudly, once, at startup.
+    problems = _startup_warnings()
+    if problems:
+        print("\n" + "=" * 68)
+        print("CONFIGURATION WARNINGS")
+        for item in problems:
+            print(f"  ! {item}")
+        print("=" * 68 + "\n")
 
     yield  # application runs while we're in the "with" block
 
@@ -71,6 +133,73 @@ app.add_middleware(
 
 # GZIP — compress responses for smaller payloads (performance)
 app.add_middleware(GZipMiddleware, minimum_size=500)
+
+
+def _client_scheme(request) -> str:
+    """The scheme the *client* used, as far as we can tell behind a proxy.
+
+    The app itself speaks plain HTTP: Cloudflare terminates TLS and forwards
+    (over a tunnel, or to loopback) without TLS. So ``request.url.scheme`` here
+    is always "http" and says nothing about the client's connection. The
+    proxy's own headers are the only signal available.
+    """
+    # X-Forwarded-Proto may be a comma-separated chain; the first entry is the
+    # original client's scheme.
+    forwarded = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    if forwarded:
+        return forwarded.lower()
+
+    # CF-Visitor is a JSON object, e.g. {"scheme":"https"} — not a bare value.
+    # Parsed defensively: a malformed header must never be mistaken for TLS.
+    visitor = request.headers.get("cf-visitor") or ""
+    if visitor:
+        try:
+            scheme = (json.loads(visitor) or {}).get("scheme") or ""
+            if scheme:
+                return str(scheme).strip().lower()
+        except (ValueError, TypeError, AttributeError):
+            pass
+        # Deliberately no fallback to "https" here: an unparseable header must
+        # not be read as a secure connection.
+
+    return (request.url.scheme or "").lower()
+
+
+# Set once so a persistent plain-HTTP request does not flood the log.
+_plain_http_seen = False
+
+
+@app.middleware("http")
+async def warn_on_plain_http(request, call_next):
+    """Warn (not block) when a request reaches the app without TLS.
+
+    TLS *version* enforcement cannot happen here — Cloudflare terminates TLS
+    and uvicorn's ASGI scope carries no TLS information at all, so the app
+    never learns which protocol version the client used. Minimum TLS version
+    is an edge setting (Cloudflare → SSL/TLS → Edge Certificates → Minimum TLS
+    Version).
+
+    What this checks instead is whether a request arrived without HTTPS at
+    all. In production that means either a misconfiguration or someone hitting
+    the origin directly, bypassing Cloudflare — which is also the only way the
+    client-IP header rate limiting relies on can be forged. So it is worth
+    knowing about.
+    """
+    global _plain_http_seen
+    if config.REQUIRE_HTTPS and _client_scheme(request) == "http":
+        if not _plain_http_seen:
+            _plain_http_seen = True
+            print(
+                "\n[security] A request arrived over plain HTTP while "
+                "REQUIRE_HTTPS is on.\n"
+                "           Either the proxy is not setting X-Forwarded-Proto, "
+                "or something is\n"
+                "           reaching the origin directly and bypassing "
+                "Cloudflare. The origin should\n"
+                "           accept traffic only from the tunnel.\n"
+            )
+    return await call_next(request)
+
 
 # ---------- Custom security headers (OWASP A04/A07) ----------
 # These headers protect against common browser-side attacks.

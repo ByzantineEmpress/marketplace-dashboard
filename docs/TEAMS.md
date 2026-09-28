@@ -15,6 +15,48 @@ when either of you sells an item, the count drops for both of you.
   personal team into it — your personal team keeps your own listings.
 - **Membership is per-team.** One user can belong to several teams (or none
   beyond their personal one).
+- **Signing in never puts you in someone else's team.** A brand-new account
+  has no team at all and is asked to choose (see *Joining* below).
+
+## Joining: choosing a team on first sign-in
+
+A new account — created with **Google** or with **email + password** at
+`/signup` — has no team. It lands on an onboarding page with two choices:
+
+1. **Create my own workspace** — a private team you own outright. This is
+   the default and needs nothing from anyone else.
+2. **Ask to join a team** — enter the **email address of the person who runs
+   the team**, plus a short note about who you are. The owner is not told
+   anything you did not type, and **team names are never shown to you**
+   before approval.
+
+Both sign-up routes behave identically. Email signup additionally requires
+confirming the address first: nothing is created — no user, no team, no
+membership — until the emailed link is opened. Google sign-in proves the
+address as part of the OAuth flow, so it needs no extra step.
+
+The owner sees pending requests under **Admin → Join Requests**, with a
+count badge, and can **Approve** or **Decline**. Approving adds you to that
+team as a member; declining is recorded, and you are never told which team
+the request referred to.
+
+### Notes on privacy and abuse
+
+- Requesting by email deliberately gives the **same answer whether or not
+  the address belongs to a team owner**, so it cannot be used to discover
+  who owns what.
+- The note is sanitised on the server (markup and control characters
+  removed, length capped) before it is stored, and escaped again when
+  displayed.
+- Requests are rate limited per account, per target team, per source
+  address, and globally. The defaults are 5 requests per day per account
+  (one per 10 minutes) and 3 per hour per team. Limits are in-process, so
+  they apply per worker.
+- **Local signup verifies email ownership.** With email + password signup the
+  address must be confirmed via a single-use link (60-minute expiry) before
+  the account exists at all — so nobody can register an address they do not
+  control. This requires working SMTP (Admin → Outbound Email); without it,
+  email signup cannot complete and Google sign-in remains the path.
 
 ## Everyday usage
 
@@ -40,6 +82,20 @@ Available to **admin** users:
   goes away.
 - **Rename / disband** — renaming keeps all listings; disbanding deletes
   the team (check what should happen to its listings first).
+
+## Invite links
+
+Each team has a shareable invite link (`/join/<code>`) shown on the Teams
+card. Opening it while signed in joins that team immediately; opening it
+while signed out remembers the invite and asks you to sign in first.
+
+- **Strength** — the code is 16 bytes from Python's `secrets` CSPRNG
+  (128 bits, 22 URL-safe characters). It is the only secret in the link, so
+  treat the whole URL as a password: anyone holding it can join the team.
+- **Expiry** — a remembered invite (the `pending_invite` cookie) lasts
+  **15 minutes**. After that the sign-in no longer joins the team.
+- **Rotation** — "Regenerate invite link" on the Teams card issues a new
+  code and immediately invalidates the old one. Do this if a link leaks.
 
 ## Who can do what
 

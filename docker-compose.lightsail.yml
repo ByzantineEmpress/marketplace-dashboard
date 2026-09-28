@@ -1,0 +1,74 @@
+# Production compose for a single Lightsail/EC2 instance.
+#
+# Two services:
+#   web         — the app, on a Docker network only (NO published port)
+#   cloudflared — the outbound-only tunnel connector
+#
+# Because the app publishes no host port, nothing on the internet can reach it
+# directly and forge CF-Connecting-IP / X-Forwarded-For to evade rate limiting.
+# Cloudflare reaches it over the internal network as http://web:8000.
+#
+# Usage:
+#   cp .env.example .env      # then edit it
+#   docker compose -f docker-compose.lightsail.yml up -d --build
+#   docker compose -f docker-compose.lightsail.yml logs -f web
+#
+# Config comes from ./.env twice, deliberately:
+#   * ${VARS} below are substituted by Compose at start-up
+#   * ./.env is ALSO bind-mounted so Admin -> Settings can persist changes
+# Both read the same file, so there is one source of truth.
+
+services:
+  web:
+    build: .
+    image: marketplace-dashboard:latest
+    container_name: marketplace-dashboard
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    volumes:
+      # Admin -> Settings rewrites .env via persist_env(). Without this mount
+      # those saves would vanish on the next container recreation.
+      - ./.env:/app/.env
+      # SQLite database + backups. A bind mount keeps the data visible on the
+      # host, which is what the backup timer copies.
+      - ./data:/app/data
+      # Only needed when UPLOAD_BACKEND=local. With UPLOAD_BACKEND=s3 this can
+      # be removed; S3 is the better choice on an instance you might rebuild.
+      - ./static/uploads:/app/static/uploads
+    environment:
+      # Absolute path so the database does not depend on the working directory.
+      - DATABASE_URL=sqlite:////app/data/marketplace.db
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8000
+      # Must be true in production: makes the auth cookie Secure and enables HSTS.
+      - REQUIRE_HTTPS=1
+      #
+      # NOTE ON TLS VERSION: minimum TLS version cannot be set here. Cloudflare
+      # terminates TLS and forwards this request as plain HTTP, and uvicorn's
+      # ASGI scope exposes no TLS information at all. Set it at the edge:
+      #   Cloudflare -> SSL/TLS -> Edge Certificates -> Minimum TLS Version: 1.2
+      # See docs/DEPLOY.md for the full set of edge settings.
+    expose:
+      - "8000"
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/login"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: marketplace-cloudflared
+    restart: unless-stopped
+    # The token identifies the tunnel and is issued by the Cloudflare dashboard.
+    # It is a credential: keep .env out of git (it already is).
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on:
+      web:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
