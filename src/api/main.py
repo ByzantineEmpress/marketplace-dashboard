@@ -177,6 +177,18 @@ def _client_scheme(request) -> str:
 _plain_http_seen = False
 
 
+def _is_internal(request) -> bool:
+    """True for a request that never went through the proxy.
+
+    The container healthcheck curls http://localhost:8000 from inside the
+    container, which is plain HTTP by definition. Treating that as suspicious
+    would fire the warning below on every single deployment and train the
+    operator to ignore it — the opposite of the intent.
+    """
+    host = (request.client.host if request.client else "") or ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
 @app.middleware("http")
 async def warn_on_plain_http(request, call_next):
     """Warn (not block) when a request reaches the app without TLS.
@@ -187,14 +199,18 @@ async def warn_on_plain_http(request, call_next):
     is an edge setting (Cloudflare → SSL/TLS → Edge Certificates → Minimum TLS
     Version).
 
-    What this checks instead is whether a request arrived without HTTPS at
-    all. In production that means either a misconfiguration or someone hitting
-    the origin directly, bypassing Cloudflare — which is also the only way the
-    client-IP header rate limiting relies on can be forged. So it is worth
-    knowing about.
+    What this checks instead is whether a request from *outside* arrived
+    without HTTPS. In production that means either a misconfiguration or
+    someone hitting the origin directly, bypassing Cloudflare — which is also
+    the only way the client-IP header rate limiting relies on can be forged.
+    Internal loopback requests (the healthcheck) are excluded.
     """
     global _plain_http_seen
-    if config.REQUIRE_HTTPS and _client_scheme(request) == "http":
+    if (
+        config.REQUIRE_HTTPS
+        and not _is_internal(request)
+        and _client_scheme(request) == "http"
+    ):
         if not _plain_http_seen:
             _plain_http_seen = True
             print(
