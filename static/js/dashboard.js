@@ -721,15 +721,34 @@ document.addEventListener("DOMContentLoaded", () => {
                 triggerBtn.disabled = true;
             }
             try {
+                // Guard the size here so an oversized photo gives a useful
+                // message instead of a 413 after a slow mobile upload.
+                const MAX_BYTES = 15 * 1024 * 1024;
+                if (file.size > MAX_BYTES) {
+                    alert(`That photo is ${(file.size / 1048576).toFixed(1)} MB — the limit is 15 MB.\n\n` +
+                          `Most phones can be set to a smaller photo size, or try the Gallery picker.`);
+                    return;
+                }
                 const formData = new FormData();
                 formData.append("file", file);
                 const res = await fetch("/api/upload", { method: "POST", body: formData });
-                const data = await res.json();
-                if (data.ok) {
+                // A 500 (or any non-JSON response) used to fall through to
+                // res.json(), throw a SyntaxError, and surface as a bare
+                // "network error" — which hid the real cause.
+                let data = null;
+                try {
+                    data = await res.json();
+                } catch (_) {
+                    data = null;
+                }
+                if (data && data.ok) {
                     if (detailImgUrlInput) detailImgUrlInput.value = data.url;
                     if (modalImg) modalImg.src = data.url;
+                } else if (data && data.error) {
+                    alert("Upload failed: " + data.error);
                 } else {
-                    alert("Upload failed: " + (data.error || "Unknown error"));
+                    alert(`Upload failed (HTTP ${res.status}). ` +
+                          `Check the server log if this keeps happening.`);
                 }
             } catch (err) {
                 alert("Upload error: " + err.message);
@@ -1113,6 +1132,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function handleManualFileUpload(file) {
         if (!file) return;
+        const MAX_BYTES = 15 * 1024 * 1024;
+        if (file.size > MAX_BYTES) {
+            if (manualImageUploadStatus) {
+                manualImageUploadStatus.textContent =
+                    `✗ Photo is ${(file.size / 1048576).toFixed(1)} MB, limit is 15 MB`;
+            }
+            return;
+        }
         if (manualImageUploadStatus) manualImageUploadStatus.textContent = "Uploading image...";
         if (manualImagePreviewWrap) manualImagePreviewWrap.style.display = "flex";
         const formData = new FormData();
@@ -1122,16 +1149,31 @@ document.addEventListener("DOMContentLoaded", () => {
                 method: "POST",
                 body: formData,
             });
-            const data = await res.json();
-            if (data.ok && data.url) {
+            // Split parsing from the request so a non-JSON error body reports
+            // the HTTP status instead of a bare "Network error". A 500 there
+            // was previously indistinguishable from the phone losing signal.
+            let data = null;
+            try {
+                data = await res.json();
+            } catch (_) {
+                data = null;
+            }
+            if (data && data.ok && data.url) {
                 if (manualImageUrlInput) manualImageUrlInput.value = data.url;
                 if (manualImagePreview) manualImagePreview.src = data.url;
                 if (manualImageUploadStatus) manualImageUploadStatus.textContent = "✓ Uploaded";
+            } else if (data && data.error) {
+                if (manualImageUploadStatus) manualImageUploadStatus.textContent = "✗ " + data.error;
             } else {
-                if (manualImageUploadStatus) manualImageUploadStatus.textContent = "✗ " + (data.error || "Upload failed");
+                if (manualImageUploadStatus) {
+                    manualImageUploadStatus.textContent =
+                        `✗ Upload failed (HTTP ${res.status})`;
+                }
             }
         } catch (err) {
-            if (manualImageUploadStatus) manualImageUploadStatus.textContent = "✗ Network error";
+            if (manualImageUploadStatus) {
+                manualImageUploadStatus.textContent = "✗ " + (err.message || "Request failed");
+            }
         }
     }
 

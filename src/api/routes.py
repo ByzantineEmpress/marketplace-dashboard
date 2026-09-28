@@ -2445,6 +2445,21 @@ async def upload_image(file: UploadFile = File(...), _user: dict = Depends(check
     ext = os.path.splitext(sanitized_filename)[1].lower()
     allowed_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
     if ext not in allowed_exts:
+        # HEIC is called out separately because it is the most common real
+        # case: an iPhone set to "High Efficiency" photographs in HEIC, which
+        # the standard library cannot decode, so the file must be converted
+        # before it can be accepted. Without this the user just sees a generic
+        # "unsupported extension" and has no idea why.
+        if ext in {".heic", ".heif"}:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "ok": False,
+                    "error": "HEIC photos aren't supported. On iOS, Settings → Camera → "
+                             "Formats → 'Most Compatible' makes the camera shoot JPEG. "
+                             "Otherwise convert the photo before uploading.",
+                },
+            )
         return JSONResponse(
             status_code=400,
             content={"ok": False, "error": f"Unsupported image extension '{ext}'. Allowed: {', '.join(sorted(allowed_exts))}"},

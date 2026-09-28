@@ -218,6 +218,19 @@ class SecurityAuditTest(unittest.TestCase):
         self.assertTrue(res.json().get("ok"))
         self.assertTrue(res.json().get("url", "").startswith("/static/uploads/"))
 
+        # 5. HEIC gets a specific, actionable message rather than the generic
+        #    "unsupported extension". iPhones on "High Efficiency" shoot HEIC,
+        #    so this is the most likely format a real user will hit.
+        res = self.client.post(
+            "/api/upload",
+            files={"file": ("IMG_1234.HEIC", b"\x00\x00\x00\x18ftypheic", "image/heic")},
+        )
+        self.assertEqual(res.status_code, 400)
+        error = res.json().get("error", "")
+        self.assertIn("HEIC", error)
+        # The message must say what to do about it.
+        self.assertIn("Most Compatible", error)
+
     # ----------------------------------------------------------------------
     # 5. Security Headers (OWASP A05)
     # ----------------------------------------------------------------------
