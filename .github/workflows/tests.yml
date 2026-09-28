@@ -67,18 +67,68 @@ jobs:
 
       - name: Test suite
         run: |
-          rm -f /tmp/ci-marketplace.db*
-          # Write to a log and check the real exit status. Piping unittest
-          # straight into tail would report tail's exit code, so a failing
-          # suite would look green.
+          # One file per process, deliberately — NOT `discover`.
+          #
+          # `python -m unittest discover` collects tests/test_teams.py (not a
+          # unittest module; it drives a live server and has no unittest import)
+          # and tests/test_ui_wiring.py (a bare script). Loading those alongside
+          # the real suites in a single process makes unrelated tests fail, and
+          # the failures move around with collection order.
+          #
+          # Running each file in its own process also isolates the shared
+          # SQLite database between suites. tests/test_teams.py is excluded
+          # because it needs a running server; it is listed in README.md as an
+          # end-to-end check to run by hand.
+          SUITES="
+            tests/test_api_client.py
+            tests/test_email_verification.py
+            tests/test_google_callback.py
+            tests/test_mailer_smtp.py
+            tests/test_multitenancy.py
+            tests/test_rate_limiting.py
+            tests/test_security_audit.py
+            tests/test_storage.py
+            tests/test_transport_security.py
+          "
+
           set +e
-          python -m unittest discover -s tests -p "test_*.py" -v > /tmp/tests.log 2>&1
-          STATUS=$?
+          : > /tmp/tests.log
+          FAILED=""
+          TOTAL=0
+          for f in $SUITES; do
+            echo "===== $f =====" | tee -a /tmp/tests.log
+            python -m unittest "$f" >> /tmp/tests.log 2>&1
+            STATUS=$?
+            if [ "$STATUS" -eq 0 ]; then
+              echo "  PASS" | tee -a /tmp/tests.log
+            else
+              echo "  FAIL (exit $STATUS)" | tee -a /tmp/tests.log
+              FAILED="$FAILED $f"
+            fi
+            TOTAL=$((TOTAL + 1))
+          done
           set -e
-          tail -80 /tmp/tests.log
+
           echo
-          if [ "$STATUS" -ne 0 ]; then
-            echo "::error::Test suite failed"
-            grep -E "^(FAIL|ERROR):" /tmp/tests.log | head -30 || true
+          echo "=============== summary ==============="
+          grep -E "^(Ran |OK|FAILED|=====)" /tmp/tests.log || true
+
+          if [ -n "$FAILED" ]; then
+            echo
+            # Print the tracebacks. unittest writes them BEFORE its summary, so
+            # a version of this workflow that showed only the tail hid the cause
+            # of the failure entirely.
+            echo "=============== failure detail ==============="
+            grep -nE "^(FAIL|ERROR):" /tmp/tests.log | head -40 || true
+            echo
+            echo "--- relevant tracebacks ---"
+            grep -nE "^(FAIL|ERROR|Traceback|AssertionError|[A-Za-z]+Error:)" /tmp/tests.log | head -60 || true
+            echo
+            echo "--- last 150 lines for context ---"
+            tail -150 /tmp/tests.log
+            echo "::error::Failing suites:$FAILED"
+            exit 1
           fi
-          exit $STATUS
+
+          echo
+          echo "All $TOTAL suites passed."

@@ -44,6 +44,18 @@ os.environ["REQUIRE_HTTPS"] = "false"
 # The dev-mode Google path lets tests sign in without contacting Google.
 os.environ.setdefault("GOOGLE_DEV_MODE", "true")
 
+# A client ID must be present for the OAuth flow to start at all: with it empty,
+# /auth/google refuses before issuing the state cookie, so every callback test
+# fails with "security state mismatch" instead of the outcome it asserts. A
+# fresh checkout in CI has no .env, which is what made a green local run red
+# there.
+#
+# Checked for emptiness rather than with setdefault: CI exports this as an empty
+# string, and setdefault treats a set-but-empty variable as present. A real
+# value is still respected. Nothing is contacted — the tests stub the HTTP layer.
+if not os.environ.get("GOOGLE_CLIENT_ID"):
+    os.environ["GOOGLE_CLIENT_ID"] = "test-client-id.apps.googleusercontent.com"
+
 # Keep tests off whatever database the developer has open. A caller that wants a
 # specific path still wins; CI sets a fresh temp file per run.
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test-marketplace.db")
