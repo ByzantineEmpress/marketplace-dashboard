@@ -1,0 +1,53 @@
+# Copy to terraform.tfvars and fill in.
+#
+# terraform.tfvars is gitignored. Do NOT put AWS or Cloudflare credentials in
+# this file - pass those through the environment instead:
+#   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / CLOUDFLARE_API_TOKEN
+
+# --- Cloudflare (required) ---------------------------------------------------
+# Account ID: in the dashboard URL, dash.cloudflare.com/<account_id>
+cloudflare_account_id = "REPLACE_ME"
+# Zone ID: domain -> Overview -> API section, right-hand column
+cloudflare_zone_id = "REPLACE_ME"
+
+domain = "duckduckdeals.ca"
+
+# --- AWS ---------------------------------------------------------------------
+aws_region        = "ca-central-1"
+availability_zone = "ca-central-1a"
+instance_name     = "marketplace-dashboard"
+
+# VERIFY before applying - see the README. Bundle naming changes over time.
+blueprint_id = "ubuntu_22_04"
+bundle_id    = "medium_2_0" # 1 GB / 2 vCPU. 512 MB is tight.
+
+enable_daily_snapshots = true
+
+# --- Access ------------------------------------------------------------------
+# Your own address as /32. 0.0.0.0/0 is rejected on purpose.
+#   curl -s https://api.ipify.org
+ssh_allowed_cidrs = ["REPLACE_WITH_YOUR_IP/32"]
+
+# Prefer supplying your existing key so no private key enters state. From a
+# private key: ssh-keygen -y -f Dash.pem
+# Can also be passed as TF_VAR_ssh_public_key instead of living here.
+ssh_public_key = ""
+
+# --- Application -------------------------------------------------------------
+repository_url = "git@github.com:ByzantineEmpress/marketplace-dashboard.git"
+repo_dir       = "/opt/marketplace-dashboard"
+
+# The login identity becomes <admin_username>@local
+admin_username = "klamkin"
+# admin_password is generated and stored in state; read it with
+#   tofu output -raw admin_password
+
+# Optional. Any of these can be left blank and set later in Admin -> Settings.
+google_client_id     = ""
+google_client_secret = ""
+mail_api_key         = ""
+mail_from            = "Marketplace Dashboard <noreply@send.duckduckdeals.ca>"
+
+# Set to false if the apex CNAME already exists (e.g. the tunnel wizard made
+# it). Terraform will not silently adopt an existing record.
+create_dns_record = true

@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+#
+# Cloud-init bootstrap for the Marketplace Dashboard instance.
+#
+# Rendered by Terraform's templatefile(), so dollar-brace sequences in this
+# file are Terraform's, not bash's. The .env body is injected as a base64 blob
+# rendered from a separate template, so the two languages never share a
+# delimiter and no value has to survive shell quoting.
+#
+# Encodes the fixes for every trap hit on the first manual deployment:
+#   * Docker + Compose v2 (the distro docker.io package has no compose plugin)
+#   * 2 GB swap (a pip build on 1 GB with no swap can be OOM-killed)
+#   * data/ and static/uploads/ owned by uid 100 (the container user) —
+#     root-owned bind mounts caused a restart loop and 500s on every upload
+#   * a complete .env, so the app boots with no CONFIGURATION WARNINGS
+#
+# Secrets are only written to .env and never echoed to the log.
+set -euo pipefail
+
+exec > >(tee -a /var/log/marketplace-bootstrap.log) 2>&1
+
+echo "=== bootstrap starting: $(date -Is) ==="
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq ca-certificates curl git python3 >/dev/null
+
+# ---------- deploy key ----------
+#
+# Root-only file, available only when a key was supplied. It is consumed and
+# deleted during the clone below. Passing the key as a shell variable instead
+# would expose it in the process list.
+DEPLOY_KEY_FILE=/root/.deploy_key
+umask 077
+cat > "$DEPLOY_KEY_FILE" <<'KEYEOF'
+${deploy_key_private}
+KEYEOF
+if [ ! -s "$DEPLOY_KEY_FILE" ]; then
+    rm -f "$DEPLOY_KEY_FILE"
+fi
+
+# ---------- swap ----------
+if ! swapon --show | grep -q .; then
+    echo "--- creating 2G swap ---"
+    fallocate -l 2G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile >/dev/null
+    swapon /swapfile
+    grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+else
+    echo "--- swap already present ---"
+fi
+
+# ---------- docker ----------
+if ! command -v docker >/dev/null 2>&1; then
+    echo "--- installing docker from the official repo ---"
+    curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+    sh /tmp/get-docker.sh >/dev/null
+    rm -f /tmp/get-docker.sh
+fi
+usermod -aG docker ubuntu || true
+systemctl enable --now docker
+
+# ---------- application directories ----------
+REPO_DIR="${repo_dir}"
+mkdir -p "$REPO_DIR"
+chown ubuntu:ubuntu "$REPO_DIR"
+
+# These must be writable by the container user or the app fails in confusing
+# ways. uid 100 / gid 101 is appuser:appgroup inside the image.
+mkdir -p "$REPO_DIR/data" "$REPO_DIR/data/backups" "$REPO_DIR/static/uploads"
+chown -R 100:101 "$REPO_DIR/data" "$REPO_DIR/static/uploads"
+chmod 750 "$REPO_DIR/data" "$REPO_DIR/data/backups"
+chmod 775 "$REPO_DIR/static/uploads"
+
+# ---------- .env ----------
+ENV_FILE="$REPO_DIR/.env"
+if [ ! -f "$ENV_FILE" ]; then
+    echo "--- writing .env ---"
+    # Written via Python from a base64 blob so that shell quoting, special
+    # characters and newlines in the values cannot corrupt the file. The blob
+    # is [A-Za-z0-9+/=] only, so substituting it straight into the literal is
+    # safe and needs no escaping.
+    python3 - "$ENV_FILE" <<'PYEOF'
+import base64, os, sys
+path = sys.argv[1]
+content = base64.b64decode("${env_b64}").decode("utf-8")
+with open(path, "w", encoding="utf-8", newline="\n") as fh:
+    fh.write(content)
+os.chmod(path, 0o640)
+PYEOF
+    chown 100:101 "$ENV_FILE"
+    echo "--- .env written (values not logged) ---"
+else
+    echo "--- .env already exists, leaving it untouched ---"
+fi
+
+# ---------- application source ----------
+#
+# Terraform writes the deploy key to a root-only file; bash reads it from
+# there. Passing it through a shell variable instead would expose it in the
+# process list and, on some configurations, in cloud-init's own logs.
+DEPLOY_KEY_FILE=/root/.deploy_key
+if [ ! -d "$REPO_DIR/.git" ]; then
+    if [ -s "$DEPLOY_KEY_FILE" ]; then
+        echo "--- installing deploy key ---"
+        install -d -m 700 -o ubuntu -g ubuntu /home/ubuntu/.ssh
+        install -m 600 -o ubuntu -g ubuntu "$DEPLOY_KEY_FILE" /home/ubuntu/.ssh/deploy_key
+        # Pin GitHub's host keys so the clone does not depend on interactive trust.
+        ssh-keyscan -t rsa,ecdsa,ed25519 github.com > /home/ubuntu/.ssh/known_hosts 2>/dev/null || true
+        chown ubuntu:ubuntu /home/ubuntu/.ssh/known_hosts
+        export GIT_SSH_COMMAND="ssh -i /home/ubuntu/.ssh/deploy_key -o IdentitiesOnly=yes"
+    fi
+    echo "--- cloning ${repository_url} ---"
+    sudo -u ubuntu -H --preserve-env=GIT_SSH_COMMAND git clone "${repository_url}" "$REPO_DIR"
+    rm -f "$DEPLOY_KEY_FILE"
+else
+    echo "--- repository already present ---"
+fi
+
+# ---------- backup units ----------
+if [ -f "$REPO_DIR/deploy/backup-db.sh" ]; then
+    echo "--- installing backup units ---"
+    install -m 755 "$REPO_DIR/deploy/backup-db.sh" /usr/local/bin/marketplace-backup
+    install -m 644 "$REPO_DIR/deploy/marketplace-backup.service" /etc/systemd/system/
+    install -m 644 "$REPO_DIR/deploy/marketplace-backup.timer" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now marketplace-backup.timer
+fi
+
+echo "=== bootstrap finished: $(date -Is) ==="
+cat <<'NEXTEOF'
+
+Remaining manual steps:
+  1. Put the Cloudflare tunnel token in .env as CLOUDFLARE_TUNNEL_TOKEN
+     (Zero Trust -> Networks -> Tunnels -> your tunnel -> install token)
+  2. cd REPO_DIR && docker compose -f docker-compose.lightsail.yml up -d --build
+  3. Register https://<domain>/auth/google/callback in Google Cloud Console
+NEXTEOF

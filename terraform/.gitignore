@@ -1,0 +1,33 @@
+# Terraform state contains PLAINTEXT SECRETS in this configuration: the
+# generated admin password, the SECRET_KEY, the Google client secret and the
+# mail API key. It must never be committed.
+
+# State and its lock/backup files
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform.tfstate.lock.info
+
+# Provider cache and module cache — recreated by `tofu init`
+.terraform/
+.terraform.lock.hcl.bak
+
+# Variable files frequently hold credentials. The example file is tracked;
+# anything real is not.
+*.tfvars
+*.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+!terraform.tfvars.example
+
+# Saved plans can embed sensitive values too
+*.tfplan
+plan.out
+
+# Crash logs
+crash.log
+crash.*.log
+
+# CLI config that may hold API tokens
+.terraformrc
+terraform.rc

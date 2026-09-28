@@ -98,6 +98,7 @@ Prefer the command line or Docker? See [docs/SETUP.md](docs/SETUP.md).
 | [docs/SETUP.md](docs/SETUP.md) | Install (one-click, manual, Docker), marketplace credentials, troubleshooting |
 | [docs/EMAIL.md](docs/EMAIL.md) | Outbound email: domain + DNS (SPF/DKIM/DMARC), providers, verification |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | Deploying: host choice, Cloudflare, uploads, rate limiting, backups |
+| [terraform/README.md](terraform/README.md) | Rebuilding the infrastructure from scratch (Lightsail + Cloudflare Tunnel) |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Every `.env` key and admin-page setting |
 | [docs/GOOGLE-LOGIN.md](docs/GOOGLE-LOGIN.md) | Creating the Google OAuth client, step by step |
 | [docs/TEAMS.md](docs/TEAMS.md) | How Teams work — user guide |
