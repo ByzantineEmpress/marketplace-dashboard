@@ -1,16 +1,19 @@
 name: Tests
 
-# Runs the full suite on every push and pull request.
+# Runs the suite on every push and pull request.
 #
 # This workflow only TESTS. It deliberately does not deploy: reaching the
 # instance would require opening SSH to GitHub's runner ranges, which changes
-# the security posture of the deployment. See terraform/README.md for the
-# deploy path.
+# the security posture of the deployment. See terraform/README.md.
+#
+# Actions are pinned to commit SHAs rather than tags, matching the convention
+# this repository already used, so a moved tag cannot silently change what runs.
 
 on:
   push:
-    branches: ["**"]
+    branches: ["main", "master"]
   pull_request:
+    branches: ["main", "master"]
   workflow_dispatch:
 
 # A newer push supersedes an in-flight run on the same ref.
@@ -23,30 +26,33 @@ permissions:
 
 jobs:
   suite:
-    name: Test suite
+    name: Test suite (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is included because production runs 3.11 and the difference has
+        # already bitten once (smtpd was removed in 3.12; the mail tests use
+        # plain sockets instead).
+        python-version: ["3.11", "3.12"]
 
     env:
-      # The suite uses Starlette's TestClient, which speaks http://. With
-      # REQUIRE_HTTPS=true the auth cookie is marked Secure and the client will
-      # not send it back, so every authenticated request looks logged out and
-      # ~20 tests fail for reasons unrelated to the code under test.
-      # tests/_env.py also enforces this, so the suite cannot silently depend on
-      # ambient configuration; setting it here as well keeps the intent visible.
+      # tests/_env.py also enforces these, so the suite cannot silently depend
+      # on ambient configuration. Set here as well to keep the intent visible.
       REQUIRE_HTTPS: "false"
       GOOGLE_DEV_MODE: "true"
-      # A throwaway file, never the project's own database.
       DATABASE_URL: "sqlite:////tmp/ci-marketplace.db"
-      # The app prints startup banners; they only add noise here.
       PYTHONDONTWRITEBYTECODE: "1"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.1.0
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements.txt
 
@@ -60,8 +66,8 @@ jobs:
           python -V
           python -c "import fastapi, sqlalchemy; print('fastapi', fastapi.__version__); print('sqlalchemy', sqlalchemy.__version__)"
 
-      # Reads the templates and static/js to confirm every getElementById has a
-      # matching element id. Needs no server and catches a whole class of breakage.
+      # Static check: every getElementById in static/js has a matching id in the
+      # templates. Needs no server.
       - name: UI wiring (static check)
         run: python tests/test_ui_wiring.py
 
@@ -70,15 +76,14 @@ jobs:
           # One file per process, deliberately — NOT `discover`.
           #
           # `python -m unittest discover` collects tests/test_teams.py (not a
-          # unittest module; it drives a live server and has no unittest import)
-          # and tests/test_ui_wiring.py (a bare script). Loading those alongside
-          # the real suites in a single process makes unrelated tests fail, and
-          # the failures move around with collection order.
+          # unittest module; it drives a live server) and tests/test_ui_wiring.py
+          # (a bare script). Loading those alongside the real suites in a single
+          # process makes unrelated tests fail with misleading errors, and the
+          # failures move with collection order. A separate process per file also
+          # isolates the shared SQLite database between suites.
           #
-          # Running each file in its own process also isolates the shared
-          # SQLite database between suites. tests/test_teams.py is excluded
-          # because it needs a running server; it is listed in README.md as an
-          # end-to-end check to run by hand.
+          # tests/test_teams.py is excluded because it needs a running server; it
+          # is documented in README.md as an end-to-end check to run by hand.
           SUITES="
             tests/test_api_client.py
             tests/test_email_verification.py
@@ -94,18 +99,18 @@ jobs:
           set +e
           : > /tmp/tests.log
           FAILED=""
-          TOTAL=0
+          PASSED=0
           for f in $SUITES; do
             echo "===== $f =====" | tee -a /tmp/tests.log
             python -m unittest "$f" >> /tmp/tests.log 2>&1
             STATUS=$?
             if [ "$STATUS" -eq 0 ]; then
               echo "  PASS" | tee -a /tmp/tests.log
+              PASSED=$((PASSED + 1))
             else
               echo "  FAIL (exit $STATUS)" | tee -a /tmp/tests.log
               FAILED="$FAILED $f"
             fi
-            TOTAL=$((TOTAL + 1))
           done
           set -e
 
@@ -115,14 +120,13 @@ jobs:
 
           if [ -n "$FAILED" ]; then
             echo
-            # Print the tracebacks. unittest writes them BEFORE its summary, so
-            # a version of this workflow that showed only the tail hid the cause
-            # of the failure entirely.
+            # unittest writes tracebacks BEFORE its summary, so printing only
+            # the tail hides the cause. Show the matching lines, then context.
             echo "=============== failure detail ==============="
             grep -nE "^(FAIL|ERROR):" /tmp/tests.log | head -40 || true
             echo
-            echo "--- relevant tracebacks ---"
-            grep -nE "^(FAIL|ERROR|Traceback|AssertionError|[A-Za-z]+Error:)" /tmp/tests.log | head -60 || true
+            echo "--- tracebacks ---"
+            grep -nE "^(Traceback|AssertionError|[A-Za-z]+Error:)" /tmp/tests.log | head -60 || true
             echo
             echo "--- last 150 lines for context ---"
             tail -150 /tmp/tests.log
@@ -131,4 +135,4 @@ jobs:
           fi
 
           echo
-          echo "All $TOTAL suites passed."
+          echo "All $PASSED suites passed."
