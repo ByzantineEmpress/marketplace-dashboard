@@ -10,6 +10,15 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Must precede the src imports: it fixes the ambient configuration the app
+# reads at import time. See tests/_env.py for why that matters.
+try:
+    from tests import _env  # noqa: E402,F401  isort:skip
+except ImportError:  # `tests` resolved to the directory, not the package
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import _env  # noqa: E402,F401  isort:skip
+
+
 from src import storage
 from src.config import config
 

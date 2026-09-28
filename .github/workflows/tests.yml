@@ -1,0 +1,84 @@
+name: Tests
+
+# Runs the full suite on every push and pull request.
+#
+# This workflow only TESTS. It deliberately does not deploy: reaching the
+# instance would require opening SSH to GitHub's runner ranges, which changes
+# the security posture of the deployment. See terraform/README.md for the
+# deploy path.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push supersedes an in-flight run on the same ref.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    name: Test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # The suite uses Starlette's TestClient, which speaks http://. With
+      # REQUIRE_HTTPS=true the auth cookie is marked Secure and the client will
+      # not send it back, so every authenticated request looks logged out and
+      # ~20 tests fail for reasons unrelated to the code under test.
+      # tests/_env.py also enforces this, so the suite cannot silently depend on
+      # ambient configuration; setting it here as well keeps the intent visible.
+      REQUIRE_HTTPS: "false"
+      GOOGLE_DEV_MODE: "true"
+      # A throwaway file, never the project's own database.
+      DATABASE_URL: "sqlite:////tmp/ci-marketplace.db"
+      # The app prints startup banners; they only add noise here.
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Show environment
+        run: |
+          python -V
+          python -c "import fastapi, sqlalchemy; print('fastapi', fastapi.__version__); print('sqlalchemy', sqlalchemy.__version__)"
+
+      # Reads the templates and static/js to confirm every getElementById has a
+      # matching element id. Needs no server and catches a whole class of breakage.
+      - name: UI wiring (static check)
+        run: python tests/test_ui_wiring.py
+
+      - name: Test suite
+        run: |
+          rm -f /tmp/ci-marketplace.db*
+          # Write to a log and check the real exit status. Piping unittest
+          # straight into tail would report tail's exit code, so a failing
+          # suite would look green.
+          set +e
+          python -m unittest discover -s tests -p "test_*.py" -v > /tmp/tests.log 2>&1
+          STATUS=$?
+          set -e
+          tail -80 /tmp/tests.log
+          echo
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::error::Test suite failed"
+            grep -E "^(FAIL|ERROR):" /tmp/tests.log | head -30 || true
+          fi
+          exit $STATUS
