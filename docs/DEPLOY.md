@@ -167,6 +167,39 @@ It warns rather than blocks, so a proxy that simply omits the header cannot
 take the site down. Keep port 80/443 closed on the instance and this should
 never appear.
 
+### 2b. Mounted directories must be writable by the container user
+
+**This is the most common deployment failure.** The Dockerfile drops to a
+non-root user (`appuser`, uid 100), but bind-mounted directories are created
+and owned by whoever makes them on the host — often root, or your own uid
+(1000). The container then cannot write, and the symptoms are indirect:
+
+| Missing permission | Symptom |
+|---|---|
+| `data/` not writable | container restart-loops; `sqlite3.OperationalError: unable to open database file` |
+| `static/uploads/` not writable | image uploads return 500; the browser shows a generic "network error" |
+
+Fix both before first start:
+
+```bash
+cd /opt/marketplace-dashboard
+sudo chown -R 100:101 data static/uploads
+sudo chmod 750 data
+sudo chmod 775 static/uploads
+ls -ld data static/uploads
+```
+
+Confirm the container can actually write (run after the container is up):
+
+```bash
+docker compose -f docker-compose.lightsail.yml exec -T web \
+  sh -c 'touch /app/static/uploads/.wt && echo WRITE_OK && rm -f /app/static/uploads/.wt'
+```
+
+⚠️ If you use `UPLOAD_BACKEND=s3` you can drop the `static/uploads` mount
+entirely — S3 sidesteps host ownership completely, which is one more reason it
+suits a rebuilt instance.
+
 ## Step-by-step: Lightsail + Cloudflare Tunnel
 
 The tunnel route is recommended because the app then has **no publicly
@@ -330,3 +363,10 @@ rebuilds.
 - [ ] Backup timer installed, run once manually, copied off-host
 - [ ] Startup log shows no CONFIGURATION WARNINGS
 
+## Note on the git TLS workaround
+
+On a Windows development machine `git` may need
+`-c http.sslBackend=openssl` because of a schannel credential error. That flag
+does **not** exist on Linux — git there is built against gnutls and rejects it
+with `fatal: Unsupported SSL backend 'openssl'`. On the server, plain
+`git pull` is correct; don't copy the Windows flag across.
