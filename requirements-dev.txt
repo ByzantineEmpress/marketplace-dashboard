@@ -1,0 +1,6 @@
+# Development and CI dependencies. Not needed to run the application.
+
+# Static analysis. tests/test_static_analysis.py uses this to catch names that
+# are read but never bound - the class of bug that produced a live
+# "name 'api_secret' is not defined" from the Etsy adapter.
+pyflakes==4.0.0

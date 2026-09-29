@@ -12,6 +12,7 @@ References:
 - https://developers.etsy.com/documentation/apis/reference/shop-listing
 """
 
+import os
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -144,9 +145,10 @@ class EtsyAdapter(MarketplaceAdapter):
                 # Try to fetch shop name
                 if shop_id:
                     try:
+                        api_secret_local = _cred(credentials, "api_secret") or config.ETSY_API_SECRET or os.environ.get("ETSY_API_SECRET") or os.environ.get("ESY_API_SECRET") or ""
                         headers = {
                             "Authorization": f"Bearer {token_data['access_token']}",
-                            "x-api-key": f"{api_key}:{api_secret}",
+                            "x-api-key": f"{api_key}:{api_secret_local}",
                         }
                         resp = httpx.get(
                             f"{ETSY_API_BASE}/applications/{api_key}/shops",
@@ -238,6 +240,9 @@ class EtsyAdapter(MarketplaceAdapter):
                 return []
 
             api_key = _cred(credentials, "api_key") or config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
+            # The shared secret is half of the x-api-key pair Etsy requires
+            # on every request, so it has to be resolved here too.
+            api_secret = _cred(credentials, "api_secret") or config.ETSY_API_SECRET or os.environ.get("ETSY_API_SECRET") or os.environ.get("ESY_API_SECRET") or ""
             headers = {
                 "Authorization": f"Bearer {token['access_token']}",
                 # Etsy requires the credential pair here: "<keystring>:<shared_secret>".
