@@ -1168,6 +1168,27 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // Enter in any editor field performs the same save as the Save button (which
+    // closes the modal). Registered once, here, rather than inside
+    // openListingModal: the handler is delegated, and openListingModal runs on
+    // every open, so registering it there would stack duplicate listeners and
+    // fire the save once per previous open.
+    //
+    // Textareas keep Enter for newlines, buttons keep their own Enter
+    // activation, and an in-progress or IME-composing keypress is ignored.
+    if (modalBody) {
+        modalBody.addEventListener("keydown", (e) => {
+            if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+            const el = e.target;
+            if (!el) return;
+            if (el.tagName !== "INPUT" && el.tagName !== "SELECT") return;
+            const saveBtn = modalBody.querySelector(".detail-save-cost-btn");
+            if (!saveBtn || saveBtn.disabled) return;
+            e.preventDefault();
+            saveBtn.click();
+        });
+    }
+
     // --- Manual Listing Modal ---
     const manualModal = document.getElementById("manual-listing-modal");
     const openManualBtn = document.getElementById("add-manual-listing-btn");
