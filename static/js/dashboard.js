@@ -2185,7 +2185,7 @@ function renderCard(listing) {
                             : (hasPayout
                                 ? `<span title="What the marketplace paid out, after its fee">Payout $${(payout / 100).toFixed(2)}</span>
                                    · <span title="Cost of goods plus the postage you paid">Costs $${(costsOnSale / 100).toFixed(2)}</span>
-                                   · <span style="color: ${actualProfit >= 0 ? 'var(--success)' : 'var(--danger)'}; font-weight: 500;" title="Payout less all costs">${actualProfit >= 0 ? 'Profit +' : 'Loss −'}$${Math.abs(actualProfit).toFixed(2)}</span>`
+                                   · <span class="card-actual-profit" style="color: ${actualProfit >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Payout less all costs">${actualProfit >= 0 ? 'Profit +' : 'Loss −'}$${Math.abs(actualProfit).toFixed(2)}</span>`
                                 : `<span>${isFree && !hasCost ? "Free" : `Cost: ${totalCostText}`}</span> · <span style="color: ${profitColor}; font-weight: 500;" title="Listed price less costs, before it sells">Est. net: ${profitSign}$${netProfit.toFixed(2)} CAD</span>`)}
                     </div>
                 `;

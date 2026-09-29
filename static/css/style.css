@@ -721,6 +721,16 @@ code {
     color: var(--text-muted);
 }
 
+/* The bottom line of a sale. Set larger and heavier than the workings beside it
+   (payout and costs, at 11.5px) because it is the figure being looked for — the
+   other two are only there to show how it was reached. */
+.card-actual-profit {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+}
+
 /* Sale economics in the detail modal: what the buyer paid, what the marketplace
    took, what actually arrived, and the deductions that turn it into profit. */
 .detail-sale-economics {
