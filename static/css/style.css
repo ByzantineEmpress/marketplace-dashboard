@@ -644,6 +644,45 @@ code {
     border-color: var(--border-strong);
 }
 
+/* A sold item is finished, so its card is outlined in green and its corner folded
+   back. Both are decoration: nothing is hidden, and the profit is still the
+   loudest thing on the card.
+
+   An outline rather than another box-shadow, because the card already uses
+   box-shadow for its elevation and, when grouped, for the stacked-cards effect —
+   a green ring must not silently replace either of those. Outline also follows
+   the border radius and costs no layout. */
+.listing-card--sold {
+    border-color: var(--success);
+    outline: 1px solid var(--success);
+    outline-offset: -1px;
+}
+
+/* Keep the green on hover: .listing-card:hover is a class plus a pseudo-class, so
+   it outranks the rule above and would otherwise revert the border. */
+.listing-card--sold:hover {
+    border-color: var(--success);
+}
+
+/* The fold. A hard gradient stop draws the turned-back flap in the success
+   colour; a second gradient draws the crease along that diagonal. The crease is
+   what does the work — without it a triangle of colour just reads as a wedge
+   rather than paper turned back. */
+.listing-card--sold::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 34px;
+    height: 34px;
+    pointer-events: none;
+    background:
+        linear-gradient(225deg,
+            transparent 46%, rgba(0, 0, 0, 0.35) 50%, transparent 54%),
+        linear-gradient(225deg,
+            var(--success) 0 50%, var(--bg-elevated) 50% 100%);
+}
+
 .card-platform-badge {
     position: absolute;
     top: 10px;

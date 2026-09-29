@@ -2131,6 +2131,9 @@ function renderGroupSection(listing) {
 function renderCard(listing) {
     const groupMembers = (listing.group_member_list || []);
     const isGroup = groupMembers.length > 1;
+    // Sold cards get a folded corner and a green outline: the item is finished,
+    // so the card should say so before it is read.
+    const isSold = Boolean(listing.is_sold) || listing.status === "sold";
     const platformList = isGroup
         ? [...new Set(groupMembers.map(m => m.platform))]
         : listing.platforms;
@@ -2230,7 +2233,7 @@ function renderCard(listing) {
     const metricsHtml = renderEngagementChip(listing);
 
     return `
-        <div class="listing-card${missingCost ? " listing-card--missing-cost" : ""}${isGroup ? " listing-card--group" : ""}" data-id="${listing.id}" data-platform="${listing.platform}">
+        <div class="listing-card${isSold ? " listing-card--sold" : ""}${missingCost ? " listing-card--missing-cost" : ""}${isGroup ? " listing-card--group" : ""}" data-id="${listing.id}" data-platform="${listing.platform}">
             <span class="card-select-check">✓</span>
             <div class="card-platform-badge" style="display:flex;gap:4px;flex-wrap:wrap;max-width:85%;">${platformBadges}</div>
             <div class="card-image">
