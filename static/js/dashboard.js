@@ -2027,7 +2027,7 @@ function renderCard(listing) {
     const costLine = missingCost
         ? `<div class="card-cost-missing" title="No purchase price recorded for this listing">No COGS recorded — profit unknown</div>`
         : (hasCost ? `
-                    <div style="font-size: 11.5px; color: var(--text-muted); margin-top: -4px; margin-bottom: 6px;">
+                    <div class="card-cost-line">
                         <span>Cost: ${costText}</span> · <span style="color: ${listing.status === 'written_off' ? 'var(--danger)' : profitColor}; font-weight: 500;">
                             ${listing.status === 'written_off' ? `Loss: -$${(listing.total_cost || 0).toFixed(2)} CAD` : `Net: ${profitSign}$${netProfit.toFixed(2)} CAD`}
                         </span>
@@ -2045,6 +2045,8 @@ function renderCard(listing) {
         ? `<span class="card-status card-status--group" title="Same item on ${groupMembers.length} channels">Group · ${groupMembers.length}</span>`
         : "";
 
+    const metricsHtml = renderEngagementChip(listing);
+
     return `
         <div class="listing-card${missingCost ? " listing-card--missing-cost" : ""}${isGroup ? " listing-card--group" : ""}" data-id="${listing.id}" data-platform="${listing.platform}">
             <span class="card-select-check">✓</span>
@@ -2057,13 +2059,13 @@ function renderCard(listing) {
                 <p class="card-price">${price}</p>
                 ${delistAlert}
                 ${costLine}
-                <div class="card-meta">
+                <div class="card-flags">
                     <span class="card-status card-status--${listing.status || 'unknown'}">${listing.status === 'written_off' ? 'Written Off' : (listing.status || "unknown")}</span>
                     ${groupChip}
-                    ${renderEngagementChip(listing)}
                     ${missingCost ? `<span class="card-status card-status--missing-cost" title="No purchase price recorded">No Cost</span>` : ""}
-                    ${listing.team_name ? `<span class="card-team" title="Team">${escapeHtml(listing.team_name)}</span>` : ""}
                 </div>
+                ${metricsHtml ? `<div class="card-metrics">${metricsHtml}</div>` : ""}
+                ${listing.team_name ? `<div class="card-footer"><span class="card-team" title="Team">${escapeHtml(listing.team_name)}</span></div>` : ""}
             </div>
         </div>
     `;
