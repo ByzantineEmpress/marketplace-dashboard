@@ -277,7 +277,8 @@ class MarketplaceAdapter(ABC):
 
     def store_listings(self, db: SessionLocal,
                        listings: List[Dict[str, Any]],
-                       team_id: Optional[int] = None) -> Dict[str, int]:
+                       team_id: Optional[int] = None,
+                       owner_user_id: Optional[int] = None) -> Dict[str, int]:
         """Store (or update) listings in the database.
 
         Returns a summary: ``{"added": N, "updated": M, "failed": K}``
@@ -287,13 +288,33 @@ class MarketplaceAdapter(ABC):
         failed = 0
         first_error = None
 
-        # Resolve fallback team_id if not explicitly provided
+        # Resolve the destination team.
+        #
+        # This MUST come from the syncing user. It previously fell back to
+        # "the first team in the database", which with more than one account
+        # writes one tenant's listings into another's workspace: a real sync
+        # put 500 of one seller's listings into the local admin's team.
         target_team_id = team_id
+
+        if not target_team_id and owner_user_id is not None:
+            from src.models import TeamMembership
+            membership = (
+                db.query(TeamMembership)
+                .filter(TeamMembership.user_id == owner_user_id)
+                .order_by(TeamMembership.id)
+                .first()
+            )
+            if membership:
+                target_team_id = membership.team_id
+
         if not target_team_id:
-            from src.models import Team
-            default_t = db.query(Team).first()
-            if default_t:
-                target_team_id = default_t.id
+            # Refuse rather than guess. Writing to whichever team happens to be
+            # first is worse than storing nothing.
+            self.last_error = (
+                "Could not determine which team these listings belong to. "
+                "This account is not a member of any team yet."
+            )
+            return {"added": 0, "updated": 0, "failed": 0, "first_error": self.last_error}
 
         for data in listings:
             try:
@@ -432,8 +453,8 @@ class MarketplaceAdapter(ABC):
                 result["note"] = "No listings found"
                 return result
 
-            # Store in DB
-            stored = self.store_listings(db, listings)
+            # Store in DB, owned by the team of the user who ran the sync.
+            stored = self.store_listings(db, listings, owner_user_id=user_id)
             result["listings_added"] = stored["added"]
             result["listings_updated"] = stored["updated"]
             result["listings_failed"] = stored.get("failed", 0)
