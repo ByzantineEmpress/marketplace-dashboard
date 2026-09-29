@@ -53,6 +53,11 @@ class MarketplaceAdapter(ABC):
     PLATFORM = None  # must be overridden, e.g. "ebay" or "etsy"
     PLATFORM_LABEL = None  # e.g. "eBay" or "Etsy"
 
+    # Prefix of a generated placeholder title (e.g. "eBay listing 800657...") for
+    # platforms whose listing sync cannot supply real titles. A sale carries the
+    # real title, so record_sales() replaces a placeholder when it sees one.
+    TITLE_PLACEHOLDER_PREFIX = ""
+
     # Rate-limit: max requests per window (overridden per platform)
     MAX_REQUESTS = 100
     RATE_WINDOW_SECONDS = 60
@@ -405,6 +410,112 @@ class MarketplaceAdapter(ABC):
                 time.sleep(delay)
 
         raise last_error
+
+    # ---------- Sales (completed orders) ----------
+
+    def _resolve_team_id(self, db: SessionLocal, owner_user_id):
+        """The team a synced row belongs to, taken from the user who ran the sync.
+
+        Mirrors store_listings: the destination must come from the syncing user,
+        never from "the first team in the database", which would write one
+        tenant's sales into another's workspace.
+        """
+        if owner_user_id is None:
+            return None
+        from src.models import TeamMembership
+
+        membership = (
+            db.query(TeamMembership)
+            .filter(TeamMembership.user_id == owner_user_id)
+            .order_by(TeamMembership.id)
+            .first()
+        )
+        return membership.team_id if membership else None
+
+    def record_sales(self, db: SessionLocal, sales: List[Dict[str, Any]],
+                     owner_user_id=None) -> Dict[str, int]:
+        """Apply completed sales to the listings table.
+
+        A sale whose item we already track is marked sold with the REAL sale price
+        and date. That is strictly better than the manual flow, which records the
+        moment the button was pressed and takes the price on trust.
+
+        A sale whose item we have NO row for still becomes a listing. An item
+        leaves the active-listing endpoints the moment it sells, so anything
+        bought and sold between two syncs would otherwise never be seen at all,
+        and its revenue would be missing from every total.
+        """
+        recorded = 0
+        created = 0
+        team_id = self._resolve_team_id(db, owner_user_id)
+
+        for sale in sales:
+            item_id = str(sale.get("platform_listing_id") or "")
+            if not item_id:
+                continue
+            try:
+                existing = (
+                    db.query(Listing)
+                    .filter_by(platform=self.PLATFORM, platform_listing_id=item_id)
+                    .first()
+                )
+                sold_at = sale.get("sold_at") or datetime.utcnow()
+                price_cents = int(sale.get("price_cents") or 0)
+                currency = sale.get("currency") or "CAD"
+                title = sale.get("title") or ""
+
+                if existing:
+                    existing.is_sold = True
+                    existing.status = "sold"
+                    existing.sold_at = sold_at
+                    existing.available_quantity = 0
+                    if price_cents:
+                        existing.price_cents = price_cents
+                        existing.price_raw = f"{currency} {price_cents / 100:.2f}"
+                        existing.currency = currency
+                    if title and (
+                        not existing.title
+                        or (
+                            self.TITLE_PLACEHOLDER_PREFIX
+                            and existing.title.startswith(self.TITLE_PLACEHOLDER_PREFIX)
+                        )
+                    ):
+                        existing.title = title
+                    existing.updated_at = datetime.utcnow()
+                    recorded += 1
+                else:
+                    db.add(Listing(
+                        platform=self.PLATFORM,
+                        platform_listing_id=item_id,
+                        title=title or f"{self.PLATFORM} item {item_id}",
+                        price_cents=price_cents,
+                        price_raw=f"{currency} {price_cents / 100:.2f}",
+                        currency=currency,
+                        status="sold",
+                        is_sold=True,
+                        sold_at=sold_at,
+                        available_quantity=0,
+                        team_id=team_id,
+                    ))
+                    created += 1
+            except Exception:
+                # One bad sale must not abandon the rest of the batch.
+                db.rollback()
+                continue
+
+        db.commit()
+        return {"recorded": recorded, "created": created}
+
+    def sync_sales(self, db: SessionLocal, user_id=None,
+                   credentials: dict = None) -> Dict[str, Any]:
+        """Pull completed sales for this platform.
+
+        Platforms with no sales API inherit this no-op and report
+        ``supported: False``, so the sync route can call it unconditionally
+        rather than branching per platform.
+        """
+        return {"supported": False, "success": True, "fetched": 0,
+                "recorded": 0, "created": 0}
 
     # ---------- Sync orchestration ----------
 

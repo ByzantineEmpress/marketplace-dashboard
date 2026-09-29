@@ -104,6 +104,7 @@ jobs:
             tests/test_multitenancy.py
             tests/test_other_marketplaces.py
             tests/test_rate_limiting.py
+            tests/test_sales_sync.py
             tests/test_security_audit.py
             tests/test_static_analysis.py
             tests/test_storage.py

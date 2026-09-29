@@ -54,6 +54,9 @@ class eBayAdapter(MarketplaceAdapter):
     PLATFORM_LABEL = "eBay"
     MAX_REQUESTS = 50  # eBay v2 allows ~50 req/min
     RATE_WINDOW_SECONDS = 60
+    # The inventory report carries no titles, so listing sync generates these.
+    # An order does carry the real title, so recording a sale replaces it.
+    TITLE_PLACEHOLDER_PREFIX = "eBay listing "
 
     def get_platform_name(self) -> str:
         return "eBay"
@@ -599,6 +602,112 @@ class eBayAdapter(MarketplaceAdapter):
             views[item_id] = count
 
         return views
+
+    def sync_sales(self, db, user_id=None, credentials: dict = None,
+                   days: int = 90) -> Dict[str, Any]:
+        """Pull recent eBay orders and record them as sales.
+
+        Orders are the only source of sold data on eBay. Every listing endpoint
+        reads ACTIVE items, and an item leaves them the moment it sells, so
+        without this a sale is invisible until someone marks it by hand.
+        """
+        from datetime import datetime, timedelta
+
+        token = self.get_token(db, user_id=user_id, credentials=credentials)
+        if not token:
+            return {"supported": True, "success": False, "fetched": 0,
+                    "recorded": 0, "created": 0,
+                    "error": "No valid access token — connect the account first"}
+
+        marketplace = (token.get("registration_marketplace_id") or "").strip() or "EBAY_US"
+        headers = {
+            "Authorization": f"Bearer {token['access_token']}",
+            "X-EBAY-C-MARKETPLACE-ID": marketplace,
+        }
+
+        # eBay caps the window for an order query at 90 days.
+        days = max(1, min(int(days), 90))
+        since = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+        sales: List[dict] = []
+        offset = 0
+        page_size = 100
+        try:
+            while offset < 1000:
+                resp = httpx.get(
+                    f"{EBAY_API_BASE}/sell/fulfillment/v1/order",
+                    headers=headers,
+                    params={"limit": page_size, "offset": offset,
+                            "filter": f"creationdate:[{since}..]"},
+                    timeout=60,
+                )
+                if resp.status_code != 200:
+                    # Report a failure only when nothing was gathered; a partial
+                    # page is still worth recording.
+                    if not sales:
+                        detail = ""
+                        try:
+                            detail = resp.json()["errors"][0].get("message", "")
+                        except Exception:
+                            detail = resp.text[:120]
+                        return {"supported": True, "success": False, "fetched": 0,
+                                "recorded": 0, "created": 0,
+                                "error": f"eBay orders HTTP {resp.status_code}: {detail}"}
+                    break
+
+                orders = (resp.json() or {}).get("orders") or []
+                for order in orders:
+                    sales.extend(self._sales_from_order(order))
+                if len(orders) < page_size:
+                    break
+                offset += page_size
+        except Exception as exc:
+            if not sales:
+                return {"supported": True, "success": False, "fetched": 0,
+                        "recorded": 0, "created": 0,
+                        "error": f"eBay orders failed: {exc}"}
+
+        applied = self.record_sales(db, sales, owner_user_id=user_id)
+        return {"supported": True, "success": True, "fetched": len(sales),
+                "recorded": applied["recorded"], "created": applied["created"]}
+
+    def _sales_from_order(self, order: dict) -> List[dict]:
+        """One entry per order line item, shaped for record_sales().
+
+        ``lineItemCost`` is the total for the line, so it is used as the revenue
+        figure directly: the dashboard's realised revenue sums price_cents, and
+        using a per-unit price would understate any multi-quantity sale.
+        """
+        from datetime import datetime
+
+        sold_at = None
+        created = order.get("creationDate") or ""
+        if created:
+            try:
+                sold_at = datetime.strptime(created[:19], "%Y-%m-%dT%H:%M:%S")
+            except ValueError:
+                sold_at = None
+
+        sales = []
+        for line in order.get("lineItems") or []:
+            item_id = str(line.get("legacyItemId") or "")
+            if not item_id:
+                continue
+            cost = line.get("lineItemCost") or {}
+            try:
+                price_cents = int(round(float(cost.get("value") or 0) * 100))
+            except (TypeError, ValueError):
+                price_cents = 0
+            sales.append({
+                "platform_listing_id": item_id,
+                "title": line.get("title") or "",
+                "price_cents": price_cents,
+                "currency": cost.get("currency") or "CAD",
+                "sold_at": sold_at,
+                "quantity": int(line.get("quantity") or 1),
+                "order_id": order.get("orderId"),
+            })
+        return sales
 
     def _fetch_getitem(self, item_id: str, access_token: str, marketplace: str) -> dict:
         """Fetch an item's watcher count via the Trading API GetItem.

@@ -2429,6 +2429,20 @@ async def sync_account(body: dict, db: Session = Depends(get_db), user: dict = D
     credentials = _user_credentials(db, user["id"], platform)
     try:
         result = adapter.sync_all(db, user_id=user["id"], credentials=credentials)
+
+        # Sales are a separate, additive pass. It has to run even when the
+        # listing sync found nothing: an account whose items have all sold has no
+        # active listings but plenty of sales, and every listing endpoint drops an
+        # item the moment it sells. A platform with no sales API reports
+        # supported: False rather than failing.
+        try:
+            result["sales"] = adapter.sync_sales(
+                db, user_id=user["id"], credentials=credentials)
+        except Exception as e:
+            result["sales"] = {"supported": True, "success": False,
+                               "fetched": 0, "recorded": 0, "created": 0,
+                               "error": str(e)}
+
         return {"ok": True, "platform": platform, "result": result}
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
