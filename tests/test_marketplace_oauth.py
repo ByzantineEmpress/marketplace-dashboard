@@ -670,7 +670,17 @@ class EtsyOnlyFetchesOwnShopTest(unittest.TestCase):
                 "listings/active", url,
                 "the public marketplace feed was requested",
             )
-            self.assertIn(f"/shops/64488261/listings", url)
+            # Still confined to THIS shop's own resources. Shipping profiles are
+            # read once per sync to resolve free shipping, so this can no longer be
+            # "listings endpoints only" — but it must never leave the shop.
+            self.assertIn(
+                "/shops/64488261/", url,
+                f"a request escaped this shop: {url}",
+            )
+        self.assertTrue(
+            any("/listings" in url for url in requested),
+            "the shop's own listings were never requested",
+        )
 
     def test_the_source_no_longer_mentions_the_public_endpoint_as_a_call(self):
         """Stops a future edit reintroducing it, and keeps the docstrings honest."""
@@ -734,7 +744,10 @@ class EtsyOnlyFetchesOwnShopTest(unittest.TestCase):
                 return {"count": 0, "results": []}
 
         def fake_get(url, **kwargs):
-            params_seen.append(kwargs.get("params", {}))
+            # Only the listings call carries these params; the shipping-profile
+            # lookup that now precedes it does not.
+            if "/listings" in url:
+                params_seen.append(kwargs.get("params", {}))
             return FakeResp()
 
         real = etsy_mod.httpx.get
@@ -744,7 +757,7 @@ class EtsyOnlyFetchesOwnShopTest(unittest.TestCase):
         finally:
             etsy_mod.httpx.get = real
 
-        self.assertTrue(params_seen)
+        self.assertTrue(params_seen, "the listings endpoint was never called")
         self.assertEqual(params_seen[0].get("state"), "active")
 
     def test_images_are_explicitly_included(self):
@@ -764,7 +777,8 @@ class EtsyOnlyFetchesOwnShopTest(unittest.TestCase):
                 return {"count": 0, "results": []}
 
         def fake_get(url, **kwargs):
-            params_seen.append(kwargs.get("params", {}))
+            if "/listings" in url:
+                params_seen.append(kwargs.get("params", {}))
             return FakeResp()
 
         real = etsy_mod.httpx.get
@@ -774,11 +788,62 @@ class EtsyOnlyFetchesOwnShopTest(unittest.TestCase):
         finally:
             etsy_mod.httpx.get = real
 
-        self.assertTrue(params_seen)
+        self.assertTrue(params_seen, "the listings endpoint was never called")
         self.assertEqual(
             params_seen[0].get("includes"), "Images",
             "images must be requested explicitly or they arrive as null",
         )
+
+    def test_free_shipping_comes_from_the_shops_own_profiles(self):
+        """Etsy puts no shipping cost on a listing, only a profile id.
+
+        A profile is free only when every destination it covers is free: charging
+        one region and not another is a discount, and badging it "free shipping"
+        would be wrong on a card read at a glance.
+        """
+        import src.adapters.etsy as etsy_mod
+
+        payload = {"count": 2, "results": [
+            {"shipping_profile_id": 1, "shipping_profile_destinations": [
+                {"primary_cost": {"amount": 0}}, {"primary_cost": {"amount": 0}}]},
+            {"shipping_profile_id": 2, "shipping_profile_destinations": [
+                {"primary_cost": {"amount": 0}}, {"primary_cost": {"amount": 6000}}]},
+        ]}
+
+        class FakeResp:
+            status_code = 200
+            def json(self):
+                return payload
+
+        real = etsy_mod.httpx.get
+        etsy_mod.httpx.get = lambda *a, **kw: FakeResp()
+        try:
+            profiles = self.adapter._fetch_shipping_profiles({"x-api-key": "k:s"}, "1")
+        finally:
+            etsy_mod.httpx.get = real
+
+        self.assertTrue(profiles[1], "every destination free must be free shipping")
+        self.assertFalse(profiles[2], "one paid destination is not free shipping")
+
+    def test_a_profile_with_no_destinations_is_unknown_not_free(self):
+        import src.adapters.etsy as etsy_mod
+
+        payload = {"count": 1, "results": [
+            {"shipping_profile_id": 7, "shipping_profile_destinations": []}]}
+
+        class FakeResp:
+            status_code = 200
+            def json(self):
+                return payload
+
+        real = etsy_mod.httpx.get
+        etsy_mod.httpx.get = lambda *a, **kw: FakeResp()
+        try:
+            profiles = self.adapter._fetch_shipping_profiles({"x-api-key": "k:s"}, "1")
+        finally:
+            etsy_mod.httpx.get = real
+
+        self.assertFalse(profiles[7])
 
     def test_a_null_images_value_is_handled(self):
         """The real shape from Etsy when includes is omitted: key present, null."""

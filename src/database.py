@@ -131,6 +131,10 @@ def _migrate_existing_db():
             conn.execute(text("ALTER TABLE listings ADD COLUMN shipping_cost_cents INTEGER NOT NULL DEFAULT 0"))
         if "net_payout_cents" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN net_payout_cents INTEGER NOT NULL DEFAULT 0"))
+        # Nullable: NULL means the platform did not state the shipping terms, which
+        # must not be shown as "not free".
+        if "free_shipping" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN free_shipping BOOLEAN"))
 
         # 1e. sold_at timestamp for date-range metrics
         if "sold_at" not in cols:

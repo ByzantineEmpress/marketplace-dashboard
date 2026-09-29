@@ -208,6 +208,11 @@ class Listing(Base):
     shipping_charged_cents = Column(Integer, nullable=False, default=0)  # buyer paid
     shipping_cost_cents = Column(Integer, nullable=False, default=0)     # seller paid
     net_payout_cents = Column(Integer, nullable=False, default=0)        # actually received
+    # Whether the listing advertises free shipping. Nullable on purpose: three
+    # states matter — yes, no, and the platform did not say. A calculated-shipping
+    # eBay listing returns no shipping option at all until a buyer's location is
+    # known, and reporting that as "not free" would be a guess.
+    free_shipping = Column(Boolean, nullable=True)
 
     # State
     status = Column(String(20), nullable=False, default="active", index=True)
@@ -347,6 +352,8 @@ class Listing(Base):
             "shipping_cost": round((self.shipping_cost_cents or 0) / 100, 2),
             "net_payout_cents": self.net_payout_cents or 0,
             "net_payout": round((self.net_payout_cents or 0) / 100, 2),
+            # None means the platform never said, which is different from "no".
+            "free_shipping": self.free_shipping,
             "actual_revenue": round(self.actual_revenue_cents / 100, 2),
             "actual_profit_cents": self.actual_profit_cents,
             "actual_profit": round(self.actual_profit_cents / 100, 2),

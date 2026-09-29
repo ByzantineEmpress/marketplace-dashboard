@@ -2185,6 +2185,14 @@ function renderCard(listing) {
     // than a number that appears from nowhere.
     const costsOnSale = (listing.total_cost_cents || 0) + (listing.shipping_cost_cents || 0);
 
+    // Free shipping is worth flagging: it is money the seller has decided to
+    // absorb, and it changes what a sale is worth before anything else is
+    // deducted. Only a definite true earns the badge — a platform that never
+    // stated the terms must not be shown as either answer.
+    const freeShippingChip = listing.free_shipping === true
+        ? `<span class="card-chip card-chip--freeship" title="This listing advertises free shipping: you absorb the postage">Free shipping</span>`
+        : "";
+
     const costLine = missingCost
         ? `<div class="card-cost-missing" title="No purchase price recorded for this listing">No COGS recorded — profit unknown</div>`
         : `
@@ -2235,6 +2243,7 @@ function renderCard(listing) {
                 ${costLine}
                 <div class="card-flags">
                     <span class="card-status card-status--${listing.status || 'unknown'}">${listing.status === 'written_off' ? 'Written Off' : (listing.status || "unknown")}</span>
+                    ${freeShippingChip}
                     ${groupChip}
                     ${missingCost ? `<span class="card-status card-status--missing-cost" title="No purchase price recorded">No Cost</span>` : ""}
                 </div>

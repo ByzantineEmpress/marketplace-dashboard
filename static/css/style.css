@@ -845,6 +845,20 @@ code {
 .card-status--expired { background: var(--danger-soft); color: var(--danger-text); }
 .card-status--unknown { background: var(--bg-inset); color: var(--text-muted); }
 
+/* Free-shipping badge. Blue and sentence-case rather than the uppercase status
+   pills: it is a term of the listing you chose, not a state it is in, and it
+   should not read as another status alongside "Active". */
+.card-chip--freeship {
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    background: rgba(59, 130, 246, 0.14);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
 /* "No Cost" flag: a listing with no purchase price recorded.
    Amber, not red: this is missing information to fill in, not a failure. */
 .card-status--missing-cost {

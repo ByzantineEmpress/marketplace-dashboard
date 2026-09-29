@@ -834,5 +834,42 @@ class EstimatedFeeTest(unittest.TestCase):
         self.assertIsNone(self.estimate(free, rates))
 
 
+class EbayFreeShippingTest(unittest.TestCase):
+    """eBay states the shipping cost on the Browse item, in three states.
+
+    True, False, and "not stated" — the last because a calculated-shipping listing
+    returns no shipping option at all until a buyer's location is known, and a
+    missing option is not evidence that postage is charged.
+    """
+
+    def setUp(self):
+        self.adapter = get_adapter("ebay")
+
+    def test_a_zero_cost_option_is_free(self):
+        data = {"shippingOptions": [
+            {"shippingCostType": "FIXED", "shippingCost": {"value": "0.00", "currency": "CAD"}}]}
+        self.assertIs(self.adapter._free_shipping_from(data), True)
+
+    def test_a_charged_option_is_not_free(self):
+        data = {"shippingOptions": [
+            {"shippingCostType": "FIXED", "shippingCost": {"value": "19.45", "currency": "CAD"}}]}
+        self.assertIs(self.adapter._free_shipping_from(data), False)
+
+    def test_one_paid_option_among_free_ones_is_not_free(self):
+        """The buyer can still be charged, so the badge would be a lie."""
+        data = {"shippingOptions": [
+            {"shippingCost": {"value": "0.00"}},
+            {"shippingCost": {"value": "12.00"}}]}
+        self.assertIs(self.adapter._free_shipping_from(data), False)
+
+    def test_no_options_stated_is_unknown(self):
+        self.assertIsNone(self.adapter._free_shipping_from({}))
+        self.assertIsNone(self.adapter._free_shipping_from({"shippingOptions": []}))
+
+    def test_a_garbled_cost_does_not_crash_or_guess(self):
+        data = {"shippingOptions": [{"shippingCost": {"value": "ask"}}]}
+        self.assertIsNone(self.adapter._free_shipping_from(data))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

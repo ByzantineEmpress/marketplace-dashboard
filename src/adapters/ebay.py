@@ -562,9 +562,36 @@ class eBayAdapter(MarketplaceAdapter):
                 "images": images,
                 "category": data.get("categoryPath", ""),
                 "description": data.get("description") or "",
+                "free_shipping": self._free_shipping_from(data),
             }
         except Exception:
             return {}
+
+    @staticmethod
+    def _free_shipping_from(data: dict):
+        """Whether the item ships free, from a Browse item's shipping options.
+
+        Returns True, False, or None for "not stated". A calculated-shipping
+        listing returns no shipping option at all until a buyer's location is
+        known, and a missing option is not evidence that postage is charged — so
+        that case stays None rather than being reported as paid shipping.
+        """
+        options = data.get("shippingOptions") or []
+        costs = []
+        for option in options:
+            cost = (option or {}).get("shippingCost") or {}
+            value = cost.get("value")
+            if value is None:
+                continue
+            try:
+                costs.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        if not costs:
+            return None
+        # Free only if every quoted option is free; a paid option anywhere means
+        # the buyer can be charged.
+        return all(cost == 0 for cost in costs)
 
     def _fetch_listing_views(self, headers: dict, marketplace: str, days: int = 30) -> dict:
         """Per-listing view counts from the Sell Analytics API traffic report.
@@ -1041,6 +1068,9 @@ class eBayAdapter(MarketplaceAdapter):
                 row["category"] = detail["category"]
             if detail.get("description"):
                 row["description"] = detail["description"]
+            # True, False, or absent when eBay quoted no shipping option at all.
+            if detail.get("free_shipping") is not None:
+                row["free_shipping"] = detail["free_shipping"]
 
             if views_by_item:
                 row["views_count"] = views_by_item.get(item_id, 0)

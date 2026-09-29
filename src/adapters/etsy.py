@@ -738,7 +738,8 @@ class EtsyAdapter(MarketplaceAdapter):
             })
         return sales
 
-    def _normalise_results(self, results: list, limit: int = 0) -> List[dict]:
+    def _normalise_results(self, results: list, limit: int = 0,
+                           shipping_profiles: Dict[int, bool] = None) -> List[dict]:
         """Map raw Etsy objects onto the Listing schema, dropping bad ones.
 
         Anything the normaliser cannot make sense of is skipped rather than
@@ -747,7 +748,7 @@ class EtsyAdapter(MarketplaceAdapter):
         """
         normalised = []
         for item in results:
-            row = self._normalise_listing(item)
+            row = self._normalise_listing(item, shipping_profiles)
             if row:
                 normalised.append(row)
         if limit:
@@ -766,6 +767,9 @@ class EtsyAdapter(MarketplaceAdapter):
         listings. A sync must never read anything but the connected shop.
         """
         listings = []
+        # Shipping terms live on the shop's profiles, not on the listings, so they
+        # are resolved once for the whole shop rather than per listing.
+        shipping_profiles = self._fetch_shipping_profiles(headers, shop_id)
         page = 1
         limit_per_page = 25
         seen_ids = set()
@@ -820,7 +824,7 @@ class EtsyAdapter(MarketplaceAdapter):
                     break  # No new rows; stop rather than loop forever.
                 seen_ids.update(str(r.get("listing_id")) for r in fresh)
 
-                listings.extend(self._normalise_results(fresh))
+                listings.extend(self._normalise_results(fresh, shipping_profiles=shipping_profiles))
                 if len(results) < limit_per_page:
                     break  # Last page
                 page += 1
@@ -830,7 +834,44 @@ class EtsyAdapter(MarketplaceAdapter):
 
         return listings[:limit]
 
-    def _normalise_listing(self, item: dict) -> Optional[dict]:
+    def _fetch_shipping_profiles(self, headers: dict, shop_id) -> Dict[int, bool]:
+        """Which of the shop's shipping profiles ship free.
+
+        Etsy puts no shipping cost on the listing itself, only a
+        ``shipping_profile_id``, so the profile has to be resolved. One call covers
+        every listing in the shop, because profiles are few and shared.
+
+        A profile counts as free only when EVERY destination it covers costs
+        nothing. Charging one region and not another is a discount, not free
+        shipping, and calling it free would be wrong on a card read at a glance.
+        A profile with no stated destinations is unknown, not free.
+        """
+        profiles: Dict[int, bool] = {}
+        try:
+            resp = httpx.get(
+                f"{ETSY_API_BASE}/application/shops/{shop_id}/shipping-profiles",
+                headers=headers, timeout=40,
+            )
+            if resp.status_code != 200:
+                return profiles
+            for profile in (resp.json() or {}).get("results") or []:
+                if not isinstance(profile, dict):
+                    continue
+                profile_id = profile.get("shipping_profile_id")
+                if profile_id is None:
+                    continue
+                costs = []
+                for dest in profile.get("shipping_profile_destinations") or []:
+                    amount = ((dest or {}).get("primary_cost") or {}).get("amount")
+                    if amount is not None:
+                        costs.append(int(amount))
+                profiles[int(profile_id)] = bool(costs) and all(c == 0 for c in costs)
+        except Exception:
+            return profiles
+        return profiles
+
+    def _normalise_listing(self, item: dict,
+                           shipping_profiles: Dict[int, bool] = None) -> Optional[dict]:
         """Normalise an Etsy API response into our standard Listing schema."""
         if not isinstance(item, dict):
             # Guard here rather than relying on the caller: a non-dict would
@@ -920,6 +961,14 @@ class EtsyAdapter(MarketplaceAdapter):
                 "image_url": images[0] if images else "",
                 "images_json": images,
                 "category": category,
+                # True, False, or None when the shop's profiles could not be read.
+                # "Not stated" is not the same as "you charge for postage", so the
+                # card shows nothing rather than a wrong badge.
+                "free_shipping": (
+                    shipping_profiles.get(int(item["shipping_profile_id"]))
+                    if shipping_profiles and item.get("shipping_profile_id") is not None
+                    else None
+                ),
                 "tags": tags,
                 "materials": materials,
                 "available_quantity": item.get("quantity", 0),
