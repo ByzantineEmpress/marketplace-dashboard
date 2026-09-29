@@ -767,9 +767,10 @@ class EtsyAdapter(MarketplaceAdapter):
         listings. A sync must never read anything but the connected shop.
         """
         listings = []
-        # Shipping terms live on the shop's profiles, not on the listings, so they
-        # are resolved once for the whole shop rather than per listing.
-        shipping_profiles = self._fetch_shipping_profiles(headers, shop_id)
+        # Raw rows are gathered first so the shipping profiles they reference are
+        # known before anything is normalised: Etsy states the terms on the
+        # profile, and the shop-wide profile list is incomplete.
+        collected = []
         page = 1
         limit_per_page = 25
         seen_ids = set()
@@ -824,7 +825,7 @@ class EtsyAdapter(MarketplaceAdapter):
                     break  # No new rows; stop rather than loop forever.
                 seen_ids.update(str(r.get("listing_id")) for r in fresh)
 
-                listings.extend(self._normalise_results(fresh, shipping_profiles=shipping_profiles))
+                collected.extend(fresh)
                 if len(results) < limit_per_page:
                     break  # Last page
                 page += 1
@@ -832,42 +833,75 @@ class EtsyAdapter(MarketplaceAdapter):
                 self.last_error = f"Could not reach Etsy: {exc}"
                 break
 
-        return listings[:limit]
+        # Now that every listing is in hand, resolve the profiles they actually
+        # reference, then normalise. Doing it here rather than per page means the
+        # profile lookup happens once for the whole sync.
+        shipping_profiles = self._fetch_shipping_profiles(
+            headers, shop_id,
+            needed=[r.get("shipping_profile_id") for r in collected],
+        )
+        listings = self._normalise_results(collected, limit=limit,
+                                           shipping_profiles=shipping_profiles)
+        return listings
 
-    def _fetch_shipping_profiles(self, headers: dict, shop_id) -> Dict[int, bool]:
-        """Which of the shop's shipping profiles ship free.
+    def _fetch_shipping_profiles(self, headers: dict, shop_id,
+                                 needed=None) -> Dict[int, bool]:
+        """Which shipping profiles ship free.
 
         Etsy puts no shipping cost on the listing itself, only a
-        ``shipping_profile_id``, so the profile has to be resolved. One call covers
-        every listing in the shop, because profiles are few and shared.
+        ``shipping_profile_id``, so the profile has to be resolved.
+
+        The shop-wide list is asked for first because it is one call and covers
+        profiles shared between listings — but it is NOT complete: on a real shop
+        it returned 3 profiles while the listings referenced 11 different ones, so
+        anything it omits is fetched by id. Without that second pass most listings
+        came back "unknown" for no good reason.
 
         A profile counts as free only when EVERY destination it covers costs
         nothing. Charging one region and not another is a discount, not free
         shipping, and calling it free would be wrong on a card read at a glance.
-        A profile with no stated destinations is unknown, not free.
+        A profile that states no destinations is unknown, not free.
         """
         profiles: Dict[int, bool] = {}
+
+        def read(profile) -> None:
+            if not isinstance(profile, dict):
+                return
+            profile_id = profile.get("shipping_profile_id")
+            if profile_id is None:
+                return
+            costs = []
+            for dest in profile.get("shipping_profile_destinations") or []:
+                amount = ((dest or {}).get("primary_cost") or {}).get("amount")
+                if amount is not None:
+                    costs.append(int(amount))
+            profiles[int(profile_id)] = bool(costs) and all(c == 0 for c in costs)
+
         try:
             resp = httpx.get(
                 f"{ETSY_API_BASE}/application/shops/{shop_id}/shipping-profiles",
                 headers=headers, timeout=40,
             )
-            if resp.status_code != 200:
-                return profiles
-            for profile in (resp.json() or {}).get("results") or []:
-                if not isinstance(profile, dict):
-                    continue
-                profile_id = profile.get("shipping_profile_id")
-                if profile_id is None:
-                    continue
-                costs = []
-                for dest in profile.get("shipping_profile_destinations") or []:
-                    amount = ((dest or {}).get("primary_cost") or {}).get("amount")
-                    if amount is not None:
-                        costs.append(int(amount))
-                profiles[int(profile_id)] = bool(costs) and all(c == 0 for c in costs)
+            if resp.status_code == 200:
+                for profile in (resp.json() or {}).get("results") or []:
+                    read(profile)
         except Exception:
-            return profiles
+            pass
+
+        # Anything the shop-wide list left out, one call each. Bounded, because a
+        # shop with a very large catalogue should not turn a sync into a crawl.
+        pending = [pid for pid in (needed or []) if pid is not None and int(pid) not in profiles]
+        for profile_id in list(dict.fromkeys(int(p) for p in pending))[:60]:
+            try:
+                one = httpx.get(
+                    f"{ETSY_API_BASE}/application/shops/{shop_id}/shipping-profiles/{profile_id}",
+                    headers=headers, timeout=30,
+                )
+                if one.status_code == 200:
+                    read(one.json())
+            except Exception:
+                continue
+
         return profiles
 
     def _normalise_listing(self, item: dict,

@@ -794,6 +794,78 @@ class EtsyOnlyFetchesOwnShopTest(unittest.TestCase):
             "images must be requested explicitly or they arrive as null",
         )
 
+    def test_a_profile_the_shop_list_omits_is_fetched_by_id(self):
+        """The shop-wide list is NOT complete.
+
+        On a real shop it returned 3 profiles while the listings referenced 11, so
+        every listing on an omitted profile read as "unknown" for no good reason.
+        Anything the list leaves out has to be fetched individually.
+        """
+        import src.adapters.etsy as etsy_mod
+
+        requested = []
+
+        class FakeResp:
+            status_code = 200
+            def __init__(self, payload):
+                self._payload = payload
+            def json(self):
+                return self._payload
+
+        def fake_get(url, **kwargs):
+            requested.append(url)
+            if url.endswith("/shipping-profiles"):
+                # The list knows about profile 1 only.
+                return FakeResp({"count": 1, "results": [
+                    {"shipping_profile_id": 1,
+                     "shipping_profile_destinations": [{"primary_cost": {"amount": 0}}]}]})
+            return FakeResp({"shipping_profile_id": 2,
+                             "shipping_profile_destinations": [
+                                 {"primary_cost": {"amount": 4500}}]})
+
+        real = etsy_mod.httpx.get
+        etsy_mod.httpx.get = fake_get
+        try:
+            profiles = self.adapter._fetch_shipping_profiles(
+                {"x-api-key": "k:s"}, "1", needed=[1, 2])
+        finally:
+            etsy_mod.httpx.get = real
+
+        self.assertTrue(profiles[1])
+        self.assertIn(2, profiles, "the omitted profile was never resolved")
+        self.assertFalse(profiles[2])
+        self.assertTrue(any(u.endswith("/shipping-profiles/2") for u in requested))
+
+    def test_an_omitted_profile_is_not_fetched_twice(self):
+        import src.adapters.etsy as etsy_mod
+
+        per_id = []
+
+        class FakeResp:
+            status_code = 200
+            def __init__(self, payload):
+                self._payload = payload
+            def json(self):
+                return self._payload
+
+        def fake_get(url, **kwargs):
+            if url.endswith("/shipping-profiles"):
+                return FakeResp({"count": 0, "results": []})
+            per_id.append(url)
+            return FakeResp({"shipping_profile_id": 9,
+                             "shipping_profile_destinations": [
+                                 {"primary_cost": {"amount": 0}}]})
+
+        real = etsy_mod.httpx.get
+        etsy_mod.httpx.get = fake_get
+        try:
+            self.adapter._fetch_shipping_profiles(
+                {"x-api-key": "k:s"}, "1", needed=[9, 9, 9])
+        finally:
+            etsy_mod.httpx.get = real
+
+        self.assertEqual(len(per_id), 1, "the same profile was fetched more than once")
+
     def test_free_shipping_comes_from_the_shops_own_profiles(self):
         """Etsy puts no shipping cost on a listing, only a profile id.
 
