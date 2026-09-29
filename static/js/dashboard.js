@@ -1835,6 +1835,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
         gridEl.addEventListener("pointerup", finish);
         gridEl.addEventListener("pointercancel", reset);
+        // Safety net: the native HTML5 image drag (which would otherwise hijack
+        // a drag that starts on the thumbnail) is suppressed grid-wide.
+        gridEl.addEventListener("dragstart", function (e) {
+            e.preventDefault();
+        });
     }
 
     initDragToGroup(grid);
@@ -2000,7 +2005,7 @@ function renderCard(listing) {
             <span class="card-select-check">✓</span>
             <div class="card-platform-badge" style="display:flex;gap:4px;flex-wrap:wrap;max-width:85%;">${platformBadges}</div>
             <div class="card-image">
-                <img src="${image}" alt="${escapeHtml(listing.title || 'Listing')}" loading="lazy" onerror="this.src='/static/img/placeholder.svg'">
+                <img src="${image}" alt="${escapeHtml(listing.title || 'Listing')}" loading="lazy" draggable="false" onerror="this.src='/static/img/placeholder.svg'">
             </div>
             <div class="card-body">
                 <h3 class="card-title">${escapeHtml(listing.title || "Untitled")}</h3>

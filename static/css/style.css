@@ -903,9 +903,21 @@ code {
 }
 
 /* Drag-to-group: cards are draggable; touch-action: pan-y lets a vertical swipe
-   scroll the page while a hold + horizontal drag is handed to pointer events. */
+   scroll the page while a hold + horizontal drag is handed to pointer events.
+   user-select and -webkit-user-drag stop the browser's native image/text drag
+   and selection from hijacking the gesture. */
 .listing-card {
     touch-action: pan-y;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.listing-card img {
+    -webkit-user-drag: none;
+    -khtml-user-drag: none;
+    -moz-user-drag: none;
+    -o-user-drag: none;
+    user-drag: none;
 }
 
 .listing-card--dragging {
