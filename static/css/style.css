@@ -921,17 +921,49 @@ code {
     position: fixed;
     z-index: 3000;
     pointer-events: none;
-    max-width: 240px;
-    padding: 6px 12px;
-    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 300px;
+    padding: 8px;
+    border-radius: 10px;
     background: var(--bg-elevated);
     border: 1px solid var(--accent);
     color: var(--text);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+    transform: rotate(-2deg) scale(1.04);
+}
+
+.drag-ghost-img {
+    flex: 0 0 46px;
+    width: 46px;
+    height: 46px;
+    object-fit: cover;
+    border-radius: 6px;
+    background: var(--bg-muted);
+}
+
+.drag-ghost-body {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.drag-ghost-title {
     font-size: 12px;
+    font-weight: 600;
+    line-height: 1.25;
+    max-width: 220px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.drag-ghost-price {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent);
 }
 
 .card-select-check {

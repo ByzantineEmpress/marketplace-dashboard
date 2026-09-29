@@ -1746,10 +1746,38 @@ document.addEventListener("DOMContentLoaded", () => {
             drag.dragging = true;
             drag.sourceCard.classList.add("listing-card--dragging");
 
+            // A mini-card ghost — thumbnail, title and price — so it is obvious
+            // which item is being dragged, not just a bare text label.
             const ghost = document.createElement("div");
             ghost.className = "drag-ghost";
+
+            const imgEl = drag.sourceCard.querySelector(".card-image img");
+            if (imgEl && imgEl.src) {
+                const img = document.createElement("img");
+                img.className = "drag-ghost-img";
+                img.src = imgEl.src;
+                img.alt = "";
+                ghost.appendChild(img);
+            }
+
+            const body = document.createElement("div");
+            body.className = "drag-ghost-body";
+
             const titleEl = drag.sourceCard.querySelector(".card-title");
-            ghost.textContent = titleEl ? titleEl.textContent : "Listing";
+            const title = document.createElement("div");
+            title.className = "drag-ghost-title";
+            title.textContent = titleEl ? titleEl.textContent : "Listing";
+            body.appendChild(title);
+
+            const priceEl = drag.sourceCard.querySelector(".card-price");
+            if (priceEl && priceEl.textContent) {
+                const price = document.createElement("div");
+                price.className = "drag-ghost-price";
+                price.textContent = priceEl.textContent;
+                body.appendChild(price);
+            }
+
+            ghost.appendChild(body);
             document.body.appendChild(ghost);
             drag.ghost = ghost;
 
