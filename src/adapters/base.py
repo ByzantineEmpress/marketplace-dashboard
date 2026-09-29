@@ -252,7 +252,13 @@ class MarketplaceAdapter(ABC):
             account = MarketplaceAccount(platform=self.PLATFORM, user_id=user_id)
 
         account.access_token = access_token
-        account.refresh_token = refresh_token
+        # Only overwrite the refresh token when a real one is supplied. Several
+        # callers legitimately pass None (they have no new refresh token), and
+        # assigning unconditionally wiped the stored one — which silently turned
+        # a refreshable connection into one that dies when the access token
+        # expires, with no way back except a manual reconnect.
+        if refresh_token:
+            account.refresh_token = refresh_token
 
         if token_expires_in:
             account.token_expires_at = datetime.utcnow() + timedelta(seconds=token_expires_in)
