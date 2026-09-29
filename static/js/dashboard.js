@@ -724,6 +724,10 @@ document.addEventListener("DOMContentLoaded", () => {
                     <div class="form-group" style="flex: 1; margin-bottom: 0;">
                         <label style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px;">Bought For / Cost ($ CAD)</label>
                         <input type="number" step="0.01" min="0" class="detail-purchase-price-input" value="${(listing.purchase_price !== undefined ? listing.purchase_price : 0).toFixed(2)}" style="width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); color: var(--text);">
+                        <label class="cost-free-toggle" title="Records a deliberate $0 cost, so this listing stops counting as 'cost missing'">
+                            <input type="checkbox" class="detail-cost-free-cb" ${listing.cost_is_free ? "checked" : ""}>
+                            <span>Got it free</span>
+                        </label>
                     </div>
                     <div class="form-group" style="flex: 1; margin-bottom: 0;">
                         <label style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px;">Selling / Listed Price ($ CAD)</label>
@@ -763,6 +767,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const marginVal = modalBody.querySelector(".detail-margin-val");
         const saveCostBtn = modalBody.querySelector(".detail-save-cost-btn");
         const saveCostStatus = modalBody.querySelector(".detail-save-cost-status");
+        const costFreeCb = modalBody.querySelector(".detail-cost-free-cb");
 
         // Wire the group's Ungroup buttons (one per member row).
         modalBody.querySelectorAll(".group-ungroup-btn").forEach(btn => {
@@ -913,6 +918,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
         updateDetailCalculations();
 
+        // "Got it free" records a deliberate $0 cost. The amount field is zeroed
+        // and disabled so the two can never contradict each other; the profit
+        // figures then update against a known-zero cost.
+        function applyCostFreeState() {
+            const free = !!(costFreeCb && costFreeCb.checked);
+            if (purchaseInput) {
+                if (free) purchaseInput.value = "0.00";
+                purchaseInput.disabled = free;
+            }
+            updateDetailCalculations();
+        }
+        if (costFreeCb) {
+            costFreeCb.addEventListener("change", applyCostFreeState);
+            applyCostFreeState();
+        }
+
         if (addPartBtn) {
             addPartBtn.onclick = () => {
                 renderDetailPartRow("", "");
@@ -964,6 +985,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                             purchase_price: purchasePrice,
+                            cost_is_free: !!(costFreeCb && costFreeCb.checked),
                             price: sellingPrice,
                             parts: parts,
                             platforms: checkedPlatforms,
@@ -2037,12 +2059,14 @@ function renderCard(listing) {
     const image = listing.image_url || "/static/img/placeholder.svg";
 
     // Prefer the server's verdict so the badge and the filter can never
-    // disagree; fall back to the purchase price, which is what it is based on.
+    // disagree; fall back to the purchase price and the free flag, which is what
+    // it is based on.
+    const isFree = !!listing.cost_is_free;
     const missingCost = listing.missing_cost !== undefined
         ? !!listing.missing_cost
-        : !((listing.purchase_price_cents || 0) > 0);
+        : (!((listing.purchase_price_cents || 0) > 0) && !isFree);
     const hasCost = (listing.total_cost_cents || 0) > 0;
-    const costText = hasCost ? `$${(listing.total_cost || 0).toFixed(2)} CAD` : null;
+    const totalCostText = `$${(listing.total_cost || 0).toFixed(2)} CAD`;
     const netProfit = listing.net_profit !== undefined ? listing.net_profit : (((listing.price_cents || 0) - (listing.total_cost_cents || 0)) / 100);
     const profitSign = netProfit > 0 ? "+" : "";
     const profitColor = netProfit >= 0 ? "var(--success)" : "var(--danger)";
@@ -2050,15 +2074,19 @@ function renderCard(listing) {
     // With no purchase price there is no profit figure to trust: the listing
     // would otherwise show its full sale price as margin. Say so instead of
     // printing a misleading green number.
+    //
+    // Once the cost is known — including a deliberate $0 from "got it free" —
+    // the profit is real and always shown, so a free item no longer displays no
+    // cost information at all.
     const costLine = missingCost
         ? `<div class="card-cost-missing" title="No purchase price recorded for this listing">No COGS recorded — profit unknown</div>`
-        : (hasCost ? `
+        : `
                     <div class="card-cost-line">
-                        <span>Cost: ${costText}</span> · <span style="color: ${listing.status === 'written_off' ? 'var(--danger)' : profitColor}; font-weight: 500;">
+                        <span>${isFree && !hasCost ? "Free" : `Cost: ${totalCostText}`}</span> · <span style="color: ${listing.status === 'written_off' ? 'var(--danger)' : profitColor}; font-weight: 500;">
                             ${listing.status === 'written_off' ? `Loss: -$${(listing.total_cost || 0).toFixed(2)} CAD` : `Net: ${profitSign}$${netProfit.toFixed(2)} CAD`}
                         </span>
                     </div>
-                ` : "");
+                `;
 
     const groupSummary = listing.group_summary;
     const delistAlert = (groupSummary && groupSummary.needs_delist)

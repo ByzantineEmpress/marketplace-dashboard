@@ -70,7 +70,7 @@ class MissingCostFlagTest(unittest.TestCase):
         self.db.commit()
         self.db.close()
 
-    def _make(self, purchase_cents, parts_cents=0, title="x"):
+    def _make(self, purchase_cents, parts_cents=0, title="x", cost_is_free=False):
         row = Listing(
             platform="etsy",
             platform_listing_id=f"MC-{secrets.token_hex(6)}",
@@ -78,6 +78,7 @@ class MissingCostFlagTest(unittest.TestCase):
             price_cents=10000,
             purchase_price_cents=purchase_cents,
             parts_cost_cents=parts_cents,
+            cost_is_free=cost_is_free,
             status="active",
             team_id=self.team.id,
         )
@@ -107,6 +108,32 @@ class MissingCostFlagTest(unittest.TestCase):
         self.assertTrue(row.to_dict()["missing_cost"])
         row2 = self._make(999)
         self.assertFalse(row2.to_dict()["missing_cost"])
+
+    # -- items acquired for free --
+
+    def test_a_free_item_is_not_flagged(self):
+        """A deliberate $0 cost is a recorded cost, not a missing one.
+
+        Without this the listing could never leave the needs-attention set.
+        """
+        row = self._make(0, cost_is_free=True)
+        self.assertTrue(row.has_cost)
+        self.assertFalse(row.missing_cost)
+
+    def test_a_free_item_with_parts_is_still_not_flagged(self):
+        row = self._make(0, parts_cents=2500, cost_is_free=True)
+        self.assertFalse(row.missing_cost)
+
+    def test_the_free_flag_is_serialised(self):
+        row = self._make(0, cost_is_free=True)
+        data = row.to_dict()
+        self.assertTrue(data["cost_is_free"])
+        self.assertFalse(data["missing_cost"])
+
+    def test_a_free_item_shows_its_full_price_as_profit(self):
+        row = self._make(0, cost_is_free=True)
+        self.assertEqual(row.total_cost_cents, 0)
+        self.assertEqual(row.net_profit_cents, row.price_cents)
 
     # -- the API filter --
 
@@ -142,6 +169,42 @@ class MissingCostFlagTest(unittest.TestCase):
         # Everything returned must actually be flagged.
         for item in res.json()["listings"]:
             self.assertTrue(item["missing_cost"], item)
+
+    def test_the_filter_excludes_free_items(self):
+        """A "got it free" listing has a known $0 cost, so the filter — which
+        drives the No Cost badge — must not list it."""
+        free = self._make(0, title="Free haul", cost_is_free=True)
+        flagged = self._make(0, title="Never entered")
+        self._login()
+
+        res = self.client.get("/api/listings?missing_cost=true&page_size=200")
+        self.assertEqual(res.status_code, 200, res.text)
+        ids = [l["id"] for l in res.json()["listings"]]
+        self.assertIn(flagged.id, ids)
+        self.assertNotIn(free.id, ids, "a free item must not count as missing cost")
+
+    def test_marking_free_through_the_api_zeroes_the_price(self):
+        row = self._make(4500, title="Actually free")
+        self._login()
+
+        res = self.client.put(f"/api/listings/{row.id}",
+                              json={"cost_is_free": True, "purchase_price": 0})
+        self.assertEqual(res.status_code, 200, res.text)
+        body = res.json()
+        self.assertTrue(body["ok"], body)
+        self.assertTrue(body["listing"]["cost_is_free"])
+        self.assertEqual(body["listing"]["purchase_price_cents"], 0)
+        self.assertFalse(body["listing"]["missing_cost"])
+
+    def test_marking_free_clears_a_stale_price(self):
+        """Ticking free while an amount is still filled in must not leave the
+        two contradicting each other."""
+        row = self._make(4500, title="Had a price")
+        self._login()
+
+        res = self.client.put(f"/api/listings/{row.id}", json={"cost_is_free": True})
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(res.json()["listing"]["purchase_price_cents"], 0)
 
     def test_the_filter_combines_with_the_others(self):
         """It is a checkbox precisely so it narrows rather than replaces."""

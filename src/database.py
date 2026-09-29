@@ -116,6 +116,11 @@ def _migrate_existing_db():
         if "favorites_count" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN favorites_count INTEGER NOT NULL DEFAULT 0"))
 
+        # 1l. cost_is_free: the item was acquired for nothing, so a $0 cost is
+        #     recorded rather than missing.
+        if "cost_is_free" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN cost_is_free BOOLEAN NOT NULL DEFAULT 0"))
+
         # 1e. sold_at timestamp for date-range metrics
         if "sold_at" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN sold_at TIMESTAMP"))

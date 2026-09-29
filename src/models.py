@@ -194,6 +194,10 @@ class Listing(Base):
     purchase_price_cents = Column(Integer, nullable=False, default=0)  # What we bought it for
     parts_cost_cents = Column(Integer, nullable=False, default=0)      # Total parts/repair cost
     parts_json = Column(JSON, nullable=True)                          # [{"description": "Power supply", "cost_cents": 2500}]
+    # Set when the item was acquired for nothing (gifted, scavenged, bundled).
+    # Without this, a deliberate $0 cost is indistinguishable from a cost nobody
+    # has entered yet, and the listing stays flagged "No COGS" forever.
+    cost_is_free = Column(Boolean, nullable=False, default=False)
 
     # State
     status = Column(String(20), nullable=False, default="active", index=True)
@@ -243,12 +247,16 @@ class Listing(Base):
         listing whose only recorded cost is a repair part still needs its
         purchase price entered, so counting parts here would hide it.
 
+        ``cost_is_free`` counts as recorded: the cost is known to be nothing, so
+        the listing must leave the "needs attention" set — otherwise an item
+        acquired for free could never be cleared from it.
+
         Synced listings arrive with no cost data at all, which is exactly the
         set that needs attention: a listing with no COGS shows a fake 100%
         margin, so net profit and margin must not be read as real until this
         is filled in.
         """
-        return (self.purchase_price_cents or 0) > 0
+        return (self.purchase_price_cents or 0) > 0 or bool(self.cost_is_free)
 
     @property
     def missing_cost(self) -> bool:
@@ -287,6 +295,7 @@ class Listing(Base):
             "currency": self.currency or "CAD",
             "purchase_price_cents": self.purchase_price_cents or 0,
             "purchase_price": round((self.purchase_price_cents or 0) / 100, 2),
+            "cost_is_free": bool(self.cost_is_free),
             "parts_cost_cents": self.parts_cost_cents or 0,
             "parts_cost": round((self.parts_cost_cents or 0) / 100, 2),
             "parts": self.parts_json or [],

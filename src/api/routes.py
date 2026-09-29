@@ -1861,13 +1861,15 @@ async def get_listings(
 
     # Filter to listings with no purchase price recorded. Matches the
     # Listing.missing_cost property: purchase price only, so a listing with a
-    # parts cost but no purchase price still shows up here.
+    # parts cost but no purchase price still shows up here. A listing marked
+    # "got it free" has a known $0 cost, so it is not missing anything.
     if missing_cost and str(missing_cost).lower() in ("1", "true", "yes"):
         query = query.filter(
             or_(
                 Listing.purchase_price_cents == 0,
                 Listing.purchase_price_cents.is_(None),
-            )
+            ),
+            Listing.cost_is_free.isnot(True),
         )
 
     # Full-text search on title (LIKE with wildcards — SQLAlchemy escapes)
@@ -3411,6 +3413,14 @@ async def update_listing(listing_id: int, body: dict, db: Session = Depends(get_
             except (ValueError, TypeError):
                 purchase_cents = 0
         listing.purchase_price_cents = max(0, int(purchase_cents))
+
+    if "cost_is_free" in body:
+        listing.cost_is_free = bool(body["cost_is_free"])
+        if listing.cost_is_free:
+            # "Free" means the purchase cost is known to be nothing. Keeping a
+            # stale amount would contradict the flag and skew total investment
+            # and profit, which are read from the cents field.
+            listing.purchase_price_cents = 0
 
     if "parts" in body:
         parts_raw = body.get("parts") or []

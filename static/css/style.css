@@ -715,6 +715,34 @@ code {
     margin: 0;
 }
 
+/* "Got it free" toggle under the cost field in the detail modal. */
+.cost-free-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+}
+
+.cost-free-toggle input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+/* The amount field is disabled while "free" is ticked, so make that obvious
+   rather than leaving it looking editable. */
+.detail-purchase-price-input:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 /* Status badges and flags (status, group, no-cost) share one wrapping row. */
 .card-flags {
     display: flex;
