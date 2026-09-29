@@ -701,7 +701,9 @@ code {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     gap: 8px;
+    row-gap: 6px;
 }
 
 .card-status {
@@ -1037,17 +1039,32 @@ code {
     white-space: nowrap;
 }
 
-/* Per-platform engagement chip (views/favorites for Etsy, watchers for eBay). */
-.card-engagement {
-    display: inline-block;
-    font-size: 11px;
-    font-weight: 550;
-    color: var(--text-muted);
-    background: var(--bg-inset);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 2px 8px;
+/* Engagement stats (views / watchers / favorites). Deliberately rectangular with
+   a strong border, unlike the rounded status pills, so they read as data boxes
+   and stand apart from the alerts. */
+.card-metric {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: var(--bg);
+    border: 1.5px solid var(--border-strong);
     white-space: nowrap;
+}
+
+.card-metric-label {
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.card-metric-value {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
 }
 
 /* --- 10. Pagination ----------------------------------------------- */

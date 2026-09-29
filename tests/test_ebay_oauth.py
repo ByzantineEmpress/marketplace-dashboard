@@ -66,6 +66,13 @@ class EbayAuthorizeUrlTest(unittest.TestCase):
         self.assertIn(
             "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly", scope)
 
+    def test_the_analytics_scope_is_requested(self):
+        """sell.analytics.readonly is the only source of per-listing VIEW counts
+        (GetItem's HitCount is deprecated), so the traffic report needs it."""
+        scope = self._query()["scope"][0]
+        self.assertIn(
+            "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly", scope)
+
     def test_no_buy_scope_is_requested(self):
         """The app has been granted no buy.* scope, so requesting one would make
         eBay reject the whole authorize request."""

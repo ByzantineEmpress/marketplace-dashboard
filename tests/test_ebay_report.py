@@ -217,6 +217,47 @@ class EbayBrowseEnrichmentTest(unittest.TestCase):
         self.assertEqual(rows[0]["image_url"], "https://x/img.jpg")
         self.assertEqual(rows[0]["images_json"], ["https://x/img.jpg"])
 
+    def test_fetch_listing_views_maps_item_ids(self):
+        import src.adapters.ebay as ebay_mod
+
+        class FakeResp:
+            status_code = 200
+            def json(self):
+                return {"records": [
+                    {"dimensionValues": [{"dimensionKey": "listingId", "value": "111"}],
+                     "metricValues": [{"metricKey": "LISTING_VIEWS_TOTAL", "value": 42}]},
+                    {"dimensionValues": [{"dimensionKey": "listingId", "value": "222"}],
+                     "metricValues": [{"metricKey": "LISTING_VIEWS_TOTAL", "value": "7"}]},
+                ]}
+
+        def fake_get(url, **kw):
+            return FakeResp()
+
+        real = ebay_mod.httpx.get
+        ebay_mod.httpx.get = fake_get
+        try:
+            views = self.adapter._fetch_listing_views({"Authorization": "Bearer t"}, "EBAY_CA")
+        finally:
+            ebay_mod.httpx.get = real
+
+        self.assertEqual(views, {"111": 42, "222": 7})
+
+    def test_fetch_listing_views_is_empty_on_failure(self):
+        import src.adapters.ebay as ebay_mod
+
+        class Denied:
+            status_code = 403
+            def json(self):
+                return {"errors": []}
+
+        real = ebay_mod.httpx.get
+        ebay_mod.httpx.get = lambda *a, **kw: Denied()
+        try:
+            self.assertEqual(
+                self.adapter._fetch_listing_views({"Authorization": "Bearer t"}, "EBAY_CA"), {})
+        finally:
+            ebay_mod.httpx.get = real
+
     def test_fetch_getitem_parses_watch_count(self):
         import src.adapters.ebay as ebay_mod
 

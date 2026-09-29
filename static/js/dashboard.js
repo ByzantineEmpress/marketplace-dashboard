@@ -1915,18 +1915,20 @@ function renderEngagementMetrics(listing) {
         </div>`;
 }
 
-// Compact engagement chip for a card. Always shown for Etsy and eBay so the
-// metric is visible on the overview even while it is still zero.
+// Engagement stats for a card, as labelled rectangular boxes so they stand out
+// from the rounded status/alerts. eBay has views + watchers; Etsy has views +
+// favorites. Always shown, including while the value is still zero.
 function renderEngagementChip(listing) {
     const p = (listing.platform || '').toLowerCase();
-    if (p === 'etsy') {
-        const views = listing.views_count ?? 0;
-        const favs = listing.favorites_count ?? 0;
-        return `<span class="card-engagement" title="Views · Favorites">👁 ${views} views · ♥ ${favs} favs</span>`;
-    }
+    const box = (label, value) =>
+        `<span class="card-metric"><span class="card-metric-label">${label}</span>` +
+        `<span class="card-metric-value">${value ?? 0}</span></span>`;
+
     if (p === 'ebay') {
-        const watchers = listing.watchers_count ?? 0;
-        return `<span class="card-engagement" title="Watchers">👀 ${watchers} watchers</span>`;
+        return box("Views", listing.views_count) + box("Watchers", listing.watchers_count);
+    }
+    if (p === 'etsy') {
+        return box("Views", listing.views_count) + box("Favorites", listing.favorites_count);
     }
     return '';
 }

@@ -121,6 +121,11 @@ class eBayAdapter(MarketplaceAdapter):
         #                                connection belongs to, so an eBay
         #                                account-deletion notification can be matched
         #                                to our stored data.
+        #   sell.analytics.readonly    — "View your selling analytics data". The
+        #                                only source of per-listing VIEW counts:
+        #                                GetItem's HitCount was deprecated by eBay,
+        #                                but the Analytics traffic report still
+        #                                reports LISTING_VIEWS_TOTAL.
         #
         # Deliberately NOT requested: anything under /buy/. The Buy API (Browse)
         # would carry titles and photos too, but eBay has not granted this app any
@@ -130,6 +135,7 @@ class eBayAdapter(MarketplaceAdapter):
             "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
             "https://api.ebay.com/oauth/api_scope/sell.listing.read",
             "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
+            "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly",
         ]
 
         params = {
@@ -518,6 +524,74 @@ class eBayAdapter(MarketplaceAdapter):
         except Exception:
             return {}
 
+    def _fetch_listing_views(self, headers: dict, marketplace: str, days: int = 30) -> dict:
+        """Per-listing view counts from the Sell Analytics API traffic report.
+
+        eBay deprecated GetItem's HitCount, so the traffic report
+        (dimension=LISTING, metric=LISTING_VIEWS_TOTAL) is the only source of
+        listing views. Returns {item_id: views}; empty on any failure so a
+        missing scope or an empty report never breaks a sync.
+        """
+        from datetime import datetime, timedelta
+
+        end = datetime.utcnow().date() - timedelta(days=1)
+        start = end - timedelta(days=max(days, 1) - 1)
+        params = {
+            "dimension": "LISTING",
+            "filter": (
+                f"marketplaceid:{marketplace},"
+                f"daterange:[{start}T00:00:00.000Z..{end}T23:59:59.999Z]"
+            ),
+            "metric": "LISTING_VIEWS_TOTAL",
+            "limit": 500,
+        }
+        try:
+            resp = httpx.get(
+                f"{EBAY_API_BASE}/sell/analytics/v1/traffic_report",
+                headers=headers,
+                params=params,
+                timeout=60,
+            )
+            if resp.status_code != 200:
+                return {}
+            data = resp.json()
+        except Exception:
+            return {}
+
+        views = {}
+        for record in data.get("records") or []:
+            if not isinstance(record, dict):
+                continue
+
+            # dimensionValues is a list of {value, dimensionKey} in the LISTING
+            # report; fall back to the first value if the key name differs.
+            item_id = ""
+            for dim in record.get("dimensionValues") or []:
+                if not isinstance(dim, dict):
+                    continue
+                if dim.get("dimensionKey") == "listingId" or dim.get("dimensionName") == "listingId":
+                    item_id = str(dim.get("value") or "")
+                    break
+            if not item_id:
+                dims = record.get("dimensionValues") or []
+                if dims and isinstance(dims[0], dict):
+                    item_id = str(dims[0].get("value") or "")
+            if not item_id:
+                continue
+
+            count = 0
+            for metric in record.get("metricValues") or []:
+                if not isinstance(metric, dict):
+                    continue
+                if metric.get("metricKey") == "LISTING_VIEWS_TOTAL":
+                    try:
+                        count = int(float(metric.get("value") or 0))
+                    except (ValueError, TypeError):
+                        count = 0
+            views[item_id] = count
+
+        return views
+
     def _fetch_getitem(self, item_id: str, access_token: str, marketplace: str) -> dict:
         """Fetch an item's watcher count via the Trading API GetItem.
 
@@ -568,21 +642,29 @@ class eBayAdapter(MarketplaceAdapter):
 
     def _enrich_listings(self, rows: List[dict], headers: dict, marketplace: str,
                          limit: int, access_token: str = None) -> List[dict]:
-        """Fill in title, image, category and watcher count for each report row.
+        """Fill in title, image, category, views and watchers for each report row.
 
-        The report alone yields generated titles and no photos; the Browse API
-        supplies title/image/category/description and the Trading API GetItem
-        supplies watchers. A row whose item cannot be fetched is left as-is, so a
-        transient failure never drops a listing.
+        The report alone yields generated titles and no photos. Per item, the
+        Browse API supplies title/image/category/description and the Trading API
+        GetItem supplies watchers. Views come from one Analytics traffic report
+        call for the whole inventory rather than one call per listing. A row whose
+        item cannot be fetched is left as-is, so a transient failure never drops a
+        listing.
         """
         import time
 
         browse_headers = dict(headers)
         browse_headers["X-EBAY-C-MARKETPLACE-ID"] = marketplace
 
+        # One call for all listings' view counts.
+        views_by_item = {}
+        if access_token:
+            views_by_item = self._fetch_listing_views(browse_headers, marketplace)
+
         enriched = []
         for row in rows[:limit]:
-            detail = self._fetch_browse_item(row["platform_listing_id"], browse_headers)
+            item_id = row["platform_listing_id"]
+            detail = self._fetch_browse_item(item_id, browse_headers)
             if detail.get("title"):
                 row["title"] = detail["title"]
             if detail.get("image_url"):
@@ -594,8 +676,11 @@ class eBayAdapter(MarketplaceAdapter):
             if detail.get("description"):
                 row["description"] = detail["description"]
 
+            if views_by_item:
+                row["views_count"] = views_by_item.get(item_id, 0)
+
             if access_token:
-                watch = self._fetch_getitem(row["platform_listing_id"], access_token, marketplace)
+                watch = self._fetch_getitem(item_id, access_token, marketplace)
                 row["watchers_count"] = watch.get("watchers_count", 0)
 
             enriched.append(row)
