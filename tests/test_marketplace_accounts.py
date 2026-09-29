@@ -35,6 +35,7 @@ from src.api.main import app
 from src.database import init_db, SessionLocal
 from src.models import (
     AuthSession,
+    Listing,
     MarketplaceAccount,
     User,
     UserMarketplaceCredential,
@@ -400,6 +401,146 @@ class MarketplaceAccountTest(unittest.TestCase):
             self.assertEqual(resolved["client_id"], "instance-wide-client-id")
         finally:
             config.EBAY_CLIENT_ID = original
+
+
+class SyncedListingsGoToTheSyncingUsersTeamTest(unittest.TestCase):
+    """A sync must not write into somebody else's workspace.
+
+    store_listings used to fall back to ``db.query(Team).first()`` when no team
+    was passed, and sync_all never passed one. A real sync put 500 of one
+    seller's listings into "Default Team", which belonged to the local admin,
+    while the syncing user had their own team.
+
+    The rest of the suite could not have caught it: every other test works with
+    a single team, so "the first team" and "the right team" were the same thing.
+    This test deliberately creates two teams owned by different users.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        init_db()
+        cls._client_cm = TestClient(app)
+        cls.client = cls._client_cm.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._client_cm.__exit__(None, None, None)
+
+    def setUp(self):
+        from src.models import Team, TeamMembership
+
+        self.db = SessionLocal()
+        # The decoy first: if anything still uses "the first team", it lands
+        # here and the test fails.
+        self.decoy = User(
+            email=f"decoy.{secrets.token_hex(4)}@example.com",
+            name="Decoy", provider="google", is_admin=False,
+        )
+        self.db.add(self.decoy)
+        self.db.flush()
+        self.decoy_team = Team(
+            name=f"Decoy Team {secrets.token_hex(4)}",
+            invite_code=secrets.token_urlsafe(16),
+        )
+        self.db.add(self.decoy_team)
+        self.db.flush()
+        self.db.add(TeamMembership(team_id=self.decoy_team.id,
+                                   user_id=self.decoy.id, role="owner"))
+
+        self.user = User(
+            email=f"syncer.{secrets.token_hex(4)}@example.com",
+            name="Syncer", provider="google", is_admin=False,
+        )
+        self.db.add(self.user)
+        self.db.flush()
+        self.own_team = Team(
+            name=f"Own Team {secrets.token_hex(4)}",
+            invite_code=secrets.token_urlsafe(16),
+        )
+        self.db.add(self.own_team)
+        self.db.flush()
+        self.db.add(TeamMembership(team_id=self.own_team.id,
+                                   user_id=self.user.id, role="owner"))
+        self.db.commit()
+
+    def tearDown(self):
+        from src.models import Team, TeamMembership
+
+        self.db.rollback()
+        ids = [self.user.id, self.decoy.id]
+        teams = [self.own_team.id, self.decoy_team.id]
+        self.db.query(MarketplaceAccount).filter(
+            MarketplaceAccount.user_id.in_(ids)
+        ).delete(synchronize_session=False)
+        self.db.query(Listing).filter(
+            Listing.team_id.in_(teams)
+        ).delete(synchronize_session=False)
+        self.db.query(TeamMembership).filter(
+            TeamMembership.user_id.in_(ids)
+        ).delete(synchronize_session=False)
+        self.db.query(Team).filter(Team.id.in_(teams)).delete(synchronize_session=False)
+        self.db.query(AuthSession).filter(
+            AuthSession.user_id.in_(ids)
+        ).delete(synchronize_session=False)
+        self.db.query(User).filter(User.id.in_(ids)).delete(synchronize_session=False)
+        self.db.commit()
+        self.db.close()
+
+    def test_listings_are_written_to_the_syncing_users_team(self):
+        from src.adapters import get_adapter
+
+        adapter = get_adapter("ebay")
+        stored = adapter.store_listings(
+            self.db,
+            [{
+                "platform": "ebay",
+                "platform_listing_id": f"SYNC-{secrets.token_hex(4)}",
+                "title": "Should belong to the syncer",
+                "price_cents": 1000,
+                "currency": "CAD",
+            }],
+            owner_user_id=self.user.id,
+        )
+        self.assertEqual(stored["added"], 1, stored)
+
+        row = self.db.query(Listing).filter(
+            Listing.platform_listing_id.like("SYNC-%")
+        ).order_by(Listing.id.desc()).first()
+        self.assertIsNotNone(row)
+        self.assertEqual(row.team_id, self.own_team.id)
+        self.assertNotEqual(
+            row.team_id, self.decoy_team.id,
+            "the listing was written into another user's team",
+        )
+
+    def test_a_user_with_no_team_is_refused_rather_than_guessed(self):
+        """Storing nothing is better than storing into an arbitrary team."""
+        from src.adapters import get_adapter
+
+        from src.models import TeamMembership
+
+        # Remove the syncer's membership, leaving them team-less.
+        self.db.query(TeamMembership).filter(
+            TeamMembership.user_id == self.user.id
+        ).delete(synchronize_session=False)
+        self.db.commit()
+
+        adapter = get_adapter("ebay")
+        stored = adapter.store_listings(
+            self.db,
+            [{"platform": "ebay", "platform_listing_id": "NOPE-1",
+              "title": "Nowhere to go", "price_cents": 1}],
+            owner_user_id=self.user.id,
+        )
+        self.assertEqual(stored["added"], 0)
+        self.assertIsNotNone(adapter.last_error)
+        self.assertIn("team", adapter.last_error.lower())
+
+        # And nothing was written into the decoy team.
+        count = self.db.query(Listing).filter(
+            Listing.team_id == self.decoy_team.id
+        ).count()
+        self.assertEqual(count, 0)
 
 
 if __name__ == "__main__":
