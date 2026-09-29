@@ -8,12 +8,16 @@ it by hand.
 
 import secrets
 import unittest
+from datetime import datetime, timedelta
 
 from tests import _env  # noqa: E402,F401  isort:skip  (must precede src imports)
 
+from fastapi.testclient import TestClient
+
 from src.adapters import get_adapter
+from src.api.main import app
 from src.database import SessionLocal, init_db
-from src.models import Listing, Team, TeamMembership, User
+from src.models import AuthSession, Listing, Team, TeamMembership, User
 
 
 class EbayOrderParsingTest(unittest.TestCase):
@@ -440,6 +444,103 @@ class RecordSalesTest(unittest.TestCase):
         self.assertEqual(attached, 1)
         self.assertEqual([c[0] for c in calls], ["browse", "getitem"])
         self.assertEqual(sales[0]["image_url"], "https://fallback.jpg")
+
+
+class RealisedProfitBasisTest(unittest.TestCase):
+    """The Realized Profit KPI must use the payout, not the listed price, and must
+    count postage the seller paid.
+
+    Summing price_cents overstated every sale by the marketplace fee, and leaving
+    postage out of cost overstated it a second time by the price of the label. The
+    figures here are a real sale: CAD 110.00 item, 26.54 fee, 37.56 postage charged
+    to the buyer, 31.25 label paid, 20.00 paid for the item, 121.02 payout.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        init_db()
+        cls._cm = TestClient(app)
+        cls.client = cls._cm.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._cm.__exit__(None, None, None)
+
+    def setUp(self):
+        self.db = SessionLocal()
+        self.user = User(email=f"profit.{secrets.token_hex(4)}@example.com",
+                         name="Profit Tester", provider="google", is_admin=False)
+        self.db.add(self.user)
+        self.db.flush()
+        self.team = Team(name=f"Profit {secrets.token_hex(4)}",
+                         invite_code=secrets.token_urlsafe(16))
+        self.db.add(self.team)
+        self.db.flush()
+        self.db.add(TeamMembership(team_id=self.team.id, user_id=self.user.id,
+                                   role="owner"))
+        self.db.commit()
+
+        token = secrets.token_urlsafe(48)
+        self.db.add(AuthSession(token=token, user_id=self.user.id,
+                                expires_at=datetime.utcnow() + timedelta(hours=1)))
+        self.db.commit()
+        self.client.cookies.clear()
+        self.client.cookies.set("auth_token", token)
+
+    def tearDown(self):
+        uid, tid = self.user.id, self.team.id
+        self.db.rollback()
+        self.db.query(Listing).filter(Listing.team_id == tid).delete(synchronize_session=False)
+        self.db.query(TeamMembership).filter(TeamMembership.user_id == uid).delete(synchronize_session=False)
+        self.db.query(Team).filter(Team.id == tid).delete(synchronize_session=False)
+        self.db.query(AuthSession).filter(AuthSession.user_id == uid).delete(synchronize_session=False)
+        self.db.query(User).filter(User.id == uid).delete(synchronize_session=False)
+        self.db.commit()
+        self.db.close()
+
+    def _sold(self, item_id, **kw):
+        row = Listing(platform="ebay", platform_listing_id=item_id,
+                      title="Sold thing", currency="CAD", status="sold",
+                      is_sold=True, sold_at=datetime.utcnow(),
+                      team_id=self.team.id, **kw)
+        self.db.add(row)
+        self.db.commit()
+        return row
+
+    def test_profit_uses_the_payout_and_counts_postage(self):
+        self._sold("800531403439", price_cents=11000, fees_cents=2654,
+                   shipping_charged_cents=3756, shipping_cost_cents=3125,
+                   net_payout_cents=12102, purchase_price_cents=2000)
+
+        data = self.client.get("/api/stats?days=all").json()
+
+        # Payout 121.02 - item 20.00 - label 31.25 = 69.77, NOT 110 - 20 = 90.00.
+        self.assertEqual(data["sold_revenue_cents"], 12102)
+        self.assertEqual(data["sold_cost_cents"], 2000 + 3125)
+        self.assertEqual(data["sold_profit_cents"], 12102 - 2000 - 3125)
+
+    def test_the_listed_price_is_the_fallback_when_there_is_no_payout(self):
+        """A sale marked by hand has no payout to use, so the price stands in
+        rather than being dropped to zero."""
+        self._sold("800570000099", price_cents=5000, purchase_price_cents=1000)
+
+        data = self.client.get("/api/stats?days=all").json()
+        self.assertEqual(data["sold_revenue_cents"], 5000)
+        self.assertEqual(data["sold_cost_cents"], 1000)
+        self.assertEqual(data["sold_profit_cents"], 4000)
+
+    def test_the_timeline_uses_the_same_basis_as_the_totals(self):
+        """The chart and the KPI disagreeing is worse than either being wrong."""
+        self._sold("800531403439", price_cents=11000, fees_cents=2654,
+                   shipping_cost_cents=3125, net_payout_cents=12102,
+                   purchase_price_cents=2000)
+
+        data = self.client.get("/api/stats?days=all").json()
+        points = data["timeline"]["points"]
+        chart_revenue = sum(p.get("revenue_cents", 0) for p in points)
+        chart_profit = sum(p.get("profit_cents", 0) for p in points)
+        self.assertGreater(chart_revenue, 0)
+        self.assertEqual(chart_profit, data["sold_profit_cents"])
 
 
 if __name__ == "__main__":

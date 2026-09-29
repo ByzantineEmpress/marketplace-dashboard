@@ -2013,11 +2013,20 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
         func.sum(Listing.purchase_price_cents + Listing.parts_cost_cents)
     ).filter(_dedup(active_scope)).scalar() or 0
 
-    # Total profit realized from sold items in scope (revenue - costs)
-    sold_revenue = db.query(func.sum(Listing.price_cents)).filter(_dedup(sold_scope)).scalar() or 0
-    sold_cost = db.query(
-        func.sum(Listing.purchase_price_cents + Listing.parts_cost_cents)
-    ).filter(_dedup(sold_scope)).scalar() or 0
+    # Realised revenue is what the marketplace actually PAID OUT, not the listed
+    # price: its fee comes off, and the buyer's postage was never the seller's to
+    # keep. Summing price_cents instead overstated every sale by the fee. The
+    # listed price remains the fallback for a sale with no payout recorded — one
+    # marked by hand, for instance.
+    #
+    # Cost includes postage the seller paid, which is money out of pocket on that
+    # sale exactly like a part, so leaving it out overstated profit again.
+    actual_revenue = func.coalesce(func.nullif(Listing.net_payout_cents, 0), Listing.price_cents)
+    actual_cost = (Listing.purchase_price_cents + Listing.parts_cost_cents
+                   + Listing.shipping_cost_cents)
+
+    sold_revenue = db.query(func.sum(actual_revenue)).filter(_dedup(sold_scope)).scalar() or 0
+    sold_cost = db.query(func.sum(actual_cost)).filter(_dedup(sold_scope)).scalar() or 0
     sold_profit = sold_revenue - sold_cost
 
     # Written-off inventory loss cost
@@ -2037,6 +2046,8 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
         Listing.price_cents,
         Listing.purchase_price_cents,
         Listing.parts_cost_cents,
+        Listing.shipping_cost_cents,
+        Listing.net_payout_cents,
         coalesce(Listing.sold_at, Listing.updated_at).label("sold_date")
     ).filter(_dedup(sold_scope)).all()
 
@@ -2119,8 +2130,11 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
         b_key = dt.strftime("%Y-%m-%d") if days_int else dt.strftime("%Y-%m")
         if b_key in bucket_map:
             target_b = bucket_map[b_key]
-            rev = row.price_cents or 0
-            cost = (row.purchase_price_cents or 0) + (row.parts_cost_cents or 0)
+            # Same basis as the totals above: the payout when there is one,
+            # otherwise the listed price, against cost of goods plus postage.
+            rev = (row.net_payout_cents or 0) or (row.price_cents or 0)
+            cost = ((row.purchase_price_cents or 0) + (row.parts_cost_cents or 0)
+                    + (row.shipping_cost_cents or 0))
             target_b["revenue_cents"] += rev
             target_b["cost_cents"] += cost
             target_b["profit_cents"] += (rev - cost)
