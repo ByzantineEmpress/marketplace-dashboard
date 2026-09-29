@@ -1846,11 +1846,15 @@ code {
 
 .modal-media {
     width: 100%;
-    /* A fixed 260px height + object-fit:contain letterboxed the photo small.
-       Fill the modal width at 4:3 like the listing cards do. It must NOT be a
-       flex container: flex centering fights the image's height:100%, collapsing
-       it to a thin sliver in some browsers. */
+    /* Fill the modal width at 4:3 so the photo is large.
+       flex-shrink:0 is essential: .modal-body is a COLUMN flex container, so
+       without it the photo box is treated as a shrinkable item and gets squashed
+       toward zero whenever the modal's content is taller than the body (which it
+       always is). overflow:hidden then clipped it to a thin strip. min-height is
+       a belt-and-braces guarantee that it can never collapse again. */
     aspect-ratio: 4 / 3;
+    min-height: 200px;
+    flex-shrink: 0;
     position: relative;
     border-radius: var(--radius);
     overflow: hidden;

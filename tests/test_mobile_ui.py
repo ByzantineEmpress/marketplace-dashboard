@@ -62,5 +62,44 @@ class MobileModalTest(unittest.TestCase):
         self.assertIn("44px", block)
 
 
+class DetailPhotoSizeTest(unittest.TestCase):
+    """The detail modal's photo must render large, not as a clipped strip.
+
+    This broke twice. First a fixed 260px height with object-fit:contain
+    letterboxed it small; then, after switching to aspect-ratio, the box was
+    squashed to a sliver because .modal-body is a COLUMN flex container and the
+    photo was a shrinkable flex item. overflow:hidden clipped the result to a
+    thin band of the image.
+    """
+
+    def _media_block(self):
+        """Only the .modal-media rule and its .modal-media img rule."""
+        css = _read("static", "css", "style.css")
+        start = css.index(".modal-media {")
+        img_start = css.index(".modal-media img {", start)
+        end = css.index("}", img_start)
+        return css[start:end]
+
+    def test_the_photo_box_cannot_be_shrunk_by_flex(self):
+        block = self._media_block()
+        self.assertIn("flex-shrink: 0", block,
+                      "the photo box will be squashed by .modal-body's column flex")
+
+    def test_the_photo_box_has_a_minimum_height(self):
+        block = self._media_block()
+        self.assertIn("min-height", block,
+                      "without a minimum the box can collapse to a sliver")
+
+    def test_the_image_fills_the_box(self):
+        block = self._media_block()
+        self.assertIn("aspect-ratio", block)
+        self.assertIn("object-fit: cover", block)
+
+    def test_the_photo_box_is_not_a_flex_container(self):
+        """Flex centering fights the image's height:100%."""
+        block = self._media_block()
+        self.assertNotIn("display: flex", block)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
