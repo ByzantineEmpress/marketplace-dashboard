@@ -225,8 +225,18 @@
                             ? "Not authorised yet \u2014 press Connect to grant access to your shop."
                             : "Sync reported: " + r.errors.join("; ");
                     } else {
-                        note.textContent = "Synced " + (r.listings_fetched || 0) + " listing(s), "
-                            + (r.listings_added || 0) + " new.";
+                        // Include the failure count. Reporting "0 new" while
+                        // hundreds were rejected is exactly what hid a schema
+                        // mismatch for several rounds.
+                        let message = "Synced " + (r.listings_fetched || 0) + " listing(s), "
+                            + (r.listings_added || 0) + " new";
+                        if (r.listings_updated) {
+                            message += ", " + r.listings_updated + " updated";
+                        }
+                        if (r.listings_failed) {
+                            message += ", " + r.listings_failed + " FAILED";
+                        }
+                        note.textContent = message + ".";
                     }
                 })
                 .catch(function (err) {

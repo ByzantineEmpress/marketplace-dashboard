@@ -350,6 +350,22 @@ class EtsyAdapter(MarketplaceAdapter):
             if close_db:
                 db.close()
 
+    def _normalise_results(self, results: list, limit: int = 0) -> List[dict]:
+        """Map raw Etsy objects onto the Listing schema, dropping bad ones.
+
+        Anything the normaliser cannot make sense of is skipped rather than
+        passed through, because a malformed row would otherwise fail at insert
+        time and be counted as a silent failure.
+        """
+        normalised = []
+        for item in results:
+            row = self._normalise_listing(item)
+            if row:
+                normalised.append(row)
+        if limit:
+            normalised = normalised[:limit]
+        return normalised
+
     def _fetch_active_listings(self, headers: dict, shop_id: str, limit: int) -> List[dict]:
         """Fetch active listings using the /listings/active endpoint."""
         listings = []
@@ -372,7 +388,8 @@ class EtsyAdapter(MarketplaceAdapter):
                     results = data.get("results", [])
                     if not results:
                         break
-                    listings.extend(results)
+                    # Normalise here: the raw Etsy object is not a Listing row.
+                    listings.extend(self._normalise_results(results))
                     if len(results) < limit_per_page:
                         break  # Last page
                     page += 1
@@ -409,7 +426,8 @@ class EtsyAdapter(MarketplaceAdapter):
                     results = data.get("results", [])
                     if not results:
                         break
-                    listings.extend(results)
+                    # Normalise here: the raw Etsy object is not a Listing row.
+                    listings.extend(self._normalise_results(results))
                     if len(results) < limit_per_page:
                         break  # Last page
                     page += 1
@@ -422,23 +440,39 @@ class EtsyAdapter(MarketplaceAdapter):
 
     def _normalise_listing(self, item: dict) -> Optional[dict]:
         """Normalise an Etsy API response into our standard Listing schema."""
+        if not isinstance(item, dict):
+            # Guard here rather than relying on the caller: a non-dict would
+            # otherwise raise AttributeError on .get(), and at the call site
+            # that surfaces as an unexplained failure count.
+            return None
         try:
             # Extract price
             price_cents = 0
             price_raw = ""
             price_data = item.get("price")
             if price_data:
-                # Etsy stores price as a number or dict
                 if isinstance(price_data, (int, float)):
                     price_cents = int(float(price_data) * 100)
                     price_raw = f"${price_cents / 100:.2f}"
                 elif isinstance(price_data, dict):
-                    value = price_data.get("value")
-                    if isinstance(value, (int, float)):
-                        price_cents = int(float(value) * 100)
-                        price_raw = f"${price_cents / 100:.2f}"
+                    # Etsy v3 returns a money object:
+                    #   {"amount": 598, "divisor": 100, "currency_code": "CAD"}
+                    # The previous branch looked for price["value"], which is
+                    # the v2 shape, so it never matched and every price came out
+                    # as 0 - the amount that actually matters for profit.
+                    amount = price_data.get("amount")
+                    divisor = price_data.get("divisor") or 100
+                    if isinstance(amount, (int, float)) and divisor:
+                        price_cents = int(round(float(amount) * 100 / float(divisor)))
+                        code = price_data.get("currency_code") or "USD"
+                        price_raw = f"{code} {price_cents / 100:.2f}"
                     else:
-                        price_raw = str(price_data)
+                        value = price_data.get("value")
+                        if isinstance(value, (int, float)):
+                            price_cents = int(float(value) * 100)
+                            price_raw = f"${price_cents / 100:.2f}"
+                        else:
+                            price_raw = str(price_data)
 
             # Extract images
             images = []
@@ -465,7 +499,13 @@ class EtsyAdapter(MarketplaceAdapter):
                 "description": item.get("description", ""),
                 "price_raw": price_raw,
                 "price_cents": price_cents,
-                "currency": "USD",  # Etsy defaults to USD
+                # Etsy reports the shop currency; this shop is CAD, so
+                # hardcoding USD mislabels every amount.
+                "currency": (
+                    (item.get("price") or {}).get("currency_code")
+                    if isinstance(item.get("price"), dict)
+                    else None
+                ) or "USD",
                 "status": "active",
                 "is_sold": item.get("is_sold", False),
                 "image_url": images[0] if images else "",
@@ -474,7 +514,9 @@ class EtsyAdapter(MarketplaceAdapter):
                 "tags": tags,
                 "materials": materials,
                 "available_quantity": item.get("quantity", 0),
-                "views_count": item.get("num_pending_starts", 0),
+                # "num_pending_starts" is not an Etsy field; favourites is
+                # the closest real metric, and views_count drives the UI.
+                "views_count": item.get("views", 0) or item.get("num_favorers", 0),
                 "original_url": f"https://www.etsy.com/listing/{item.get('listing_id', '')}",
                 "platform": self.PLATFORM,
             }

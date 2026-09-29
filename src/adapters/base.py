@@ -285,6 +285,7 @@ class MarketplaceAdapter(ABC):
         added = 0
         updated = 0
         failed = 0
+        first_error = None
 
         # Resolve fallback team_id if not explicitly provided
         target_team_id = team_id
@@ -326,11 +327,18 @@ class MarketplaceAdapter(ABC):
                     db.add(new_listing)
                     added += 1
 
-            except Exception:
+            except Exception as exc:
                 failed += 1
+                if first_error is None:
+                    # Keep the first failure verbatim. A bare "failed += 1" made
+                    # a total insert failure look exactly like an empty account,
+                    # which is how a normalisation bug stayed hidden while every
+                    # fetched listing was rejected.
+                    first_error = f"{type(exc).__name__}: {exc}"
 
         db.commit()
-        return {"added": added, "updated": updated, "failed": failed}
+        return {"added": added, "updated": updated, "failed": failed,
+                "first_error": first_error}
 
     # ---------- Rate limiting ----------
 
@@ -428,7 +436,17 @@ class MarketplaceAdapter(ABC):
             stored = self.store_listings(db, listings)
             result["listings_added"] = stored["added"]
             result["listings_updated"] = stored["updated"]
+            result["listings_failed"] = stored.get("failed", 0)
             result["success"] = True
+
+            # Partial or total insert failure must be visible. Reporting
+            # "0 added" alongside "500 fetched" with no error is what let a
+            # schema mismatch go unnoticed.
+            if stored.get("failed"):
+                result["errors"].append(
+                    f"{stored['failed']} of {len(listings)} listing(s) could not be "
+                    f"stored — first error: {stored.get('first_error')}"
+                )
 
         except Exception as e:
             result["errors"].append(str(e))

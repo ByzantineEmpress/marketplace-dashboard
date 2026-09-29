@@ -402,5 +402,118 @@ class SyncReportsFailureInsteadOfSilentZeroTest(unittest.TestCase):
         self.assertTrue(adapter.last_error)
 
 
+class EtsyNormalisationTest(unittest.TestCase):
+    """Raw Etsy objects must be mapped onto the Listing schema before storing.
+
+    They were not: both fetch methods returned Etsy's raw API objects, and
+    store_listings does Listing(**data). Etsy returns listing_id, price as a
+    money object, state and dozens of other non-column fields, so every listing
+    raised TypeError and the failure was counted somewhere nothing reported.
+    """
+
+    def setUp(self):
+        from src.adapters import get_adapter
+
+        self.adapter = get_adapter("etsy")
+
+    # A trimmed but faithful Etsy v3 listing.
+    RAW = {
+        "listing_id": 4366087636,
+        "title": "Inspirational Png Bundle",
+        "description": "A bundle",
+        "state": "active",
+        "quantity": 529,
+        "views": 6688,
+        "num_favorers": 900,
+        "tags": ["png", "bundle"],
+        "materials": [],
+        "url": "https://www.etsy.com/listing/4366087636/x",
+        # v3 money object, not the v2 {"value": ...} shape
+        "price": {"amount": 598, "divisor": 100, "currency_code": "CAD"},
+        "images": [{"url": "https://i.etsystatic.com/1.jpg"}],
+        "shop_id": 64488261,
+    }
+
+    def test_normalised_output_only_contains_model_columns(self):
+        from src.models import Listing
+
+        row = self.adapter._normalise_listing(self.RAW)
+        self.assertIsNotNone(row)
+        columns = {c.name for c in Listing.__table__.columns}
+        unknown = [k for k in row if k not in columns]
+        self.assertEqual(unknown, [], f"not Listing columns: {unknown}")
+
+    def test_it_can_actually_construct_a_listing(self):
+        """The end the raw object failed at."""
+        from src.models import Listing
+
+        row = self.adapter._normalise_listing(self.RAW)
+        row.setdefault("platform", "etsy")
+        listing = Listing(**row)  # would raise TypeError with raw Etsy data
+        self.assertEqual(listing.platform_listing_id, "4366087636")
+        self.assertEqual(listing.title, "Inspirational Png Bundle")
+
+    def test_v3_money_object_is_parsed(self):
+        """598/100 = 5.98 CAD. The old code looked for price["value"] and
+        produced 0 for every listing."""
+        row = self.adapter._normalise_listing(self.RAW)
+        self.assertEqual(row["price_cents"], 598)
+        self.assertIn("5.98", row["price_raw"])
+        self.assertEqual(row["currency"], "CAD")
+
+    def test_an_unusual_divisor_is_respected(self):
+        raw = dict(self.RAW, price={"amount": 5999, "divisor": 1000,
+                                    "currency_code": "USD"})
+        row = self.adapter._normalise_listing(raw)
+        self.assertEqual(row["price_cents"], 600)
+
+    def test_missing_price_does_not_raise(self):
+        raw = dict(self.RAW)
+        raw.pop("price")
+        row = self.adapter._normalise_listing(raw)
+        self.assertEqual(row["price_cents"], 0)
+
+    def test_views_prefers_the_real_field(self):
+        row = self.adapter._normalise_listing(self.RAW)
+        self.assertEqual(row["views_count"], 6688)
+
+    def test_normalise_results_skips_unusable_items(self):
+        rows = self.adapter._normalise_results([self.RAW, "not-a-dict", None])
+        # The string and None should be dropped, not passed through to fail
+        # later at insert time.
+        self.assertEqual(len(rows), 1)
+
+
+class StoreFailureIsReportedTest(unittest.TestCase):
+    """A store failure must not look like an empty account."""
+
+    def test_store_listings_reports_the_first_error(self):
+        from src.adapters import get_adapter
+        from src.database import SessionLocal
+
+        adapter = get_adapter("etsy")
+        db = SessionLocal()
+        try:
+            # A field that is not a Listing column, i.e. exactly the raw shape.
+            stored = adapter.store_listings(db, [{"listing_id": 1, "title": "x"}])
+        finally:
+            db.rollback()
+            db.close()
+
+        self.assertEqual(stored["added"], 0)
+        self.assertEqual(stored["failed"], 1)
+        self.assertIn("listing_id", str(stored.get("first_error")))
+
+    def test_sync_all_surfaces_the_failure(self):
+        """sync_all must put a store failure into result["errors"]."""
+        import inspect
+        from src.adapters.base import MarketplaceAdapter
+
+        source = inspect.getsource(MarketplaceAdapter.sync_all)
+        self.assertIn("listings_failed", source)
+        self.assertIn("first_error", source)
+        self.assertIn("could not be", source)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
