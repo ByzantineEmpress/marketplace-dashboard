@@ -521,6 +521,53 @@ class EtsyNormalisationTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
 
 
+class SharedCallbackSignatureTest(unittest.TestCase):
+    """Every adapter is called the same way by the shared callback route.
+
+    This guards a real regression: Etsy's handle_callback had no seller_id
+    parameter, so passing it raised TypeError, and the `except TypeError` retry
+    re-called the adapter WITHOUT the PKCE verifier. Etsy then answered
+    "code_verifier is required", which pointed at PKCE rather than at the missing
+    keyword.
+    """
+
+    def test_etsy_accepts_the_shared_keywords(self):
+        import inspect
+
+        from src.adapters import get_adapter
+
+        params = inspect.signature(get_adapter("etsy").handle_callback).parameters
+        self.assertIn("code_verifier", params)
+        self.assertIn("seller_id", params)
+
+    def test_the_verifier_survives_for_every_adapter_that_supports_pkce(self):
+        import inspect
+
+        from src.adapters import get_adapter, list_registered_platforms
+        from src.adapters.base import callback_kwargs
+
+        for platform in list_registered_platforms():
+            adapter = get_adapter(platform)
+            kwargs = callback_kwargs(adapter, {}, 1, "the-verifier", seller_id="SELLER")
+            # Every keyword offered must be one the adapter accepts.
+            self.assertTrue(
+                set(kwargs).issubset(inspect.signature(adapter.handle_callback).parameters),
+                f"{platform} was offered a keyword it does not accept",
+            )
+            # And an adapter that takes a verifier must actually be given it.
+            if "code_verifier" in inspect.signature(adapter.handle_callback).parameters:
+                self.assertEqual(kwargs.get("code_verifier"), "the-verifier", platform)
+
+    def test_the_offer_omits_keywords_an_adapter_lacks(self):
+        """Poshmark takes neither, and must not be handed them."""
+        from src.adapters import get_adapter
+        from src.adapters.base import callback_kwargs
+
+        kwargs = callback_kwargs(get_adapter("poshmark"), {}, 1, "v", seller_id="S")
+        self.assertNotIn("code_verifier", kwargs)
+        self.assertNotIn("seller_id", kwargs)
+
+
 class StoreFailureIsReportedTest(unittest.TestCase):
     """A store failure must not look like an empty account."""
 

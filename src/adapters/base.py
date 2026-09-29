@@ -20,6 +20,30 @@ from src.models import Listing, MarketplaceAccount
 from src.config import config
 
 
+def callback_kwargs(adapter, credentials, user_id, code_verifier,
+                    seller_id=None) -> Dict[str, Any]:
+    """The keyword arguments this adapter's ``handle_callback`` actually accepts.
+
+    Built from the signature rather than by trial and error.
+
+    This replaced an ``except TypeError`` retry that re-called the adapter without
+    the PKCE verifier. Etsy's handler had no ``seller_id`` parameter, so passing it
+    raised TypeError, the retry dropped ``code_verifier`` too, and Etsy answered
+    "code_verifier is required" — the actual cause buried behind a generic 400.
+    A fallback that discards a security parameter on an unrelated error is worse
+    than no fallback.
+    """
+    import inspect
+
+    params = inspect.signature(adapter.handle_callback).parameters
+    kwargs: Dict[str, Any] = {"credentials": credentials, "user_id": user_id}
+    if "code_verifier" in params:
+        kwargs["code_verifier"] = code_verifier
+    if "seller_id" in params:
+        kwargs["seller_id"] = seller_id
+    return kwargs
+
+
 def _oauth_error(resp, platform: str) -> str:
     """A usable message from a failed token request.
 

@@ -33,6 +33,7 @@ from src.email_verification import (
 )
 from src import mailer, storage
 from src import oauth_pkce
+from src.adapters.base import callback_kwargs
 from src.database import SessionLocal, new_invite_code
 from src.models import (
     AuthSession,
@@ -1386,18 +1387,15 @@ async def oauth_callback(platform: str, request: Request):
             db = SessionLocal()
             try:
                 credentials = _user_credentials(db, owner["id"], platform)
-                try:
-                    result = adapter.handle_callback(
-                        code, state, credentials=credentials,
-                        user_id=owner["id"], code_verifier=verifier,
-                        seller_id=amazon_seller_id,
-                    )
-                except TypeError:
-                    # Adapter predating PKCE support, or an adapter that does not
-                    # accept the Amazon-specific seller_id keyword.
-                    result = adapter.handle_callback(
-                        code, state, credentials=credentials, user_id=owner["id"]
-                    )
+                # Built from the adapter's own signature, so it is never handed a
+                # keyword it lacks and never silently loses the PKCE verifier. A
+                # bare `except TypeError` retry used to do both at once, which is
+                # what broke Etsy with "code_verifier is required".
+                result = adapter.handle_callback(
+                    code, state,
+                    **callback_kwargs(adapter, credentials, owner["id"], verifier,
+                                      seller_id=amazon_seller_id),
+                )
             finally:
                 db.close()
     else:

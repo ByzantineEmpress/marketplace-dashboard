@@ -106,14 +106,19 @@ class EtsyAdapter(MarketplaceAdapter):
         return f"{ETSY_AUTH_URL}?{query}"
 
     def handle_callback(self, code: str, state: str = "", credentials: dict = None,
-                        user_id=None, code_verifier: str = "") -> Dict[str, Any]:
+                        user_id=None, code_verifier: str = "",
+                        seller_id: str = None) -> Dict[str, Any]:
         """Exchange an authorisation code for access and refresh tokens.
 
         Also stores the shop_id from the response.
 
         ``code_verifier`` is the PKCE verifier whose S256 challenge was sent with
         the authorisation request. Etsy requires it on the token request; without
-        it the exchange fails with an unhelpful error.
+        it the exchange fails with a bare "code_verifier is required".
+
+        ``seller_id`` is accepted and ignored: the shared callback route passes it
+        for Amazon, and this signature must match that call. Omitting it here is
+        what made the route fall back to a call without the verifier.
         """
         import os
 
