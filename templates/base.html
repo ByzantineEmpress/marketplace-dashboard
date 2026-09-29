@@ -39,7 +39,7 @@
             </svg>
             <span class="nav-title">Marketplace Dashboard</span>
         </div>
-        <div class="nav-links">
+        <div class="nav-links" id="nav-links">
             {% if identity %}
             <span class="nav-identity" title="Signed in as">{{ identity }}</span>
             <button type="button" id="signout-btn" class="nav-signout" title="Sign out of this browser">Sign out</button>
@@ -60,6 +60,9 @@
                 <svg id="theme-icon-moon" viewBox="0 0 24 24" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
             </button>
         </div>
+        <button type="button" class="nav-burger" id="nav-burger" aria-label="Open menu" aria-expanded="false" aria-controls="nav-links">
+            <span></span><span></span><span></span>
+        </button>
     </nav>
 
     <!-- ========== Flash messages ========== -->

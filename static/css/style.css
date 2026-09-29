@@ -286,6 +286,43 @@ code {
 
 .nav-signout:disabled { opacity: 0.6; cursor: default; }
 
+/* Hamburger button — hidden on desktop, shown on mobile via the media query
+   below. Three bars that morph into an X when the menu is open. */
+.nav-burger {
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    width: 44px;
+    height: 44px;
+    padding: 10px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    cursor: pointer;
+    flex-shrink: 0;
+    touch-action: manipulation;
+}
+
+.nav-burger span {
+    display: block;
+    width: 100%;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--text);
+    transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.navbar.menu-open .nav-burger span:nth-child(1) {
+    transform: translateY(7px) rotate(45deg);
+}
+.navbar.menu-open .nav-burger span:nth-child(2) {
+    opacity: 0;
+}
+.navbar.menu-open .nav-burger span:nth-child(3) {
+    transform: translateY(-7px) rotate(-45deg);
+}
+
 /* --- 4. Main content & footer ----------------------------------- */
 
 .main-content {
@@ -1292,6 +1329,120 @@ code {
    Responsive tiers
    ================================================================ */
 
+/* --- Mobile: collapsible navigation + single-column layouts ------
+   Below 768px the horizontal nav collapses into a hamburger menu, the toolbar
+   stacks into one column, and modals become bottom sheets. This is the layer
+   that keeps the dashboard usable on a phone instead of overflowing. */
+@media (max-width: 767px) {
+    /* -- navigation -- */
+    .nav-burger { display: flex; }
+
+    .nav-links {
+        display: none;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
+        background: var(--bg-elevated);
+        border-bottom: 1px solid var(--border);
+        box-shadow: var(--shadow-lg);
+        z-index: 99;
+    }
+
+    .navbar.menu-open .nav-links {
+        display: flex;
+    }
+
+    /* Menu items read left-to-right and fill the width, so they are large
+       tap targets instead of cramped inline chips. */
+    .navbar.menu-open .nav-links .nav-link,
+    .navbar.menu-open .nav-links .nav-signout,
+    .navbar.menu-open .nav-links .theme-toggle {
+        width: 100%;
+        justify-content: flex-start;
+        text-align: left;
+        padding: 12px 14px;
+        font-size: 15px;
+        border-radius: 9px;
+    }
+
+    .navbar.menu-open .nav-links .nav-identity {
+        width: 100%;
+        max-width: none;
+        justify-content: flex-start;
+        margin-bottom: 4px;
+    }
+
+    .navbar.menu-open .nav-links .nav-signout {
+        margin-left: 0;
+    }
+
+    /* -- toolbar: one clean column, not a row of wrapping chips -- */
+    .toolbar {
+        flex-direction: column;
+    }
+
+    .toolbar-left {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+    }
+
+    .search-input {
+        grid-column: 1 / -1;
+    }
+
+    .toolbar-left .filter-select {
+        width: 100%;
+        flex: 1 1 auto;
+    }
+
+    /* The team filter and the "missing cost" toggle span the full row so a
+       long team name and the label are not squeezed. */
+    #filter-team,
+    .toolbar-left .filter-check {
+        grid-column: 1 / -1;
+        width: 100%;
+    }
+
+    .filter-check {
+        justify-content: center;
+    }
+
+    /* Actions: the primary action is full-width, secondary actions share a row.
+       This replaces "buttons all over the place" with a fixed, predictable
+       order. */
+    .toolbar-right {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+    }
+
+    .toolbar-right .btn {
+        width: 100%;
+    }
+
+    .toolbar-right #add-manual-listing-btn {
+        grid-column: 1 / -1;
+        order: -1;
+    }
+
+    /* Grouping action bar stacks so the two buttons don't fight for width. */
+    .group-action-bar {
+        flex-direction: column;
+        align-items: stretch;
+        text-align: center;
+    }
+
+    .group-action-bar .btn {
+        width: 100%;
+    }
+}
+
 /* --- >= 560px: big phones + foldable OUTER screens -------------- */
 @media (min-width: 560px) {
     .stats-bar {
@@ -1784,26 +1935,56 @@ code {
     color: var(--text);
 }
 
-/* Mobile responsive adjustments for modals */
+/* Mobile responsive adjustments for modals.
+   On a phone a centered desktop dialog is hard to reach and hard to dismiss,
+   so it becomes a bottom sheet: full width, anchored to the bottom, with a
+   large always-visible close target. */
 @media (max-width: 640px) {
     .modal-backdrop {
-        padding: 8px;
-        align-items: center;
+        padding: 0;
+        align-items: flex-end;
     }
     .modal {
+        width: 100%;
+        max-width: 100%;
         max-height: 94dvh;
         max-height: 94vh;
-        border-radius: var(--radius);
+        border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     }
     .modal-header {
-        padding: 12px 14px;
+        padding: 14px 16px;
+        position: sticky;
+        top: 0;
+        background: var(--bg-elevated);
+        z-index: 6;
+        border-bottom: 1px solid var(--border);
     }
     .modal-body {
-        padding: 14px;
-        gap: 12px;
+        padding: 16px;
+        gap: 14px;
     }
     .modal-footer {
-        padding: 10px 14px;
+        padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+    }
+
+    /* A close button you can actually hit with a thumb, and cannot miss. */
+    .modal-close {
+        width: 44px;
+        height: 44px;
+        font-size: 28px;
+        padding: 0;
+        border-radius: 10px;
+        background: var(--bg-inset);
+        border: 1px solid var(--border);
+    }
+    .modal-close:hover {
+        background: var(--bg-inset);
+    }
+
+    /* Footer buttons stretch so the primary action is a full-width target. */
+    .modal-footer .btn {
+        flex: 1;
+        min-height: 44px;
     }
 }
 

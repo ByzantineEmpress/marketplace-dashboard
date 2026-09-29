@@ -95,6 +95,7 @@ jobs:
             tests/test_marketplace_oauth.py
             tests/test_js_references.py
             tests/test_listing_groups.py
+            tests/test_mobile_ui.py
             tests/test_missing_cost.py
             tests/test_multitenancy.py
             tests/test_other_marketplaces.py

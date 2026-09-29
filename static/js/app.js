@@ -10,6 +10,46 @@
 
    ================================================================== */
 
+/* --- Mobile navigation menu (hamburger) --- */
+(function () {
+    const navbar = document.getElementById("navbar");
+    const burger = document.getElementById("nav-burger");
+    const links = document.getElementById("nav-links");
+    if (!navbar || !burger || !links) return;
+
+    function setOpen(open) {
+        navbar.classList.toggle("menu-open", open);
+        burger.setAttribute("aria-expanded", open ? "true" : "false");
+        burger.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+    }
+
+    burger.addEventListener("click", function (e) {
+        e.stopPropagation();
+        setOpen(!navbar.classList.contains("menu-open"));
+    });
+
+    // Close on any nav link (the browser follows the href afterwards).
+    links.addEventListener("click", function (e) {
+        if (e.target.closest("a")) {
+            setOpen(false);
+        }
+    });
+
+    // Close when tapping outside the navbar.
+    document.addEventListener("click", function (e) {
+        if (!navbar.contains(e.target)) {
+            setOpen(false);
+        }
+    });
+
+    // Close on Escape, for keyboard users.
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") {
+            setOpen(false);
+        }
+    });
+})();
+
 /* --- Theme toggle (Dark / Light / Auto) --- */
 (function () {
     const toggleBtn = document.getElementById("theme-toggle");
