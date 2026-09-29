@@ -61,6 +61,16 @@ class MarketplaceAdapter(ABC):
     MAX_RETRIES = 3
     BASE_DELAY = 1.0  # base delay for exponential back-off in seconds
 
+    # Set by list_listings() when it cannot proceed for a reason worth
+    # reporting — for example a shop that could not be resolved, or a token
+    # missing a required scope. sync_all() turns this into a visible error.
+    #
+    # It exists because returning an empty list for both "this seller has no
+    # listings" and "we could not work out which shop to read" is what made an
+    # Etsy misconfiguration look like an empty account for several rounds of
+    # debugging.
+    last_error = None
+
     # ---------- OAuth (abstract — must be implemented) ----------
 
     @abstractmethod
@@ -379,6 +389,9 @@ class MarketplaceAdapter(ABC):
             "errors": [],
         }
 
+        # Reset per run so a previous failure is not reported again.
+        self.last_error = None
+
         try:
             # Check we have a valid token for this user
             token = self.get_token(db, user_id=user_id, credentials=credentials)
@@ -401,6 +414,12 @@ class MarketplaceAdapter(ABC):
             result["listings_fetched"] = len(listings)
 
             if not listings:
+                # Distinguish "this account has nothing" from "we could not
+                # work out where to look". Reporting both as a silent zero is
+                # what hid a shop-resolution bug behind "Synced 0 listing(s)".
+                if self.last_error:
+                    result["errors"].append(self.last_error)
+                    return result
                 result["success"] = True
                 result["note"] = "No listings found"
                 return result

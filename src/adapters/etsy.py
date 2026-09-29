@@ -73,8 +73,13 @@ class EtsyAdapter(MarketplaceAdapter):
         redirect_uri = os.environ.get("ETSY_REDIRECT_URI") or f"{config.APP_BASE_URL}/api/auth/etsy/callback"
         api_key = _cred(credentials, "api_key") or config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
 
-        # Required scopes for reading listings
-        scopes = "listings_r"
+        # Required scopes.
+        #
+        # shops_r is needed to resolve the seller's shop: Etsy's token response
+        # has no shop_id, and /v3/application/users/{id}/shops returns 403
+        # without it. Requesting only listings_r meant the shop could never be
+        # found, so every sync silently reported 0 listings.
+        scopes = "listings_r shops_r"
 
         params = {
             "response_type": "code",
@@ -127,48 +132,33 @@ class EtsyAdapter(MarketplaceAdapter):
             resp.raise_for_status()
             token_data = resp.json()
 
-            # Extract shop_id from token response
-            shop_id = token_data.get("shop_id")
-
+            # Etsy's token response carries user_id, never shop_id, so the shop
+            # has to be resolved with a second call. Done here as well as in
+            # list_listings so the shop is known immediately after connecting.
             db = SessionLocal()
             try:
+                api_secret_local = _cred(credentials, "api_secret") or config.ETSY_API_SECRET or os.environ.get("ETSY_API_SECRET") or os.environ.get("ESY_API_SECRET") or ""
+                shop_headers = {
+                    "Authorization": f"Bearer {token_data.get('access_token', '')}",
+                    "x-api-key": f"{api_key}:{api_secret_local}",
+                }
+                resolved = self.resolve_shop(
+                    shop_headers, token_data, token_data.get("access_token", "")
+                )
+
                 self.store_tokens(
                     db,
                     access_token=token_data["access_token"],
                     refresh_token=token_data.get("refresh_token", ""),
                     token_expires_in=token_data.get("expires_in", 7200),
                     extra_data=token_data,
-                    shop_id=shop_id,
+                    shop_id=resolved.get("shop_id"),
+                    shop_name=resolved.get("shop_name") or None,
             user_id=user_id,
                 )
+                db.commit()
 
-                # Try to fetch shop name
-                if shop_id:
-                    try:
-                        api_secret_local = _cred(credentials, "api_secret") or config.ETSY_API_SECRET or os.environ.get("ETSY_API_SECRET") or os.environ.get("ESY_API_SECRET") or ""
-                        headers = {
-                            "Authorization": f"Bearer {token_data['access_token']}",
-                            "x-api-key": f"{api_key}:{api_secret_local}",
-                        }
-                        resp = httpx.get(
-                            f"{ETSY_API_BASE}/applications/{api_key}/shops",
-                            headers=headers,
-                            timeout=15,
-                        )
-                        if resp.status_code == 200:
-                            shops = resp.json()
-                            shop_name = shops.get("results", [{}])[0].get("shop_name", "")
-                            if shop_name:
-                                self.store_tokens(
-                                    db,
-                                    access_token=token_data["access_token"],
-                                    shop_name=shop_name,
-            user_id=user_id,
-                                )
-                    except Exception:
-                        pass  # Don't fail auth if shop name fetch fails
-
-                return {"success": True, "token_data": token_data}
+                return {"success": True, "token_data": token_data, "shop": resolved}
             finally:
                 db.close()
 
@@ -219,6 +209,70 @@ class EtsyAdapter(MarketplaceAdapter):
 
     # -- Listing fetching --
 
+    def resolve_shop(self, headers: dict, token_data: dict, access_token: str = "") -> dict:
+        """Find the signed-in seller's shop.
+
+        Etsy's token response contains ``user_id`` and NOT ``shop_id``, so the
+        shop has to be looked up separately. The endpoint is
+        ``GET /v3/application/users/{user_id}/shops``, which requires the
+        ``shops_r`` scope.
+
+        Returns ``{"shop_id": ..., "shop_name": ...}`` with whatever could be
+        determined, or ``{}`` on failure. Never raises: a missing shop must not
+        break the OAuth callback, it should surface as a clear message later.
+
+        This replaced a lookup against ``GET /v3/application/applications``,
+        which returns the *applications* a user has authorised and only carries
+        a shop for entries of type SHOP_APP. For a normal seller it returns
+        nothing, which is why every sync reported "0 listings" with no error.
+        """
+        user_id = str(token_data.get("user_id") or "")
+
+        # Etsy access tokens are "<user_id>.<opaque>", so this is a reliable
+        # fallback when the token response predates us storing user_id.
+        if not user_id and access_token and "." in access_token:
+            candidate = access_token.split(".", 1)[0]
+            if candidate.isdigit():
+                user_id = candidate
+
+        if not user_id:
+            return {}
+
+        try:
+            resp = httpx.get(
+                f"{ETSY_API_BASE}/application/users/{user_id}/shops",
+                headers=headers,
+                timeout=15,
+            )
+        except Exception:
+            return {}
+
+        if resp.status_code != 200:
+            # 403 here means the token lacks shops_r, so the seller needs to
+            # reconnect. Recorded rather than swallowed, because "0 listings"
+            # with no explanation is what made this hard to diagnose.
+            try:
+                body = resp.json()
+            except Exception:
+                body = {}
+            return {"error": body.get("error") or f"HTTP {resp.status_code}"}
+
+        try:
+            payload = resp.json() or {}
+        except Exception:
+            return {}
+
+        # The endpoint returns the shop object directly; tolerate a wrapped form
+        # in case Etsy changes it.
+        shop = payload
+        if "results" in payload and isinstance(payload["results"], list) and payload["results"]:
+            shop = payload["results"][0]
+
+        return {
+            "shop_id": shop.get("shop_id"),
+            "shop_name": shop.get("shop_name") or "",
+        }
+
     def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None,
                       user_id=None, credentials: dict = None) -> List[Dict[str, Any]]:
         """Fetch active Etsy listings via the Open API v3.
@@ -253,31 +307,33 @@ class EtsyAdapter(MarketplaceAdapter):
             shop_id = token.get("shop_id") or (token.get("token_data", {}) or {}).get("shop_id")
 
             if not shop_id:
-                # Try to discover shop_id from the API
-                try:
-                    resp = httpx.get(
-                        f"{ETSY_API_BASE}/applications",
-                        headers=headers,
-                        timeout=15,
-                    )
-                    if resp.status_code == 200:
-                        apps = resp.json()
-                        for app in apps.get("results", []):
-                            if app.get("type") == "SHOP_APP":
-                                shop_id = app.get("shop_id")
-                                break
-                        if shop_id:
-                            # Update stored tokens with shop_id
-                            self.store_tokens(
-                                db,
-                                access_token=token["access_token"],
-                                shop_id=shop_id,
-            user_id=user_id,
-                            )
-                except Exception:
-                    pass
+                # Resolve it from the API. This is the normal path: Etsy's token
+                # response has no shop_id.
+                resolved = self.resolve_shop(
+                    headers, token.get("token_data", {}) or {}, token.get("access_token", "")
+                )
+                shop_id = resolved.get("shop_id")
+                if shop_id:
+                    # Persist so later syncs skip this call.
+                    try:
+                        self.store_tokens(
+                            db,
+                            access_token=token["access_token"],
+                            shop_id=shop_id,
+                            shop_name=resolved.get("shop_name") or None,
+                            user_id=user_id,
+                        )
+                        db.commit()
+                    except Exception:
+                        db.rollback()
 
             if not shop_id:
+                # No shop means nothing to fetch. The caller reports this rather
+                # than a silent zero.
+                self.last_error = (
+                    "Could not determine your Etsy shop. Reconnect the account so "
+                    "the shops_r permission is granted, then try again."
+                )
                 return []
 
             listings = []

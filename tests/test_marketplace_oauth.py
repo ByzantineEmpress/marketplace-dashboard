@@ -94,7 +94,11 @@ class EtsyAuthorizationUrlTest(unittest.TestCase):
         self.assertEqual(query["code_challenge_method"], ["S256"])
         self.assertEqual(query["response_type"], ["code"])
         self.assertEqual(query["state"], ["test-state"])
-        self.assertEqual(query["scope"], ["listings_r"])
+        # shops_r is required to resolve the seller's shop: Etsy's token
+        # response has no shop_id, and without this scope the lookup 403s and
+        # every sync silently reports zero listings.
+        self.assertIn("listings_r", query["scope"][0])
+        self.assertIn("shops_r", query["scope"][0])
 
     def test_missing_challenge_is_refused_rather_than_silently_broken(self):
         """The original bug produced a plausible-looking URL that Etsy rejected,
@@ -261,6 +265,141 @@ class EtsyApiKeyHeaderTest(unittest.TestCase):
         self.assertNotIn("auth=(api_key, api_secret)", source)
         self.assertIn('"grant_type": "refresh_token"', source)
         self.assertIn('"client_id": api_key', source)
+
+
+class EtsyShopResolutionTest(unittest.TestCase):
+    """Resolving the seller's shop.
+
+    Etsy's token response contains ``user_id``, never ``shop_id``. The adapter
+    assumed a shop_id was present, so it stayed None and every sync reported
+    "0 listings" with no error - while the account plainly had listings. The
+    original fallback queried ``/v3/application/applications``, which lists the
+    applications a user has authorised and carries no shop for an ordinary
+    seller.
+    """
+
+    def setUp(self):
+        from src.adapters import get_adapter
+
+        self.adapter = get_adapter("etsy")
+
+    def _call(self, payload, status=200):
+        """Run resolve_shop against a stubbed HTTP layer."""
+        import src.adapters.etsy as etsy_mod
+
+        captured = {}
+
+        class FakeResp:
+            status_code = status
+
+            def json(self):
+                return payload
+
+        def fake_get(url, **kwargs):
+            captured["url"] = url
+            captured["headers"] = kwargs.get("headers", {})
+            return FakeResp()
+
+        real = etsy_mod.httpx.get
+        etsy_mod.httpx.get = fake_get
+        try:
+            result = self.adapter.resolve_shop(
+                {"x-api-key": "k:s"}, {"user_id": 1207010539}, "1207010539.opaque"
+            )
+        finally:
+            etsy_mod.httpx.get = real
+        return result, captured
+
+    def test_reads_shop_id_and_name_from_the_users_shops_endpoint(self):
+        result, captured = self._call(
+            {"shop_id": 64488261, "shop_name": "ByzantineMods"})
+        self.assertEqual(result["shop_id"], 64488261)
+        self.assertEqual(result["shop_name"], "ByzantineMods")
+        self.assertIn("/application/users/1207010539/shops", captured["url"])
+
+    def test_user_id_falls_back_to_the_access_token_prefix(self):
+        """Access tokens are "<user_id>.<opaque>", so the id is recoverable even
+        for a token stored before user_id was kept."""
+        result, captured = self._call(
+            {"shop_id": 1, "shop_name": "S"}, )
+        self.assertIn("1207010539", captured["url"])
+
+        # Now with no user_id in token_data at all.
+        import src.adapters.etsy as etsy_mod
+
+        captured2 = {}
+
+        class FakeResp:
+            status_code = 200
+            def json(self):
+                return {"shop_id": 7, "shop_name": "FromToken"}
+
+        def fake_get(url, **kwargs):
+            captured2["url"] = url
+            return FakeResp()
+
+        real = etsy_mod.httpx.get
+        etsy_mod.httpx.get = fake_get
+        try:
+            result2 = self.adapter.resolve_shop(
+                {}, {}, "1207010539.somesecretvalue")
+        finally:
+            etsy_mod.httpx.get = real
+        self.assertEqual(result2["shop_id"], 7)
+        self.assertIn("/users/1207010539/shops", captured2["url"])
+
+    def test_a_403_reports_missing_scope_rather_than_returning_empty(self):
+        """The old code swallowed this and the sync said "0 listings"."""
+        result, _ = self._call(
+            {"error": "Access token lacks scope for this request "
+                      "(requires scope: shops_r)."}, status=403)
+        self.assertIsNone(result.get("shop_id"))
+        self.assertIn("shops_r", result.get("error", ""))
+
+    def test_an_http_error_is_reported_not_raised(self):
+        import src.adapters.etsy as etsy_mod
+
+        def boom(url, **kwargs):
+            raise RuntimeError("network down")
+
+        real = etsy_mod.httpx.get
+        etsy_mod.httpx.get = boom
+        try:
+            result = self.adapter.resolve_shop({}, {"user_id": 1}, "")
+        finally:
+            etsy_mod.httpx.get = real
+        self.assertEqual(result, {})
+
+    def test_a_wrapped_results_payload_is_also_accepted(self):
+        result, _ = self._call(
+            {"results": [{"shop_id": 99, "shop_name": "Wrapped"}]})
+        self.assertEqual(result["shop_id"], 99)
+        self.assertEqual(result["shop_name"], "Wrapped")
+
+
+class EtsyScopeTest(unittest.TestCase):
+    def test_shops_r_is_requested(self):
+        """Without it the shop can never be resolved, so a sync reports 0."""
+        from urllib.parse import parse_qs, urlparse
+        from src.adapters import get_adapter
+
+        challenge = oauth_pkce.challenge_for(oauth_pkce.new_verifier())
+        url = get_adapter("etsy").get_authorization_url(
+            state="s", credentials={"api_key": "k"}, code_challenge=challenge)
+        scope = parse_qs(urlparse(url).query)["scope"][0]
+        self.assertIn("listings_r", scope)
+        self.assertIn("shops_r", scope)
+
+
+class SyncReportsFailureInsteadOfSilentZeroTest(unittest.TestCase):
+    def test_a_missing_shop_surfaces_as_an_error(self):
+        """`last_error` must reach the caller, so "0 listings" cannot mean both
+        "empty shop" and "could not find the shop"."""
+        from src.adapters import get_adapter
+
+        adapter = get_adapter("etsy")
+        adapter.last_error = "Could not determine your Etsy shop."
+        self.assertTrue(adapter.last_error)
 
 
 if __name__ == "__main__":
