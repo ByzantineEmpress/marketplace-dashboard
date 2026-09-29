@@ -24,6 +24,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     let loadedListings = {};
     let loadedTeams = [];
+    // Set true right after a drag-drop so the click that follows a mouse drag
+    // does not also open the listing modal.
+    let suppressCardClick = false;
 
     const grid = document.getElementById("listing-grid");
     const pageInfo = document.getElementById("page-info");
@@ -117,6 +120,10 @@ document.addEventListener("DOMContentLoaded", () => {
                         card.classList.add("listing-card--selected");
                     }
                     card.addEventListener("click", () => {
+                        if (suppressCardClick) {
+                            suppressCardClick = false;
+                            return;
+                        }
                         if (state.groupingMode) {
                             toggleGroupSelection(id, card);
                             return;
@@ -1653,29 +1660,156 @@ document.addEventListener("DOMContentLoaded", () => {
     if (groupCancelBtn) {
         groupCancelBtn.addEventListener("click", () => setGroupingMode(false));
     }
+
+    // Shared: group a set of listing ids, returning true on success. Used by the
+    // button flow and by drag-and-drop so the request logic lives in one place.
+    async function groupListingsByIds(ids) {
+        try {
+            const res = await fetch("/api/listings/group", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ listing_ids: ids }),
+            });
+            const data = await res.json();
+            if (!res.ok || !data.ok) {
+                throw new Error(data.error || "Grouping failed");
+            }
+            return true;
+        } catch (err) {
+            alert("Could not group listings: " + err.message);
+            return false;
+        }
+    }
+
     if (groupConfirmBtn) {
         groupConfirmBtn.addEventListener("click", async () => {
             const ids = [...state.selectedIds];
             if (ids.length < 2) return;
             groupConfirmBtn.disabled = true;
-            try {
-                const res = await fetch("/api/listings/group", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ listing_ids: ids }),
-                });
-                const data = await res.json();
-                if (!res.ok || !data.ok) {
-                    throw new Error(data.error || "Grouping failed");
-                }
+            const ok = await groupListingsByIds(ids);
+            groupConfirmBtn.disabled = false;
+            if (ok) {
                 setGroupingMode(false);
                 loadStats();
-            } catch (err) {
-                alert(`Could not group listings: ${err.message}`);
-                groupConfirmBtn.disabled = false;
             }
         });
     }
+
+    // Drag one listing card onto another to group them. Mouse drags start after a
+    // small movement; touch requires a 400ms hold first so a normal scroll swipe
+    // is not mistaken for a drag (touch-action: pan-y keeps vertical scroll).
+    function initDragToGroup(gridEl) {
+        let drag = null;
+
+        function reset() {
+            if (!drag) return;
+            if (drag.longPressTimer) clearTimeout(drag.longPressTimer);
+            if (drag.ghost && drag.ghost.parentNode) drag.ghost.parentNode.removeChild(drag.ghost);
+            if (drag.sourceCard) drag.sourceCard.classList.remove("listing-card--dragging");
+            if (drag.targetCard) drag.targetCard.classList.remove("listing-card--drop-target");
+            drag = null;
+        }
+
+        function cardAt(x, y) {
+            const el = document.elementFromPoint(x, y);
+            return el && el.closest ? el.closest(".listing-card") : null;
+        }
+
+        gridEl.addEventListener("pointerdown", function (e) {
+            if (state.groupingMode) return;              // button mode owns taps
+            if (e.pointerType === "mouse" && e.button !== 0) return;
+            const card = e.target.closest ? e.target.closest(".listing-card") : null;
+            if (!card) return;
+
+            drag = {
+                pointerId: e.pointerId,
+                sourceCard: card,
+                sourceId: Number(card.dataset.id),
+                startX: e.clientX,
+                startY: e.clientY,
+                armed: e.pointerType !== "touch",
+                dragging: false,
+                ghost: null,
+                targetCard: null,
+                longPressTimer: null,
+            };
+
+            if (e.pointerType === "touch") {
+                drag.longPressTimer = setTimeout(function () {
+                    if (drag) drag.armed = true;
+                }, 400);
+            }
+        });
+
+        function beginDrag(e) {
+            if (!drag) return;
+            drag.dragging = true;
+            drag.sourceCard.classList.add("listing-card--dragging");
+
+            const ghost = document.createElement("div");
+            ghost.className = "drag-ghost";
+            const titleEl = drag.sourceCard.querySelector(".card-title");
+            ghost.textContent = titleEl ? titleEl.textContent : "Listing";
+            document.body.appendChild(ghost);
+            drag.ghost = ghost;
+
+            try { drag.sourceCard.setPointerCapture(e.pointerId); } catch (err) {}
+        }
+
+        function moveGhost(e) {
+            if (drag && drag.ghost) {
+                drag.ghost.style.left = (e.clientX + 14) + "px";
+                drag.ghost.style.top = (e.clientY + 14) + "px";
+            }
+        }
+
+        gridEl.addEventListener("pointermove", function (e) {
+            if (!drag || e.pointerId !== drag.pointerId) return;
+            const dist = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY);
+
+            if (!drag.dragging) {
+                // A touch that moves before the hold elapses is a scroll, not a drag.
+                if (e.pointerType === "touch" && !drag.armed && dist > 12) {
+                    reset();
+                    return;
+                }
+                if (drag.armed && dist > 8) beginDrag(e);
+                if (!drag.dragging) return;
+            }
+
+            moveGhost(e);
+
+            const card = cardAt(e.clientX, e.clientY);
+            const target = card && card !== drag.sourceCard ? card : null;
+            if (target !== drag.targetCard) {
+                if (drag.targetCard) drag.targetCard.classList.remove("listing-card--drop-target");
+                drag.targetCard = target;
+                if (target) target.classList.add("listing-card--drop-target");
+            }
+        });
+
+        function finish(e) {
+            if (!drag || e.pointerId !== drag.pointerId) return;
+            const sourceId = drag.sourceId;
+            const targetId = drag.targetCard ? Number(drag.targetCard.dataset.id) : null;
+            const wasDragging = drag.dragging;
+            reset();
+            if (wasDragging && targetId && targetId !== sourceId) {
+                suppressCardClick = true;
+                groupListingsByIds([sourceId, targetId]).then(function (ok) {
+                    if (ok) {
+                        loadListings();
+                        loadStats();
+                    }
+                });
+            }
+        }
+
+        gridEl.addEventListener("pointerup", finish);
+        gridEl.addEventListener("pointercancel", reset);
+    }
+
+    initDragToGroup(grid);
 
     // Event: refresh button
     document.getElementById("refresh-btn").addEventListener("click", () => {

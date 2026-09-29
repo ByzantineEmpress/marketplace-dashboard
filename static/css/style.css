@@ -902,6 +902,38 @@ code {
     outline-offset: 2px;
 }
 
+/* Drag-to-group: cards are draggable; touch-action: pan-y lets a vertical swipe
+   scroll the page while a hold + horizontal drag is handed to pointer events. */
+.listing-card {
+    touch-action: pan-y;
+}
+
+.listing-card--dragging {
+    opacity: 0.45;
+}
+
+.listing-card--drop-target {
+    outline: 3px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.drag-ghost {
+    position: fixed;
+    z-index: 3000;
+    pointer-events: none;
+    max-width: 240px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--accent);
+    color: var(--text);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
 .card-select-check {
     position: absolute;
     top: 8px;
