@@ -54,6 +54,9 @@ class Config:
     EBAY_CLIENT_ID: str = ""
     EBAY_CLIENT_SECRET: str = ""
     EBAY_APP_ID: str = ""
+    # eBay "redirect URL name". Required for the authorize URL: eBay takes the
+    # RuName as redirect_uri and looks up the real callback URL from it.
+    EBAY_RUNAME: str = ""
     ETSY_API_KEY: str = ""
     ETSY_API_SECRET: str = ""
 

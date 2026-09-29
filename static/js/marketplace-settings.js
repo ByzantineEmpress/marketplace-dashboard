@@ -173,6 +173,24 @@
         connectBtn.addEventListener("click", function () {
             connectBtn.disabled = true;
             note.textContent = "Starting authorisation\u2026";
+
+            // Open the tab NOW, synchronously in the click handler. Browsers
+            // only allow window.open during a user gesture, and the URL is not
+            // known until the fetch below resolves. Opening a blank tab first
+            // keeps the popup unblocked; its location is set once we have the URL.
+            let authTab = null;
+            try {
+                authTab = window.open("", "_blank");
+            } catch (e) {
+                authTab = null;
+            }
+
+            function closeBlankTab() {
+                if (authTab && !authTab.closed && authTab.location.href === "about:blank") {
+                    try { authTab.close(); } catch (e) { /* ignore */ }
+                }
+            }
+
             fetch("/api/accounts/connect", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -185,17 +203,29 @@
                         note.textContent = "Could not start: "
                             + (data.error || "HTTP " + res.status);
                         connectBtn.disabled = false;
+                        closeBlankTab();
                         return;
                     }
-                    // Leave the button disabled: the page is navigating away, and
-                    // re-enabling it would allow a second concurrent flow whose
-                    // state cookie would overwrite this one.
-                    note.textContent = "Redirecting to " + info.label + "\u2026";
-                    window.location.assign(data.auth_url);
+                    if (authTab) {
+                        // Authorise in the new tab so this page keeps its place.
+                        authTab.location.href = data.auth_url;
+                        note.textContent = "Opened " + info.label
+                            + " in a new tab \u2014 finish there, then press Sync here.";
+                    } else {
+                        // Popup blocked: fall back to navigating this tab so the
+                        // user is never stuck.
+                        note.textContent = "Redirecting to " + info.label + "\u2026";
+                        window.location.assign(data.auth_url);
+                        return;
+                    }
+                    // Re-enable: we are staying on this page, so the user must be
+                    // able to retry. The state cookie is refreshed by each attempt.
+                    connectBtn.disabled = false;
                 })
                 .catch(function (err) {
                     note.textContent = "Could not start: " + err.message;
                     connectBtn.disabled = false;
+                    closeBlankTab();
                 });
         });
 

@@ -76,13 +76,12 @@ def _startup_warnings() -> list[str]:
         )
     # Marketplace OAuth callback URLs.
     #
-    # The adapters read these from the environment BEFORE falling back to
+    # Etsy reads ETSY_REDIRECT_URI from the environment BEFORE falling back to
     # APP_BASE_URL, so a localhost value left in a deployed .env silently
-    # overrides the public URL and the marketplace refuses the redirect with
-    # "The requested redirect URL is not permitted". Nothing else surfaces it:
-    # the error appears on the marketplace's own page, not in our logs, so this
-    # cost a debugging round trip in production.
-    for var, platform in (("EBAY_REDIRECT_URI", "eBay"), ("ETSY_REDIRECT_URI", "Etsy")):
+    # overrides the public URL and Etsy refuses the redirect with "The requested
+    # redirect URL is not permitted". Nothing else surfaces it: the error appears
+    # on the marketplace's own page, not in our logs.
+    for var, platform in (("ETSY_REDIRECT_URI", "Etsy"),):
         value = os.environ.get(var, "")
         if not value:
             continue  # unset is correct: it derives from APP_BASE_URL
@@ -98,6 +97,20 @@ def _startup_warnings() -> list[str]:
                 f"({config.APP_BASE_URL!r}). It takes precedence over "
                 f"APP_BASE_URL, and must match a callback registered in your "
                 f"{platform} app settings or the redirect is refused."
+            )
+
+    # eBay is different: its authorize URL takes the RuName, not a callback URL.
+    # Without one, Connect fails with eBay's opaque "temporarily_unavailable",
+    # so say plainly that it is missing.
+    if not (config.EBAY_RUNAME or os.environ.get("EBAY_RUNAME")):
+        if config.EBAY_CLIENT_ID or os.environ.get("EBAY_CLIENT_ID"):
+            # Only warn when eBay is actually configured; an instance that has
+            # never touched eBay should not be nagged about it.
+            problems.append(
+                "EBAY_RUNAME is not set. eBay OAuth needs the RuName (the "
+                "'redirect URL name' from your eBay app's User Tokens page); "
+                "without it Connect fails with eBay's 'temporarily_unavailable'. "
+                "Each user can also save their own on the My Accounts page."
             )
 
     if not config.MAIL_BACKEND:

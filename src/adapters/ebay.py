@@ -3,20 +3,26 @@
 Implements the MarketplaceAdapter ABC for eBay's modern REST APIs.
 
 Auth: OAuth 2.0 with the eBay Selling API.
+
+The authorize request needs the user's RuName (eBay "redirect URL name") as
+``redirect_uri`` -- NOT the callback URL. eBay validates the RuName and uses the
+"Auth Accepted URL" configured against it to send the user back. Passing a URL
+here makes eBay answer with a generic ``temporarily_unavailable`` 500.
+
 Endpoints used:
 - GET /sell/inventory/v1/inventory_item — list your inventory items
 - GET /sell/marketplace_listing/v1/marketplace_listing — list active listings
-- GET /sell/fulfillment/v1/order — list your orders (for sold items)
 
 References:
 - https://developer.ebay.com/api-docs/sell/inventory/resources/inventory_item/methods
 - https://developer.ebay.com/api-docs/sell/marketplace_listing/resources/marketplace_listing/methods
-- https://developer.ebay.com/api-docs/sell/fulfillment/resources/order/methods
+- https://edp.ebay.com/support/knowledge-base/5075  (Quick OAuth Guide)
 
 NOTE: This uses the eBay Selling API v2 (the current, supported API).
 The old v1 Selling API is deprecated.
 """
 
+import os
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -56,51 +62,94 @@ class eBayAdapter(MarketplaceAdapter):
         # Simple SVG-based eBay logo
         return '<svg viewBox="0 0 60 30" width="50" height="25"><text x="5" y="22" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#E53238">ebay</text></svg>'
 
+    def _ru_name(self, credentials: dict) -> str:
+        """The eBay RuName ("redirect URL name") for this user's app.
+
+        eBay does NOT accept the callback URL as ``redirect_uri``. Its OAuth
+        authorize endpoint requires the RuName, and the callback URL is instead
+        configured *inside* the RuName in the eBay developer portal as the
+        "Auth Accepted URL". Passing the URL produces a generic
+        ``temporarily_unavailable`` 500 from eBay, which is what this used to do.
+
+        Reference (eBay KB, Quick OAuth Guide):
+            redirectUri - OAuth Enabled RuName for the clientId
+            redirectUrl - Auth Accepted URL associated with the redirectUri
+        """
+        return (
+            _cred(credentials, "ru_name")
+            or config.EBAY_RUNAME
+            or os.environ.get("EBAY_RUNAME")
+            or ""
+        ).strip()
+
     def get_authorization_url(self, state: str = "", credentials: dict = None) -> str:
         """Build the eBay OAuth 2.0 authorisation URL.
 
-        The user visits this URL, logs in, and grants permissions.
-        After authorisation, eBay redirects to your callback with a code.
-
-        ``credentials`` carries this user's own client ID. It takes precedence
-        over the instance-wide settings, which remain the fallback so a
-        deployment configured through .env keeps working.
+        ``credentials`` carries this user's own client ID and RuName. Both the
+        client id and the RuName come from the user's own eBay application, so
+        one seller's connection is never authorised against another's app.
         """
-        import os
-        redirect_uri = os.environ.get("EBAY_REDIRECT_URI") or f"{config.APP_BASE_URL}/api/auth/ebay/callback"
-        client_id = _cred(credentials, "client_id") or config.EBAY_CLIENT_ID or os.environ.get("EBAY_CLIENT_ID") or os.environ.get("EBUY_CLIENT_ID") or ""
+        from urllib.parse import urlencode
 
-        # Required scopes for the Selling API v2
+        client_id = _cred(credentials, "client_id") or config.EBAY_CLIENT_ID or os.environ.get("EBAY_CLIENT_ID") or os.environ.get("EBUY_CLIENT_ID") or ""
+        ru_name = self._ru_name(credentials)
+
+        if not ru_name:
+            # Caught before the user is sent to eBay, because eBay's own error
+            # for this ("temporarily_unavailable") gives no hint about the cause.
+            raise ValueError(
+                "eBay needs your RuName (the 'redirect URL name' from your eBay "
+                "app's User Tokens page). Save it, then press Connect."
+            )
+
+        # eBay scope URNs. The previous values
+        # (".../auth/oauth/sell_inventory_readonly") were not real scopes and
+        # eBay rejected the whole request. Correct form is
+        # "https://api.ebay.com/oauth/api_scope/<name>".
+        #
+        # Only what this adapter actually calls is requested: the Inventory API
+        # and the Marketplace Listing API, both covered by sell.inventory.readonly.
         scopes = [
-            "https://api.ebay.com/auth/oauth/sell_inventory_readonly",
-            "https://api.ebay.com/auth/oauth/sell_listing_readonly",
-            "https://api.ebay.com/auth/oauth/sell_fulfillment_readonly",
-            "https://api.ebay.com/auth/oauth/sell_analytics_readonly",
+            "https://api.ebay.com/oauth/api_scope",
+            "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
         ]
 
         params = {
             "client_id": client_id,
-            "redirect_uri": redirect_uri,
+            # The RuName, NOT the callback URL.
+            "redirect_uri": ru_name,
             "response_type": "code",
-            "scope": "+".join(scopes),
+            # eBay wants the scope list space-separated, then URL-encoded.
+            # urlencode renders the spaces as "+", which is that encoding.
+            "scope": " ".join(scopes),
             "state": state,
         }
 
-        query = "&".join(f"{k}={v}" for k, v in params.items() if v)
-        return f"{EBAY_AUTH_URL}?{query}"
+        return f"{EBAY_AUTH_URL}?{urlencode(params)}"
 
     def handle_callback(self, code: str, state: str = "", credentials: dict = None,
-                        user_id=None) -> Dict[str, Any]:
+                        user_id=None, code_verifier: str = None,
+                        seller_id: str = None) -> Dict[str, Any]:
         """Exchange an authorisation code for access and refresh tokens.
 
-        POSTs to eBay's OAuth token endpoint and stores the tokens.
+        POSTs to eBay's OAuth token endpoint and stores the tokens. The token
+        request must repeat the same ``redirect_uri`` used to authorise, which
+        for eBay is the RuName.
+
+        ``code_verifier`` and ``seller_id`` are accepted and ignored: the shared
+        callback route passes them for every platform, and eBay uses neither
+        (it is a confidential client with a client secret, not PKCE).
         """
         import base64
-        import os
 
-        redirect_uri = os.environ.get("EBAY_REDIRECT_URI") or f"{config.APP_BASE_URL}/api/auth/ebay/callback"
+        ru_name = self._ru_name(credentials)
         client_id = _cred(credentials, "client_id") or config.EBAY_CLIENT_ID or os.environ.get("EBAY_CLIENT_ID") or os.environ.get("EBUY_CLIENT_ID") or ""
         client_secret = _cred(credentials, "client_secret") or config.EBAY_CLIENT_SECRET or os.environ.get("EBAY_CLIENT_SECRET") or os.environ.get("EBUY_CLIENT_SECRET") or ""
+
+        if not ru_name:
+            return {"success": False,
+                    "error": "eBay RuName is not saved, so the token exchange "
+                             "cannot verify the redirect. Save it and reconnect."}
 
         # eBay expects Basic Auth with client_id:client_secret.
         # Named basic_auth, not "credentials": that name is the parameter, and
@@ -114,7 +163,7 @@ class eBayAdapter(MarketplaceAdapter):
                 data={
                     "grant_type": "authorization_code",
                     "code": code,
-                    "redirect_uri": redirect_uri,
+                    "redirect_uri": ru_name,
                 },
                 headers={
                     "Authorization": f"Basic {auth_header}",

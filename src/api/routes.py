@@ -2053,6 +2053,10 @@ PLATFORM_CREDENTIALS = {
     "ebay": [
         ("client_id", "Client ID (App ID)"),
         ("client_secret", "Client Secret (Cert ID)"),
+        # eBay's authorize URL takes the RuName ("redirect URL name") from the
+        # app's User Tokens page, not the callback URL. Without it eBay answers
+        # with a generic "temporarily_unavailable" error.
+        ("ru_name", "RuName (redirect URL name)"),
     ],
     "etsy": [
         ("api_key", "Keystring"),

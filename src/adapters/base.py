@@ -115,6 +115,8 @@ class MarketplaceAdapter(ABC):
     CONFIG_FALLBACK = {
         ("ebay", "client_id"): "EBAY_CLIENT_ID",
         ("ebay", "client_secret"): "EBAY_CLIENT_SECRET",
+        # eBay's authorize URL takes the RuName, not the callback URL.
+        ("ebay", "ru_name"): "EBAY_RUNAME",
         ("etsy", "api_key"): "ETSY_API_KEY",
         ("etsy", "api_secret"): "ETSY_API_SECRET",
         ("poshmark", "username"): "POSHMARK_USERNAME",
