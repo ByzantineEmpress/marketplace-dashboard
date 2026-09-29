@@ -74,6 +74,32 @@ def _startup_warnings() -> list[str]:
             f"while REQUIRE_HTTPS is on — the production origin will be blocked "
             f"by CORS."
         )
+    # Marketplace OAuth callback URLs.
+    #
+    # The adapters read these from the environment BEFORE falling back to
+    # APP_BASE_URL, so a localhost value left in a deployed .env silently
+    # overrides the public URL and the marketplace refuses the redirect with
+    # "The requested redirect URL is not permitted". Nothing else surfaces it:
+    # the error appears on the marketplace's own page, not in our logs, so this
+    # cost a debugging round trip in production.
+    for var, platform in (("EBAY_REDIRECT_URI", "eBay"), ("ETSY_REDIRECT_URI", "Etsy")):
+        value = os.environ.get(var, "")
+        if not value:
+            continue  # unset is correct: it derives from APP_BASE_URL
+        if config.REQUIRE_HTTPS and "localhost" in value:
+            problems.append(
+                f"{var} points at localhost ({value!r}) while REQUIRE_HTTPS is on. "
+                f"{platform} will reject the redirect. Unset it to derive the "
+                f"callback from APP_BASE_URL, or set the public URL."
+            )
+        elif config.APP_BASE_URL and not value.startswith(config.APP_BASE_URL.rstrip("/")):
+            problems.append(
+                f"{var} ({value!r}) does not start with APP_BASE_URL "
+                f"({config.APP_BASE_URL!r}). It takes precedence over "
+                f"APP_BASE_URL, and must match a callback registered in your "
+                f"{platform} app settings or the redirect is refused."
+            )
+
     if not config.MAIL_BACKEND:
         problems.append(
             "Outbound email is not configured — email+password signup cannot "
