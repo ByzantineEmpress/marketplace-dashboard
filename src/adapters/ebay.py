@@ -145,6 +145,26 @@ class eBayAdapter(MarketplaceAdapter):
 
         return f"{EBAY_AUTH_URL}?{urlencode(params)}"
 
+    def _fetch_identity(self, access_token: str) -> dict:
+        """The eBay user behind a token: username, immutable userId, and the
+        marketplace they are registered on.
+
+        ``commerce.identity.readonly`` scope. Base is apiz.ebay.com (not
+        api.ebay.com) — eBay splits its APIs across two hosts. Returns {} on any
+        failure so a connect still succeeds without it.
+        """
+        try:
+            resp = httpx.get(
+                "https://apiz.ebay.com/commerce/identity/v1/user/",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+        return {}
+
     def handle_callback(self, code: str, state: str = "", credentials: dict = None,
                         user_id=None, code_verifier: str = None,
                         seller_id: str = None) -> Dict[str, Any]:
@@ -192,18 +212,30 @@ class eBayAdapter(MarketplaceAdapter):
             resp.raise_for_status()
             token_data = resp.json()
 
-            # Store the tokens
+            # Store the tokens, then record the eBay user's identity so an eBay
+            # account-deletion notification can be matched back to this row.
             db = SessionLocal()
             try:
-                self.store_tokens(
+                account = self.store_tokens(
                     db,
                     access_token=token_data["access_token"],
                     refresh_token=token_data.get("refresh_token", ""),
                     token_expires_in=token_data.get("expires_in", 7200),
                     extra_data=token_data,
-            user_id=user_id,
+                    user_id=user_id,
                 )
-                return {"success": True, "token_data": token_data}
+
+                identity = self._fetch_identity(token_data["access_token"])
+                if identity:
+                    account.shop_name = identity.get("username") or account.shop_name
+                    account.shop_id = identity.get("userId") or account.shop_id
+                    merged = dict(account.token_data or {})
+                    merged["registration_marketplace_id"] = identity.get(
+                        "registrationMarketplaceId") or ""
+                    account.token_data = merged
+                    db.commit()
+
+                return {"success": True, "token_data": token_data, "identity": identity}
             finally:
                 db.close()
 
@@ -264,17 +296,16 @@ class eBayAdapter(MarketplaceAdapter):
 
     def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None,
                       user_id=None, credentials: dict = None) -> List[Dict[str, Any]]:
-        """Fetch active eBay listings via the Selling API v2.
+        """Fetch the seller's active eBay listings.
 
-        Uses:
-        - Inventory API to get all inventory items
-        - Marketplace Listing API for listing details
+        eBay has no simple REST endpoint that returns every active listing for a
+        seller, so this uses the Sell Feed API's Active Inventory Report (async:
+        create a task, poll, download a zipped XML). It returns ItemID, price,
+        currency and quantity for listings created any way — including Seller Hub
+        listings, which the Inventory API does not see.
 
-        Both are scoped by the seller's own access token, so unlike Etsy's
-        public feed they can only ever return this seller's data. The thing to
-        get right here is the marketplace: an item on EBAY_CA will not be found
-        by querying EBAY_US, and hardcoding EBAY_US silently drops every
-        non-US listing.
+        Titles and photos are NOT in that report, so each row gets a generated
+        title and a deep link; they can be renamed/annotated in the dashboard.
         """
         close_db = False
         if db is None:
@@ -291,9 +322,14 @@ class eBayAdapter(MarketplaceAdapter):
                 "Content-Type": "application/json",
             }
 
-            # Collect inventory items first. Each is tagged with the marketplace
-            # it was found in so listing details are fetched from that same
-            # marketplace, not a hardcoded EBAY_US.
+            # The report is the one source that sees every listing. The inventory
+            # path is retained as a fallback for accounts managed via the
+            # Inventory API, but it is empty for typical Seller Hub sellers.
+            marketplace = (token.get("registration_marketplace_id") or "").strip() or "EBAY_US"
+            listings = self._fetch_active_inventory_report(headers, max_results, marketplace)
+            if listings:
+                return listings
+
             inventory_items = self._fetch_inventory_items(headers, max_results)
             if not inventory_items:
                 return []
@@ -303,7 +339,6 @@ class eBayAdapter(MarketplaceAdapter):
                 listing = self._get_listing_details(item, headers, marketplace)
                 if listing:
                     all_listings.append(listing)
-
                 if len(all_listings) >= max_results:
                     break
 
@@ -311,6 +346,139 @@ class eBayAdapter(MarketplaceAdapter):
         finally:
             if close_db:
                 db.close()
+
+    def _fetch_active_inventory_report(self, headers: dict, limit: int,
+                                       marketplace: str) -> List[dict]:
+        """Download eBay's Active Inventory Report and normalise it.
+
+        Flow: create one inventory task (feedType=LMS_ACTIVE_INVENTORY_REPORT),
+        poll until COMPLETED, download the result (a ZIP containing XML), and
+        parse each <SKUDetails> into a listing-shaped dict.
+
+        One task for the seller's registration marketplace is enough: the report
+        covers the seller's listings regardless of how they were created, unlike
+        the Inventory API.
+        """
+        import io
+        import re
+        import time
+        import xml.etree.ElementTree as ET
+        import zipfile
+
+        base = f"{EBAY_API_BASE}/sell/feed/v1"
+
+        try:
+            create = httpx.post(
+                f"{base}/inventory_task",
+                headers=headers,
+                json={
+                    "schemaVersion": "1.0",
+                    "feedType": "LMS_ACTIVE_INVENTORY_REPORT",
+                    "marketplaceId": marketplace,
+                },
+                timeout=30,
+            )
+            if create.status_code not in (200, 201, 202):
+                self.last_error = f"eBay report task HTTP {create.status_code}"
+                return []
+
+            location = create.headers.get("location", "")
+            match = re.search(r"task/([^?]+)", location)
+            if not match:
+                self.last_error = "eBay report task returned no task id"
+                return []
+            task_id = match.group(1)
+
+            status = ""
+            for _ in range(15):
+                time.sleep(2)
+                check = httpx.get(f"{base}/inventory_task/{task_id}",
+                                  headers=headers, timeout=30)
+                status = (check.json() or {}).get("status", "") if check.status_code == 200 else ""
+                if status == "COMPLETED":
+                    break
+            if status != "COMPLETED":
+                self.last_error = (
+                    f"eBay report task did not complete (status={status or 'unknown'})")
+                return []
+
+            dl = httpx.get(f"{base}/task/{task_id}/download_result_file",
+                           headers=headers, timeout=60)
+            if dl.status_code != 200:
+                self.last_error = f"eBay report download HTTP {dl.status_code}"
+                return []
+
+            rows = self._parse_active_inventory_report(dl.content)
+            return rows[:limit]
+        except Exception as exc:
+            self.last_error = f"eBay inventory report failed: {exc}"
+            return []
+
+    def _parse_active_inventory_report(self, data: bytes) -> List[dict]:
+        """Parse a zipped ActiveInventoryReport XML into listing-shaped dicts.
+
+        The report gives only ItemID, price, currency and quantity — no title or
+        image — so the title is generated and the image left empty.
+        """
+        import io
+        import xml.etree.ElementTree as ET
+        import zipfile
+
+        items = []
+        try:
+            z = zipfile.ZipFile(io.BytesIO(data))
+            xml_bytes = z.read(z.namelist()[0])
+            root = ET.fromstring(xml_bytes)
+        except Exception:
+            return []
+
+        for sku in root.iter():
+            if sku.tag.rsplit("}", 1)[-1] != "SKUDetails":
+                continue
+
+            item_id, price_cents, currency, qty = "", 0, "CAD", 0
+            for child in sku:
+                tag = child.tag.rsplit("}", 1)[-1]
+                text = (child.text or "").strip()
+                if tag == "ItemID":
+                    item_id = text
+                elif tag == "Price":
+                    currency = child.attrib.get("currencyID", "CAD")
+                    try:
+                        price_cents = int(round(float(text) * 100))
+                    except ValueError:
+                        price_cents = 0
+                elif tag == "Quantity":
+                    try:
+                        qty = int(text)
+                    except ValueError:
+                        qty = 0
+
+            if not item_id:
+                continue
+
+            items.append({
+                "platform_listing_id": item_id,
+                # The report has no title, so it is generated. The dashboard can
+                # rename it; the deep link below is how to find the real listing.
+                "title": f"eBay listing {item_id}",
+                "description": "",
+                "price_cents": price_cents,
+                "price_raw": f"{currency} {price_cents / 100:.2f}",
+                "currency": currency,
+                "status": "active",
+                "is_sold": False,
+                "image_url": "",
+                "images_json": [],
+                "available_quantity": qty,
+                "views_count": 0,
+                "original_url": f"https://www.ebay.com/itm/{item_id}",
+                "sku": "",
+                "category": "",
+                "platform": self.PLATFORM,
+            })
+
+        return items
 
     def _fetch_inventory_items(self, headers: dict, limit: int) -> List[tuple]:
         """Fetch inventory items from eBay's Inventory API.

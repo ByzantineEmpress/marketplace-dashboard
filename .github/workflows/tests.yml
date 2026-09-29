@@ -90,6 +90,7 @@ jobs:
             tests/test_data_deletion.py
             tests/test_api_client.py
             tests/test_ebay_deletion.py
+            tests/test_ebay_report.py
             tests/test_ebay_oauth.py
             tests/test_email_verification.py
             tests/test_google_callback.py
