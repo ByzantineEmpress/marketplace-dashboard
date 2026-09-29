@@ -543,5 +543,96 @@ class RealisedProfitBasisTest(unittest.TestCase):
         self.assertEqual(chart_profit, data["sold_profit_cents"])
 
 
+class EtsyReceiptTest(unittest.TestCase):
+    """Etsy sold data comes from receipts, and its fees from the payment ledger.
+
+    A receipt carries the sale but no fees at all; the ledger has the fees and
+    points at the receipt. Figures below are a real receipt.
+    """
+
+    RECEIPT = {
+        "receipt_id": 4172298896,
+        "status": "Completed",
+        "created_timestamp": 1789184386,
+        "grandtotal": {"amount": 41027, "divisor": 100, "currency_code": "CAD"},
+        "total_shipping_cost": {"amount": 10297, "divisor": 100, "currency_code": "CAD"},
+        "transactions": [
+            {"transaction_id": 5213754614, "listing_id": 4568130719, "quantity": 1,
+             "price": {"amount": 27000, "divisor": 100},
+             "title": "Refurbished Modded Original Xbox Console"},
+        ],
+    }
+
+    def setUp(self):
+        self.adapter = get_adapter("etsy")
+
+    def test_a_receipt_becomes_a_sale(self):
+        sale = self.adapter._sales_from_receipt(self.RECEIPT, {})[0]
+        self.assertEqual(sale["platform_listing_id"], "4568130719")
+        self.assertEqual(sale["price_cents"], 27000)
+        self.assertEqual(sale["shipping_charged_cents"], 10297)
+        self.assertEqual(sale["currency"], "CAD")
+        self.assertEqual(sale["sold_at"].isoformat(), "2026-09-12T03:39:46")
+
+    def test_ledger_fees_reduce_the_payout(self):
+        """Etsy reports gross and its charges separately and has no payout field,
+        so net is derived. Without this a 410.27 receipt would count as 410.27 of
+        revenue with the 65.90 of charges ignored."""
+        sale = self.adapter._sales_from_receipt(self.RECEIPT, {4172298896: 6590})[0]
+        self.assertEqual(sale["fees_cents"], 6590)
+        self.assertEqual(sale["net_payout_cents"], 41027 - 6590)
+
+    def test_no_ledger_fees_means_gross_is_the_payout(self):
+        sale = self.adapter._sales_from_receipt(self.RECEIPT, {})[0]
+        self.assertEqual(sale["fees_cents"], 0)
+        self.assertEqual(sale["net_payout_cents"], 41027)
+
+    def test_a_multi_item_receipt_splits_money_exactly(self):
+        receipt = dict(self.RECEIPT, transactions=[
+            dict(self.RECEIPT["transactions"][0], listing_id=111,
+                 price={"amount": 10000, "divisor": 100}),
+            dict(self.RECEIPT["transactions"][0], listing_id=222,
+                 price={"amount": 30000, "divisor": 100}),
+        ])
+        sales = self.adapter._sales_from_receipt(receipt, {4172298896: 6590})
+        self.assertEqual(len(sales), 2)
+        self.assertEqual(sum(s["fees_cents"] for s in sales), 6590)
+        self.assertEqual(sum(s["net_payout_cents"] for s in sales), 41027 - 6590)
+        self.assertEqual(sum(s["shipping_charged_cents"] for s in sales), 10297)
+
+    def test_a_receipt_with_no_lines_is_skipped(self):
+        receipt = dict(self.RECEIPT, transactions=[])
+        self.assertEqual(self.adapter._sales_from_receipt(receipt, {}), [])
+
+    def test_a_cancelled_receipt_is_not_a_sale(self):
+        """Cancelled orders never completed, so they must not become revenue."""
+        import src.adapters.etsy as etsy_mod
+
+        payload = {"results": [
+            dict(self.RECEIPT, receipt_id=1),
+            dict(self.RECEIPT, receipt_id=2, status="Canceled"),
+        ]}
+
+        class Resp:
+            status_code = 200
+            def json(self):
+                return payload
+
+        real = etsy_mod.httpx.get
+        etsy_mod.httpx.get = lambda *a, **kw: Resp()
+        try:
+            receipts = self.adapter._fetch_receipts({}, 1, cutoff=0)
+        finally:
+            etsy_mod.httpx.get = real
+        self.assertEqual([r["receipt_id"] for r in receipts], [1])
+
+    def test_etsy_implements_its_own_sales_sync(self):
+        """It used to inherit the base no-op, which is why Etsy solds never
+        appeared even though the scope was granted."""
+        from src.adapters.base import MarketplaceAdapter
+
+        self.assertIsNot(type(self.adapter).sync_sales, MarketplaceAdapter.sync_sales)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

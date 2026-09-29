@@ -371,6 +371,223 @@ class EtsyAdapter(MarketplaceAdapter):
             if close_db:
                 db.close()
 
+    # -- Sales (receipts) --
+
+    def sync_sales(self, db, user_id=None, credentials: dict = None,
+                   days: int = 90) -> Dict[str, Any]:
+        """Pull Etsy receipts (completed orders) and record them as sales.
+
+        Receipts are Etsy's equivalent of eBay orders, and like eBay's listing
+        endpoints every listing call reads ACTIVE listings only — so a sale is
+        invisible until it is read from here.
+
+        Fees come from the payment ledger: a receipt's own fee entries reference
+        it, and Etsy's transaction fee references the receipt's transaction.
+        """
+        import os as _os
+        import time as _time
+
+        if not credentials:
+            credentials = {}
+
+        token = self.get_token(db, user_id=user_id, credentials=credentials)
+        if not token:
+            return {"supported": True, "success": False, "fetched": 0,
+                    "recorded": 0, "created": 0,
+                    "error": "No valid access token — connect the account first"}
+
+        api_key = _cred(credentials, "api_key") or config.ETSY_API_KEY or _os.environ.get("ETSY_API_KEY") or _os.environ.get("ESY_API_KEY") or ""
+        api_secret = _cred(credentials, "api_secret") or config.ETSY_API_SECRET or _os.environ.get("ETSY_API_SECRET") or _os.environ.get("ESY_API_SECRET") or ""
+        headers = {
+            "Authorization": f"Bearer {token['access_token']}",
+            # Etsy requires the credential pair here: "<keystring>:<shared_secret>".
+            "x-api-key": f"{api_key}:{api_secret}",
+        }
+
+        shop_id = token.get("shop_id") or (token.get("token_data", {}) or {}).get("shop_id")
+        if not shop_id:
+            resolved = self.resolve_shop(
+                headers, token.get("token_data", {}) or {}, token.get("access_token", "")
+            )
+            shop_id = resolved.get("shop_id")
+        if not shop_id:
+            return {"supported": True, "success": False, "fetched": 0,
+                    "recorded": 0, "created": 0,
+                    "error": "Could not determine your Etsy shop. Reconnect the account."}
+
+        cutoff = int(_time.time()) - max(1, min(int(days), 90)) * 86400
+
+        try:
+            receipts = self._fetch_receipts(headers, shop_id, cutoff)
+        except Exception as exc:
+            return {"supported": True, "success": False, "fetched": 0,
+                    "recorded": 0, "created": 0, "error": f"Etsy receipts failed: {exc}"}
+
+        if not receipts:
+            return {"supported": True, "success": True, "fetched": 0,
+                    "recorded": 0, "created": 0}
+
+        try:
+            fees_by_receipt = self._fetch_receipt_fees(headers, shop_id, days)
+        except Exception:
+            fees_by_receipt = {}
+
+        sales = []
+        for receipt in receipts:
+            sales.extend(self._sales_from_receipt(receipt, fees_by_receipt))
+
+        applied = self.record_sales(db, sales, owner_user_id=user_id)
+        return {"supported": True, "success": True, "fetched": len(sales),
+                "recorded": applied["recorded"], "created": applied["created"]}
+
+    def _fetch_receipts(self, headers: dict, shop_id, cutoff: int) -> list:
+        """Completed receipts newer than the cutoff.
+
+        Etsy caps a ledger window at 31 days and pages by offset; receipts are
+        paged the same way and filtered on their own timestamp, because the
+        receipt endpoint's date filter is unreliable across shop types.
+        """
+        receipts = []
+        offset = 0
+        page_size = 100
+        while offset < 1000:
+            resp = httpx.get(
+                f"{ETSY_API_BASE}/application/shops/{shop_id}/receipts",
+                headers=headers,
+                params={"limit": page_size, "offset": offset, "was_paid": "true"},
+                timeout=60,
+            )
+            if resp.status_code != 200:
+                if not receipts:
+                    raise RuntimeError(f"HTTP {resp.status_code}")
+                break
+            batch = (resp.json() or {}).get("results") or []
+            for receipt in batch:
+                created = receipt.get("created_timestamp") or 0
+                if created and created < cutoff:
+                    continue
+                status = (receipt.get("status") or "").lower()
+                # Canceled orders are not sales; refunded ones still are, and the
+                # refund is a separate ledger movement.
+                if status in ("canceled", "cancelled"):
+                    continue
+                receipts.append(receipt)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+        return receipts
+
+    def _fetch_receipt_fees(self, headers: dict, shop_id, days: int) -> dict:
+        """Etsy's own charges, per receipt, from the payment ledger.
+
+        Etsy does not put fees on the receipt. The ledger does, and a fee entry
+        points at its receipt either directly (reference_type "receipt") or
+        through the receipt's transaction (reference_type "transaction"), so both
+        keys are used.
+
+        The ledger refuses a window wider than 31 days, so it is walked a month at
+        a time.
+        """
+        import time as _time
+
+        fees: Dict[int, int] = {}
+        now = int(_time.time())
+        window = 30 * 86400
+        newest = now
+
+        # Newest first, so a shop with a long history still gets its recent fees
+        # before the page cap is reached.
+        while newest > now - max(1, min(int(days), 900)) * 86400:
+            oldest = max(newest - window, now - max(1, min(int(days), 900)) * 86400)
+            offset = 0
+            while offset < 1000:
+                resp = httpx.get(
+                    f"{ETSY_API_BASE}/application/shops/{shop_id}/payment-account/ledger-entries",
+                    headers=headers,
+                    params={"min_created": oldest, "max_created": newest,
+                            "limit": 100, "offset": offset},
+                    timeout=60,
+                )
+                if resp.status_code != 200:
+                    break
+                batch = (resp.json() or {}).get("results") or []
+                for entry in batch:
+                    amount = int(entry.get("amount") or 0)
+                    # Only money OUT is a cost; PAYMENT_GROSS is the buyer's money.
+                    if amount >= 0:
+                        continue
+                    ref_type = (entry.get("reference_type") or "").lower()
+                    ref_id = entry.get("reference_id")
+                    if ref_type == "receipt" and ref_id:
+                        fees[int(ref_id)] = fees.get(int(ref_id), 0) + abs(amount)
+                if len(batch) < 100:
+                    break
+                offset += 100
+            newest = oldest
+
+        return fees
+
+    def _sales_from_receipt(self, receipt: dict, fees_by_receipt: dict) -> List[dict]:
+        """One entry per receipt line item, shaped for record_sales().
+
+        ``grandtotal`` is what the buyer actually paid, which is the honest
+        revenue figure: it already includes the shipping they were charged and the
+        tax Etsy remits on the seller's behalf.
+        """
+        from datetime import datetime
+
+        receipt_id = receipt.get("receipt_id")
+        created = receipt.get("created_timestamp") or 0
+        sold_at = datetime.utcfromtimestamp(created) if created else None
+        currency = ((receipt.get("grandtotal") or {}).get("currency_code")) or "CAD"
+        # Fees are recorded per receipt, so they are split across its items.
+        fees_cents = int(fees_by_receipt.get(int(receipt_id) if receipt_id else 0, 0))
+        # Etsy reports the gross the buyer paid and its charges separately, with no
+        # single payout field. Net is gross minus those charges, which is the same
+        # quantity eBay hands over directly — and it is what makes the profit real,
+        # because tax Etsy remits is charged out again here.
+        gross_cents = int((receipt.get("grandtotal") or {}).get("amount") or 0)
+        payout_cents = max(0, gross_cents - fees_cents)
+
+        lines = [t for t in (receipt.get("transactions") or []) if t.get("listing_id")]
+        if not lines:
+            return []
+
+        totals = [int((t.get("price") or {}).get("amount") or 0) * int(t.get("quantity") or 1)
+                  for t in lines]
+        basis = sum(totals) or 1
+
+        shipping_total = int((receipt.get("total_shipping_cost") or {}).get("amount") or 0)
+
+        sales = []
+        fee_left, ship_left, payout_left = fees_cents, shipping_total, payout_cents
+        for index, (line, line_total) in enumerate(zip(lines, totals)):
+            last = index == len(lines) - 1
+            if last:
+                fee, ship, payout = fee_left, ship_left, payout_left
+            else:
+                share = line_total / basis
+                fee = int(round(fees_cents * share))
+                ship = int(round(shipping_total * share))
+                payout = int(round(payout_cents * share))
+                fee_left -= fee
+                ship_left -= ship
+                payout_left -= payout
+
+            sales.append({
+                "platform_listing_id": str(line.get("listing_id")),
+                "title": line.get("title") or "",
+                "price_cents": line_total,
+                "currency": currency,
+                "sold_at": sold_at,
+                "quantity": int(line.get("quantity") or 1),
+                "order_id": str(receipt_id) if receipt_id else None,
+                "fees_cents": max(0, fee),
+                "shipping_charged_cents": max(0, ship),
+                "net_payout_cents": max(0, payout),
+            })
+        return sales
+
     def _normalise_results(self, results: list, limit: int = 0) -> List[dict]:
         """Map raw Etsy objects onto the Listing schema, dropping bad ones.
 
