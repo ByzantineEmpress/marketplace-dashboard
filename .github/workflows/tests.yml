@@ -94,6 +94,7 @@ jobs:
             tests/test_marketplace_accounts.py
             tests/test_marketplace_oauth.py
             tests/test_multitenancy.py
+            tests/test_other_marketplaces.py
             tests/test_rate_limiting.py
             tests/test_security_audit.py
             tests/test_static_analysis.py

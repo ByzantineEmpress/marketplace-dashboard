@@ -68,7 +68,7 @@ class PoshmarkAdapter(MarketplaceAdapter):
 
     def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None,
                       user_id=None, credentials: dict = None) -> List[Dict[str, Any]]:
-        """Fetch active listings from Poshmark closet."""
+        """Fetch active listings from the connected Poshmark closet."""
         should_close = False
         if db is None:
             db = SessionLocal()
@@ -78,66 +78,55 @@ class PoshmarkAdapter(MarketplaceAdapter):
             account = self._find_account(db, user_id)
             username = _cred(credentials, "username") or config.POSHMARK_USERNAME or (account.shop_name if account else "")
 
-            # If username is configured, attempt public closet fetch or fall back to cached/demo items
-            results = []
-            if username:
-                try:
-                    url = f"https://poshmark.com/vm-rest/users/{username}/posts"
-                    headers = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                        "Accept": "application/json",
-                    }
-                    with httpx.Client(timeout=10) as client:
-                        resp = client.get(url, headers=headers)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            for item in data.get("data", [])[:max_results]:
-                                price_val = float(item.get("price", 0) or 0)
-                                price_cents = int(price_val * 100)
-                                is_sold = item.get("inventory", {}).get("status") == "sold_out"
-                                results.append({
-                                    "platform": self.PLATFORM,
-                                    "platform_listing_id": str(item.get("id")),
-                                    "title": item.get("title") or "Poshmark Item",
-                                    "description": item.get("description", ""),
-                                    "price_cents": price_cents,
-                                    "price_raw": f"USD {price_val:.2f}",
-                                    "currency": "USD",
-                                    "status": "sold" if is_sold else "active",
-                                    "is_sold": is_sold,
-                                    "available_quantity": 0 if is_sold else 1,
-                                    "views_count": item.get("views_count", 0),
-                                    "image_url": (item.get("pictures") or [{}])[0].get("url") or "",
-                                    "images": [p.get("url") for p in item.get("pictures", []) if p.get("url")],
-                                    "original_url": f"https://poshmark.com/listing/{item.get('id')}",
-                                    "category": item.get("category", {}).get("name") if isinstance(item.get("category"), dict) else str(item.get("category") or ""),
-                                    "sku": item.get("sku") or "",
-                                })
-                except Exception:
-                    pass
+            if not username:
+                self.last_error = (
+                    "No Poshmark closet is configured. Save your closet "
+                    "username, then try again."
+                )
+                return []
 
-            # Provide default/sample items if closet is empty or connecting for the first time
-            if not results and (account and account.is_connected or _cred(credentials, "username") or config.POSHMARK_USERNAME):
-                results = [
-                    {
-                        "platform": self.PLATFORM,
-                        "platform_listing_id": "POSH-DEMO-001",
-                        "title": "Vintage Wool Trench Coat - Camel Size M",
-                        "description": "Gorgeous authentic vintage wool trench coat in camel brown. Fits true to size M.",
-                        "price_cents": 8500,
-                        "price_raw": "USD 85.00",
-                        "currency": "USD",
-                        "status": "active",
-                        "is_sold": False,
-                        "available_quantity": 1,
-                        "views_count": 42,
-                        "image_url": "/static/img/placeholder.svg",
-                        "images": ["/static/img/placeholder.svg"],
-                        "original_url": f"https://poshmark.com/closet/{username or 'closet'}",
-                        "category": "Jackets & Coats",
-                        "sku": "POSH-COAT-M",
-                    }
-                ]
+            results = []
+            try:
+                url = f"https://poshmark.com/vm-rest/users/{username}/posts"
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "application/json",
+                }
+                with httpx.Client(timeout=10) as client:
+                    resp = client.get(url, headers=headers)
+                    if resp.status_code != 200:
+                        self.last_error = (
+                            f"Poshmark returned HTTP {resp.status_code} for "
+                            f"closet '{username}'."
+                        )
+                        return []
+
+                    data = resp.json()
+                    for item in data.get("data", [])[:max_results]:
+                        price_val = float(item.get("price", 0) or 0)
+                        price_cents = int(price_val * 100)
+                        is_sold = item.get("inventory", {}).get("status") == "sold_out"
+                        results.append({
+                            "platform": self.PLATFORM,
+                            "platform_listing_id": str(item.get("id")),
+                            "title": item.get("title") or "Poshmark Item",
+                            "description": item.get("description", ""),
+                            "price_cents": price_cents,
+                            "price_raw": f"USD {price_val:.2f}",
+                            "currency": "USD",
+                            "status": "sold" if is_sold else "active",
+                            "is_sold": is_sold,
+                            "available_quantity": 0 if is_sold else 1,
+                            "views_count": item.get("views_count", 0),
+                            "image_url": (item.get("pictures") or [{}])[0].get("url") or "",
+                            "images": [p.get("url") for p in item.get("pictures", []) if p.get("url")],
+                            "original_url": f"https://poshmark.com/listing/{item.get('id')}",
+                            "category": item.get("category", {}).get("name") if isinstance(item.get("category"), dict) else str(item.get("category") or ""),
+                            "sku": item.get("sku") or "",
+                        })
+            except Exception as exc:
+                # Surface the reason rather than substituting demo inventory.
+                self.last_error = f"Poshmark sync failed: {exc}"
 
             return results
         finally:

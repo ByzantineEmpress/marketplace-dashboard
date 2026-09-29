@@ -80,92 +80,109 @@ class AmazonAdapter(MarketplaceAdapter):
 
     def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None,
                       user_id=None, credentials: dict = None) -> List[Dict[str, Any]]:
-        """Fetch active listings from Amazon Seller Central."""
+        """Fetch active listings from Amazon Seller Central (SP-API)."""
         should_close = False
         if db is None:
             db = SessionLocal()
             should_close = True
 
         try:
-            account = self._find_account(db, user_id)
             results = []
 
-            # If LWA credentials are present, attempt live SP-API fetch
-            if (_cred(credentials, "client_id") or config.AMAZON_CLIENT_ID) and (_cred(credentials, "refresh_token") or config.AMAZON_REFRESH_TOKEN):
-                try:
-                    # 1. Exchange refresh token for LWA access token
-                    with httpx.Client(timeout=10) as client:
-                        token_resp = client.post(
-                            self.LWA_TOKEN_URL,
-                            data={
-                                "grant_type": "refresh_token",
-                                "refresh_token": _cred(credentials, "refresh_token") or config.AMAZON_REFRESH_TOKEN,
-                                "client_id": _cred(credentials, "client_id") or config.AMAZON_CLIENT_ID,
-                                "client_secret": _cred(credentials, "client_secret") or config.AMAZON_CLIENT_SECRET,
-                            },
-                        )
-                        if token_resp.status_code == 200:
-                            access_token = token_resp.json().get("access_token")
-                            headers = {
-                                "x-amz-access-token": access_token,
-                                "User-Agent": "MarketplaceDashboard/1.0",
-                            }
-                            # 2. Fetch inventory summary
-                            inv_url = (
-                                f"{self.SP_API_BASE}/fba/inventory/v1/summaries?"
-                                f"details=true&granularityType=Marketplace&"
-                                f"granularityId={config.AMAZON_MARKETPLACE_ID}&marketplaceIds={config.AMAZON_MARKETPLACE_ID}"
-                            )
-                            inv_resp = client.get(inv_url, headers=headers)
-                            if inv_resp.status_code == 200:
-                                inv_data = inv_resp.json()
-                                for item in inv_data.get("payload", {}).get("inventorySummaries", [])[:max_results]:
-                                    asin = item.get("asin")
-                                    sku = item.get("sellerSku", "")
-                                    qty = item.get("totalQuantity", 0)
-                                    results.append({
-                                        "platform": self.PLATFORM,
-                                        "platform_listing_id": asin or sku,
-                                        "title": item.get("productName") or f"Amazon Item ({asin})",
-                                        "description": f"ASIN: {asin} | SKU: {sku} | FBA Inventory",
-                                        "price_cents": 2999,  # Default estimate or sync
-                                        "price_raw": "USD 29.99",
-                                        "currency": "USD",
-                                        "status": "active" if qty > 0 else "sold",
-                                        "is_sold": qty <= 0,
-                                        "available_quantity": qty,
-                                        "views_count": 0,
-                                        "image_url": "/static/img/placeholder.svg",
-                                        "images": ["/static/img/placeholder.svg"],
-                                        "original_url": f"https://www.amazon.com/dp/{asin}" if asin else "",
-                                        "sku": sku,
-                                        "category": "Amazon FBA",
-                                    })
-                except Exception:
-                    pass
+            client_id = _cred(credentials, "client_id") or config.AMAZON_CLIENT_ID
+            refresh_token = _cred(credentials, "refresh_token") or config.AMAZON_REFRESH_TOKEN
+            client_secret = _cred(credentials, "client_secret") or config.AMAZON_CLIENT_SECRET
 
-            # Provide default/sample items if connected or configured
-            if not results and (account and account.is_connected or _cred(credentials, "seller_id") or config.AMAZON_SELLER_ID):
-                results = [
-                    {
-                        "platform": self.PLATFORM,
-                        "platform_listing_id": "AMZ-B09V3K1M4P",
-                        "title": "Ergonomic Desk Organizer & Phone Stand (Black)",
-                        "description": "Multi-compartment desktop organizer with integrated fast-charging phone dock.",
-                        "price_cents": 2499,
-                        "price_raw": "USD 24.99",
-                        "currency": "USD",
-                        "status": "active",
-                        "is_sold": False,
-                        "available_quantity": 18,
-                        "views_count": 128,
-                        "image_url": "/static/img/placeholder.svg",
-                        "images": ["/static/img/placeholder.svg"],
-                        "original_url": "https://www.amazon.com/dp/B09V3K1M4P",
-                        "sku": "AMZ-DESK-ORG-BLK",
-                        "category": "Office Products",
+            if not (client_id and refresh_token):
+                # A connected account without credentials cannot be synced. This
+                # must not fall back to sample data: returning a hardcoded item
+                # would put a fake product in the seller's real inventory.
+                self.last_error = (
+                    "Amazon credentials are incomplete (client_id and "
+                    "refresh_token are required). Save them and try again."
+                )
+                return []
+
+            try:
+                # 1. Exchange refresh token for an LWA access token
+                with httpx.Client(timeout=10) as client:
+                    token_resp = client.post(
+                        self.LWA_TOKEN_URL,
+                        data={
+                            "grant_type": "refresh_token",
+                            "refresh_token": refresh_token,
+                            "client_id": client_id,
+                            "client_secret": client_secret,
+                        },
+                    )
+                    if token_resp.status_code != 200:
+                        self.last_error = (
+                            f"Amazon returned HTTP {token_resp.status_code} "
+                            f"when refreshing the access token."
+                        )
+                        return []
+
+                    access_token = token_resp.json().get("access_token")
+                    if not access_token:
+                        self.last_error = "Amazon did not return an access token."
+                        return []
+
+                    headers = {
+                        "x-amz-access-token": access_token,
+                        "User-Agent": "MarketplaceDashboard/1.0",
                     }
-                ]
+                    marketplace_id = config.AMAZON_MARKETPLACE_ID or ""
+                    if not marketplace_id:
+                        self.last_error = (
+                            "AMAZON_MARKETPLACE_ID is not configured, so there "
+                            "is no marketplace to read inventory from."
+                        )
+                        return []
+
+                    # 2. Fetch inventory summary
+                    inv_url = (
+                        f"{self.SP_API_BASE}/fba/inventory/v1/summaries?"
+                        f"details=true&granularityType=Marketplace&"
+                        f"granularityId={marketplace_id}&marketplaceIds={marketplace_id}"
+                    )
+                    inv_resp = client.get(inv_url, headers=headers)
+                    if inv_resp.status_code != 200:
+                        self.last_error = (
+                            f"Amazon returned HTTP {inv_resp.status_code} "
+                            f"fetching inventory."
+                        )
+                        return []
+
+                    inv_data = inv_resp.json()
+                    for item in inv_data.get("payload", {}).get("inventorySummaries", [])[:max_results]:
+                        asin = item.get("asin")
+                        sku = item.get("sellerSku", "")
+                        qty = item.get("totalQuantity", 0)
+                        results.append({
+                            "platform": self.PLATFORM,
+                            "platform_listing_id": asin or sku,
+                            "title": item.get("productName") or f"Amazon Item ({asin or sku})",
+                            "description": f"ASIN: {asin or ''} | SKU: {sku or ''} | FBA Inventory",
+                            # The inventory summary does not return price or
+                            # images; do not invent them. A hardcoded "$29.99"
+                            # would fabricate revenue and a placeholder image
+                            # would imply a photo that does not exist.
+                            "price_cents": 0,
+                            "price_raw": "",
+                            "currency": "USD",
+                            "status": "active" if qty > 0 else "sold",
+                            "is_sold": qty <= 0,
+                            "available_quantity": qty,
+                            "views_count": 0,
+                            "image_url": "",
+                            "images": [],
+                            "original_url": f"https://www.amazon.com/dp/{asin}" if asin else "",
+                            "sku": sku,
+                            "category": "Amazon FBA",
+                        })
+            except Exception as exc:
+                # Surface the reason instead of falling through to fake data.
+                self.last_error = f"Amazon sync failed: {exc}"
 
             return results
         finally:

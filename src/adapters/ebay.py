@@ -202,6 +202,12 @@ class eBayAdapter(MarketplaceAdapter):
         Uses:
         - Inventory API to get all inventory items
         - Marketplace Listing API for listing details
+
+        Both are scoped by the seller's own access token, so unlike Etsy's
+        public feed they can only ever return this seller's data. The thing to
+        get right here is the marketplace: an item on EBAY_CA will not be found
+        by querying EBAY_US, and hardcoding EBAY_US silently drops every
+        non-US listing.
         """
         close_db = False
         if db is None:
@@ -218,15 +224,16 @@ class eBayAdapter(MarketplaceAdapter):
                 "Content-Type": "application/json",
             }
 
-            # Collect inventory items first
+            # Collect inventory items first. Each is tagged with the marketplace
+            # it was found in so listing details are fetched from that same
+            # marketplace, not a hardcoded EBAY_US.
             inventory_items = self._fetch_inventory_items(headers, max_results)
             if not inventory_items:
                 return []
 
-            # Now fetch listing details for each item
             all_listings = []
-            for item in inventory_items:
-                listing = self._get_listing_details(item, headers)
+            for marketplace, item in inventory_items:
+                listing = self._get_listing_details(item, headers, marketplace)
                 if listing:
                     all_listings.append(listing)
 
@@ -238,22 +245,28 @@ class eBayAdapter(MarketplaceAdapter):
             if close_db:
                 db.close()
 
-    def _fetch_inventory_items(self, headers: dict, limit: int) -> List[dict]:
+    def _fetch_inventory_items(self, headers: dict, limit: int) -> List[tuple]:
         """Fetch inventory items from eBay's Inventory API.
 
         Endpoint: GET /sell/inventory/v1/inventory_item
+
+        Returns ``(marketplace_id, item)`` pairs. The marketplace is preserved
+        because the Marketplace Listing API needs it to find the item's live
+        listing, and a seller can list on several marketplaces at once.
         """
         items = []
-        page = 1
-        page_size = 250  # eBay max per page
 
         for marketplace in EBAY_MARKETPLACES:
+            page = 1
+            page_size = 250  # eBay max per page
+
             while len(items) < limit:
                 params = {
                     "page_number": page,
                     "page_size": min(page_size, limit - len(items)),
                     "type": INVENTORY_ITEM_TYPE,
                     "filter": '{"statuses":["ACTIVE"]}',
+                    "marketplace_id": marketplace,
                 }
 
                 try:
@@ -270,26 +283,14 @@ class eBayAdapter(MarketplaceAdapter):
                     if not inventory_items:
                         break
 
-                    items.extend(inventory_items)
+                    items.extend((marketplace, it) for it in inventory_items)
 
                     if len(inventory_items) < page_size:
                         break  # Last page
                     page += 1
 
-                except httpx.HTTPError:
-                    # Retry once
-                    try:
-                        resp = httpx.get(
-                            f"{EBAY_API_BASE}/sell/inventory/v1/inventory_item",
-                            headers=headers,
-                            params=params,
-                            timeout=30,
-                        )
-                        resp.raise_for_status()
-                        data = resp.json()
-                        items.extend(data.get("inventoryItems", []))
-                    except httpx.HTTPError:
-                        break
+                except httpx.HTTPError as exc:
+                    self.last_error = f"eBay inventory fetch failed: {exc}"
                     break
 
                 if len(items) >= limit:
@@ -297,13 +298,13 @@ class eBayAdapter(MarketplaceAdapter):
 
         return items[:limit]
 
-    def _get_listing_details(self, item: dict, headers: dict) -> Optional[dict]:
+    def _get_listing_details(self, item: dict, headers: dict, marketplace: str) -> Optional[dict]:
         """Get listing details from the Marketplace Listing API.
 
-        Uses the inventory item's marketplaces to fetch active listings.
+        Uses the marketplace the inventory item came from; hardcoding EBAY_US
+        here would silently drop every listing on EBAY_CA, EBAY_GB, etc.
         """
         try:
-            marketplace_id = "EBAY_US"  # Default, will be overridden
             listing_id = item.get("id")
             if not listing_id:
                 return None
@@ -314,7 +315,7 @@ class eBayAdapter(MarketplaceAdapter):
                     f"{EBAY_API_BASE}/sell/marketplace_listing/v1/marketplace_listing",
                     headers=headers,
                     params={
-                        "marketplace_id": "EBAY_US",
+                        "marketplace_id": marketplace,
                         "filter": '{"statuses":["ACTIVE"]}',
                         "page_size": 50,
                     },
@@ -325,8 +326,8 @@ class eBayAdapter(MarketplaceAdapter):
                     for ml in data.get("marketplaceListings", []):
                         if ml.get("inventoryItemId") == listing_id:
                             return self._normalise_listing(ml)
-            except httpx.HTTPError:
-                pass
+            except httpx.HTTPError as exc:
+                self.last_error = f"eBay listing-detail fetch failed: {exc}"
 
             # Fall back to inventory item data
             return self._normalise_inventory_item(item)
