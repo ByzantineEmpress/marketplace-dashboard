@@ -328,7 +328,9 @@ class eBayAdapter(MarketplaceAdapter):
             marketplace = (token.get("registration_marketplace_id") or "").strip() or "EBAY_US"
             listings = self._fetch_active_inventory_report(headers, max_results, marketplace)
             if listings:
-                return self._enrich_listings(listings, headers, marketplace, max_results)
+                return self._enrich_listings(
+                    listings, headers, marketplace, max_results, token.get("access_token")
+                )
 
             inventory_items = self._fetch_inventory_items(headers, max_results)
             if not inventory_items:
@@ -471,7 +473,10 @@ class eBayAdapter(MarketplaceAdapter):
                 "image_url": "",
                 "images_json": [],
                 "available_quantity": qty,
+                # eBay exposes watchers (WatchCount) via the Trading API, not
+                # views; filled in during enrichment, 0 until then.
                 "views_count": 0,
+                "watchers_count": 0,
                 "original_url": f"https://www.ebay.com/itm/{item_id}",
                 "sku": "",
                 "category": "",
@@ -513,13 +518,62 @@ class eBayAdapter(MarketplaceAdapter):
         except Exception:
             return {}
 
+    def _fetch_getitem(self, item_id: str, access_token: str, marketplace: str) -> dict:
+        """Fetch an item's watcher count via the Trading API GetItem.
+
+        eBay only exposes watchers through the legacy Trading API (not the REST
+        Browse API), using the same user token in the ``X-EBAY-API-IAF-TOKEN``
+        header. ``IncludeWatchCount=true`` makes it return ``WatchCount``.
+        """
+        import xml.etree.ElementTree as ET
+
+        site_ids = {
+            "EBAY_US": "0", "EBAY_CA": "2", "EBAY_GB": "3", "EBAY_AU": "15",
+            "EBAY_DE": "77", "EBAY_FR": "71", "EBAY_IT": "101",
+        }
+        site_id = site_ids.get(marketplace, "0")
+        xml = (
+            '<?xml version="1.0" encoding="utf-8"?>'
+            '<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+            f"<ItemID>{item_id}</ItemID><IncludeWatchCount>true</IncludeWatchCount>"
+            "</GetItemRequest>"
+        )
+        try:
+            resp = httpx.post(
+                "https://api.ebay.com/ws/api.dll",
+                headers={
+                    "X-EBAY-API-IAF-TOKEN": access_token,
+                    "X-EBAY-API-CALL-NAME": "GetItem",
+                    "X-EBAY-API-SITEID": site_id,
+                    "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
+                    "Content-Type": "text/xml",
+                },
+                content=xml,
+                timeout=40,
+            )
+            if resp.status_code != 200:
+                return {}
+            root = ET.fromstring(resp.content)
+            ns = "{urn:ebay:apis:eBLBaseComponents}"
+            wc = root.find(f".//{ns}WatchCount")
+            watchers = 0
+            if wc is not None:
+                try:
+                    watchers = int((wc.text or "0").strip())
+                except (ValueError, TypeError):
+                    watchers = 0
+            return {"watchers_count": watchers}
+        except Exception:
+            return {}
+
     def _enrich_listings(self, rows: List[dict], headers: dict, marketplace: str,
-                         limit: int) -> List[dict]:
-        """Fill in title, image and category for each report row.
+                         limit: int, access_token: str = None) -> List[dict]:
+        """Fill in title, image, category and watcher count for each report row.
 
         The report alone yields generated titles and no photos; the Browse API
-        supplies the real values per item. A row whose item cannot be fetched is
-        left as-is, so a transient Browse failure never drops a listing.
+        supplies title/image/category/description and the Trading API GetItem
+        supplies watchers. A row whose item cannot be fetched is left as-is, so a
+        transient failure never drops a listing.
         """
         import time
 
@@ -539,6 +593,11 @@ class eBayAdapter(MarketplaceAdapter):
                 row["category"] = detail["category"]
             if detail.get("description"):
                 row["description"] = detail["description"]
+
+            if access_token:
+                watch = self._fetch_getitem(row["platform_listing_id"], access_token, marketplace)
+                row["watchers_count"] = watch.get("watchers_count", 0)
+
             enriched.append(row)
             # A short pause between calls keeps the burst well under the Browse
             # API's per-call rate limit even for a large inventory.

@@ -110,6 +110,12 @@ def _migrate_existing_db():
         if "group_id" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN group_id INTEGER REFERENCES listing_groups(id)"))
 
+        # 1k. Per-platform engagement metrics (eBay watchers, Etsy favorites)
+        if "watchers_count" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN watchers_count INTEGER NOT NULL DEFAULT 0"))
+        if "favorites_count" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN favorites_count INTEGER NOT NULL DEFAULT 0"))
+
         # 1e. sold_at timestamp for date-range metrics
         if "sold_at" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN sold_at TIMESTAMP"))

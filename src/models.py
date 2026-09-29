@@ -200,6 +200,11 @@ class Listing(Base):
     is_sold = Column(Boolean, nullable=False, default=False, index=True)
     available_quantity = Column(Integer, nullable=False, default=0)
     views_count = Column(Integer, nullable=False, default=0)
+    # Per-platform engagement: watchers is an eBay metric (Trading API WatchCount);
+    # favorites is Etsy's "num_favorers" (hearts). Neither applies to every
+    # platform, so they live as separate columns rather than a shared "views".
+    watchers_count = Column(Integer, nullable=False, default=0)
+    favorites_count = Column(Integer, nullable=False, default=0)
 
     # Platform-specific extras
     sku = Column(String(100), nullable=True)
@@ -305,6 +310,8 @@ class Listing(Base):
             "inventory_item_id": self.inventory_item_id,
             "available_quantity": self.available_quantity,
             "views_count": self.views_count,
+            "watchers_count": self.watchers_count,
+            "favorites_count": self.favorites_count,
             "tags": self.tags or [],
             "materials": self.materials or [],
             "created_at": self.created_at.isoformat() if self.created_at else None,

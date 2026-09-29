@@ -477,6 +477,12 @@ class EtsyNormalisationTest(unittest.TestCase):
         row = self.adapter._normalise_listing(self.RAW)
         self.assertEqual(row["views_count"], 6688)
 
+    def test_favorites_count_is_captured_separately(self):
+        """num_favorers (hearts) must not be folded into views_count."""
+        row = self.adapter._normalise_listing(self.RAW)
+        self.assertEqual(row["views_count"], 6688)
+        self.assertEqual(row["favorites_count"], 900)
+
     def test_normalise_results_skips_unusable_items(self):
         rows = self.adapter._normalise_results([self.RAW, "not-a-dict", None])
         # The string and None should be dropped, not passed through to fail

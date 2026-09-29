@@ -539,9 +539,10 @@ class EtsyAdapter(MarketplaceAdapter):
                 "tags": tags,
                 "materials": materials,
                 "available_quantity": item.get("quantity", 0),
-                # "num_pending_starts" is not an Etsy field; favourites is
-                # the closest real metric, and views_count drives the UI.
-                "views_count": item.get("views", 0) or item.get("num_favorers", 0),
+                # views = total page views; num_favorers = hearts. Kept separate
+                # because the dashboard shows each under its own label.
+                "views_count": item.get("views", 0),
+                "favorites_count": item.get("num_favorers", 0),
                 "original_url": f"https://www.etsy.com/listing/{item.get('listing_id', '')}",
                 "platform": self.PLATFORM,
             }

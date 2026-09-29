@@ -670,10 +670,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     <span class="modal-detail-label">Quantity</span>
                     <span class="modal-detail-value">${listing.available_quantity ?? '—'}</span>
                 </div>
-                <div class="modal-detail-item">
-                    <span class="modal-detail-label">Views</span>
-                    <span class="modal-detail-value">${listing.views_count ?? '0'}</span>
-                </div>
+                ${renderEngagementMetrics(listing)}
                 <div class="modal-detail-item">
                     <span class="modal-detail-label">SKU</span>
                     <span class="modal-detail-value">${escapeHtml(listing.sku || 'None')}</span>
@@ -1888,6 +1885,54 @@ function renderPlatformBadges(platforms, fallback) {
     return list.map(p => getPlatformIcon(p)).join("");
 }
 
+// Per-platform engagement metrics. eBay has watchers (Trading API WatchCount)
+// and no reliable view count; Etsy has views and favorites. Other platforms keep
+// the generic "Views" label.
+function renderEngagementMetrics(listing) {
+    const p = (listing.platform || '').toLowerCase();
+    if (p === 'etsy') {
+        return `
+            <div class="modal-detail-item">
+                <span class="modal-detail-label">Views</span>
+                <span class="modal-detail-value">${listing.views_count ?? 0}</span>
+            </div>
+            <div class="modal-detail-item">
+                <span class="modal-detail-label">Favorites</span>
+                <span class="modal-detail-value">${listing.favorites_count ?? 0}</span>
+            </div>`;
+    }
+    if (p === 'ebay') {
+        return `
+            <div class="modal-detail-item">
+                <span class="modal-detail-label">Watchers</span>
+                <span class="modal-detail-value">${listing.watchers_count ?? 0}</span>
+            </div>`;
+    }
+    return `
+        <div class="modal-detail-item">
+            <span class="modal-detail-label">Views</span>
+            <span class="modal-detail-value">${listing.views_count ?? 0}</span>
+        </div>`;
+}
+
+// Compact engagement chip for a card. Hidden when the platform has no relevant
+// metric or the value is zero, so cards are not cluttered with empty numbers.
+function renderEngagementChip(listing) {
+    const p = (listing.platform || '').toLowerCase();
+    if (p === 'etsy') {
+        const views = listing.views_count ?? 0;
+        const favs = listing.favorites_count ?? 0;
+        if (!views && !favs) return '';
+        return `<span class="card-engagement" title="Views · Favorites">👁 ${views} · ♥ ${favs}</span>`;
+    }
+    if (p === 'ebay') {
+        const watchers = listing.watchers_count ?? 0;
+        if (!watchers) return '';
+        return `<span class="card-engagement" title="Watchers">👀 ${watchers} watching</span>`;
+    }
+    return '';
+}
+
 // Consistent platform selector chips. The previous version was a grid of bare
 // checkboxes with differently-sized coloured labels, which read as scrambled.
 // Each chip has the platform name, a stable checkmark, and a highlighted
@@ -2015,6 +2060,7 @@ function renderCard(listing) {
                 <div class="card-meta">
                     <span class="card-status card-status--${listing.status || 'unknown'}">${listing.status === 'written_off' ? 'Written Off' : (listing.status || "unknown")}</span>
                     ${groupChip}
+                    ${renderEngagementChip(listing)}
                     ${missingCost ? `<span class="card-status card-status--missing-cost" title="No purchase price recorded">No Cost</span>` : ""}
                     ${listing.team_name ? `<span class="card-team" title="Team">${escapeHtml(listing.team_name)}</span>` : ""}
                 </div>

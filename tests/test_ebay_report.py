@@ -217,6 +217,36 @@ class EbayBrowseEnrichmentTest(unittest.TestCase):
         self.assertEqual(rows[0]["image_url"], "https://x/img.jpg")
         self.assertEqual(rows[0]["images_json"], ["https://x/img.jpg"])
 
+    def test_fetch_getitem_parses_watch_count(self):
+        import src.adapters.ebay as ebay_mod
+
+        xml = ('<?xml version="1.0"?>'
+               '<GetItemResponse xmlns="urn:ebay:apis:eBLBaseComponents">'
+               '<Item><WatchCount>7</WatchCount></Item>'
+               '</GetItemResponse>')
+
+        class FakeResp:
+            status_code = 200
+            content = xml.encode()
+
+        requested = []
+
+        def fake_post(url, **kw):
+            requested.append((url, kw.get("content")))
+            return FakeResp()
+
+        real = ebay_mod.httpx.post
+        ebay_mod.httpx.post = fake_post
+        try:
+            out = self.adapter._fetch_getitem("800657056078", "tok", "EBAY_CA")
+        finally:
+            ebay_mod.httpx.post = real
+
+        self.assertEqual(out["watchers_count"], 7)
+        # IncludeWatchCount must be set, otherwise eBay omits WatchCount.
+        self.assertIn("IncludeWatchCount", requested[0][1])
+        self.assertIn("800657056078", requested[0][1])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
