@@ -18,26 +18,19 @@ from src.models import Team, TeamMembership, User
 
 
 class AmazonDoesNotFabricateInventoryTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        init_db()
+
     def setUp(self):
         from src.adapters import get_adapter
         self.adapter = get_adapter("amazon")
 
-    def test_missing_credentials_returns_empty_and_reports(self):
-        from src.config import config
-
-        old_client = config.AMAZON_CLIENT_ID
-        old_refresh = config.AMAZON_REFRESH_TOKEN
-        config.AMAZON_CLIENT_ID = ""
-        config.AMAZON_REFRESH_TOKEN = ""
-        try:
-            rows = self.adapter.list_listings(db=None, user_id=None, credentials={})
-        finally:
-            config.AMAZON_CLIENT_ID = old_client
-            config.AMAZON_REFRESH_TOKEN = old_refresh
-
+    def test_missing_connection_returns_empty_and_reports(self):
+        rows = self.adapter.list_listings(db=None, user_id=None, credentials={})
         self.assertEqual(rows, [])
         self.assertIsNotNone(self.adapter.last_error)
-        self.assertIn("incomplete", self.adapter.last_error.lower())
+        self.assertIn("connect", self.adapter.last_error.lower())
 
     def test_live_path_never_invents_price_or_image(self):
         """The SP-API inventory summary has no price or image, so the adapter
@@ -50,33 +43,110 @@ class AmazonDoesNotFabricateInventoryTest(unittest.TestCase):
         self.assertNotIn("placeholder.svg", source)
         self.assertNotIn("Ergonomic Desk Organizer", source)
 
-    def test_a_non_200_token_response_is_reported_not_swallowed(self):
+
+class AmazonOAuthFlowTest(unittest.TestCase):
+    """The callback must actually exchange the SP-API code for tokens.
+
+    The previous implementation marked the account connected and stored a
+    shop_name only - no token exchange, no refresh token - so a sync could never
+    reach Amazon.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        init_db()
+
+    def setUp(self):
+        from src.adapters import get_adapter
+        self.adapter = get_adapter("amazon")
+
+    def test_authorization_url_includes_the_redirect_uri(self):
+        from urllib.parse import parse_qs, urlparse
+
+        url = self.adapter.get_authorization_url(
+            state="s", credentials={"client_id": "amzn1.application"})
+        query = parse_qs(urlparse(url).query)
+        self.assertEqual(query["application_id"], ["amzn1.application"])
+        self.assertIn("redirect_uri", query)
+        self.assertIn("/api/auth/amazon/callback", query["redirect_uri"][0])
+        self.assertEqual(query["version"], ["beta"])
+
+    def test_handle_callback_exchanges_the_code_and_stores_tokens(self):
         import src.adapters.amazon as amazon_mod
 
-        class FakeClient:
-            def __enter__(self):
-                return self
+        posted = {}
 
-            def __exit__(self, *a):
-                return False
+        class FakeResp:
+            status_code = 200
+            def json(self):
+                return {
+                    "access_token": "Atza|access",
+                    "refresh_token": "Atzr|refresh",
+                    "token_type": "bearer",
+                    "expires_in": 3600,
+                }
 
-            def post(self, *a, **kw):
-                class R:
-                    status_code = 401
-                return R()
+        def fake_post(url, **kw):
+            posted["url"] = url
+            posted["data"] = kw.get("data")
+            return FakeResp()
 
-        real = amazon_mod.httpx.Client
-        amazon_mod.httpx.Client = lambda *a, **kw: FakeClient()
+        real = amazon_mod.httpx.post
+        amazon_mod.httpx.post = fake_post
+        db = SessionLocal()
         try:
-            rows = self.adapter.list_listings(
-                db=None, user_id=None,
-                credentials={"client_id": "x", "refresh_token": "y"},
+            result = self.adapter.handle_callback(
+                code="spapi-code", state="s",
+                credentials={"client_id": "cid", "client_secret": "csec"},
+                user_id=1, seller_id="A_SELLER",
             )
         finally:
-            amazon_mod.httpx.Client = real
+            amazon_mod.httpx.post = real
+            db.close()
 
-        self.assertEqual(rows, [])
-        self.assertIn("401", str(self.adapter.last_error or ""))
+        self.assertTrue(result["success"], result)
+        self.assertEqual(posted["data"]["grant_type"], "authorization_code")
+        self.assertEqual(posted["data"]["code"], "spapi-code")
+        self.assertEqual(posted["data"]["client_id"], "cid")
+        self.assertEqual(posted["data"]["client_secret"], "csec")
+
+        # Tokens were persisted on an account row.
+        from src.models import MarketplaceAccount
+        db2 = SessionLocal()
+        try:
+            acct = db2.query(MarketplaceAccount).filter_by(
+                platform="amazon", user_id=1).first()
+            self.assertIsNotNone(acct)
+            self.assertEqual(acct.access_token, "Atza|access")
+            self.assertEqual(acct.refresh_token, "Atzr|refresh")
+            self.assertEqual(acct.shop_name, "A_SELLER")
+        finally:
+            db2.query(MarketplaceAccount).filter_by(
+                platform="amazon", user_id=1).delete()
+            db2.commit()
+            db2.close()
+
+    def test_handle_callback_reports_a_failed_exchange(self):
+        import src.adapters.amazon as amazon_mod
+
+        class FakeResp:
+            status_code = 400
+
+        def fake_post(url, **kw):
+            return FakeResp()
+
+        real = amazon_mod.httpx.post
+        amazon_mod.httpx.post = fake_post
+        try:
+            result = self.adapter.handle_callback(
+                code="bad", state="s",
+                credentials={"client_id": "cid", "client_secret": "csec"},
+                user_id=1)
+        finally:
+            amazon_mod.httpx.post = real
+
+        self.assertFalse(result["success"])
+        self.assertIn("400", str(result.get("error", "")))
 
 
 class PoshmarkDoesNotFabricateInventoryTest(unittest.TestCase):

@@ -1311,7 +1311,16 @@ async def oauth_callback(platform: str, request: Request):
     """
     from src.adapters import get_adapter
 
-    code = request.query_params.get("code", "")
+    # Amazon's website authorization flow returns its code and seller id under
+    # different names than eBay/Etsy: spapi_oauth_code and selling_partner_id.
+    # Reading the generic "code" for Amazon would always land in the
+    # "no authorization code received" branch.
+    if platform == "amazon":
+        code = request.query_params.get("spapi_oauth_code", "")
+        amazon_seller_id = request.query_params.get("selling_partner_id", "")
+    else:
+        code = request.query_params.get("code", "")
+        amazon_seller_id = None
     state = request.query_params.get("state", "")
     error = request.query_params.get("error", "")
 
@@ -1360,9 +1369,11 @@ async def oauth_callback(platform: str, request: Request):
                     result = adapter.handle_callback(
                         code, state, credentials=credentials,
                         user_id=owner["id"], code_verifier=verifier,
+                        seller_id=amazon_seller_id,
                     )
                 except TypeError:
-                    # Adapter predating PKCE support.
+                    # Adapter predating PKCE support, or an adapter that does not
+                    # accept the Amazon-specific seller_id keyword.
                     result = adapter.handle_callback(
                         code, state, credentials=credentials, user_id=owner["id"]
                     )
@@ -2001,7 +2012,10 @@ PLATFORM_CREDENTIALS = {
         ("seller_id", "Seller ID"),
         ("client_id", "LWA Client ID"),
         ("client_secret", "LWA Client Secret"),
-        ("refresh_token", "Refresh Token"),
+        # refresh_token is NOT entered here: it is obtained during OAuth and
+        # stored on the MarketplaceAccount. Listing it as a required credential
+        # would block Connect with "save your refresh token first", which is a
+        # value the user cannot have before connecting.
     ],
 }
 
