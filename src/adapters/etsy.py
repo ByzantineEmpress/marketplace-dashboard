@@ -13,6 +13,7 @@ References:
 """
 
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -45,16 +46,29 @@ class EtsyAdapter(MarketplaceAdapter):
         # Simple SVG-based Etsy logo
         return '<svg viewBox="0 0 60 30" width="50" height="25"><text x="3" y="22" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#F56400">Etsy</text></svg>'
 
-    def get_authorization_url(self, state: str = "", credentials: dict = None) -> str:
+    def get_authorization_url(self, state: str = "", credentials: dict = None,
+                              code_challenge: str = "") -> str:
         """Build the Etsy OAuth 2.0 authorisation URL.
 
         Parameters:
-            state: Optional CSRF state parameter.
+            state: single-use CSRF state, echoed back by Etsy.
+            credentials: this user's own keystring.
+            code_challenge: the PKCE S256 challenge. REQUIRED by Etsy — the flow
+                is rejected without it — so a missing one raises here rather
+                than returning a URL that is certain to fail. That silent
+                failure is what produced an unhelpful "no valid access token"
+                message much later in the process.
 
-        The user is redirected here to grant permissions.
-        After authorisation, Etsy redirects back with a code.
+        The user is redirected here to grant permissions; Etsy then redirects
+        back to the callback with a code.
         """
         import os
+
+        if not code_challenge:
+            raise ValueError(
+                "Etsy requires PKCE: get_authorization_url needs a code_challenge"
+            )
+
         redirect_uri = os.environ.get("ETSY_REDIRECT_URI") or f"{config.APP_BASE_URL}/api/auth/etsy/callback"
         api_key = _cred(credentials, "api_key") or config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
 
@@ -62,21 +76,30 @@ class EtsyAdapter(MarketplaceAdapter):
         scopes = "listings_r"
 
         params = {
+            "response_type": "code",
             "client_id": api_key,
             "redirect_uri": redirect_uri,
-            "response_type": "code",
             "scope": scopes,
             "state": state,
+            # Etsy requires S256 explicitly; "plain" is not accepted.
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
         }
 
-        query = "&".join(f"{k}={v}" for k, v in params.items() if v)
+        # quote() matters here: the redirect_uri contains "://" and "/", and an
+        # unencoded value was being sent before.
+        query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items() if v)
         return f"{ETSY_AUTH_URL}?{query}"
 
     def handle_callback(self, code: str, state: str = "", credentials: dict = None,
-                        user_id=None) -> Dict[str, Any]:
+                        user_id=None, code_verifier: str = "") -> Dict[str, Any]:
         """Exchange an authorisation code for access and refresh tokens.
 
         Also stores the shop_id from the response.
+
+        ``code_verifier`` is the PKCE verifier whose S256 challenge was sent with
+        the authorisation request. Etsy requires it on the token request; without
+        it the exchange fails with an unhelpful error.
         """
         import os
 
@@ -85,14 +108,19 @@ class EtsyAdapter(MarketplaceAdapter):
         api_secret = _cred(credentials, "api_secret") or config.ETSY_API_SECRET or os.environ.get("ETSY_API_SECRET") or os.environ.get("ESY_API_SECRET") or ""
 
         try:
+            token_request = {
+                "grant_type": "authorization_code",
+                "client_id": api_key,
+                "code": code,
+                "redirect_uri": redirect_uri,
+            }
+            if code_verifier:
+                token_request["code_verifier"] = code_verifier
             resp = httpx.post(
                 ETSY_OAUTH_URL,
-                data={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "redirect_uri": redirect_uri,
-                },
-                auth=(api_key, api_secret),
+                data=token_request,
+                # Etsy expects the credential pair rather than HTTP Basic.
+                headers={"x-api-key": f"{api_key}:{api_secret}"} if api_key and api_secret else {},
                 timeout=30,
             )
             resp.raise_for_status()
@@ -118,7 +146,7 @@ class EtsyAdapter(MarketplaceAdapter):
                     try:
                         headers = {
                             "Authorization": f"Bearer {token_data['access_token']}",
-                            "x-api-key": api_key,
+                            "x-api-key": f"{api_key}:{api_secret}",
                         }
                         resp = httpx.get(
                             f"{ETSY_API_BASE}/applications/{api_key}/shops",
@@ -160,9 +188,13 @@ class EtsyAdapter(MarketplaceAdapter):
                 ETSY_OAUTH_URL,
                 data={
                     "grant_type": "refresh_token",
+                    "client_id": api_key,
                     "refresh_token": account.refresh_token,
                 },
-                auth=(api_key, api_secret),
+                # Etsy documents the credential pair on the token endpoint, not
+                # HTTP Basic, and a refresh needs the same keystring the
+                # original authorisation used.
+                headers={"x-api-key": f"{api_key}:{api_secret}"} if api_key and api_secret else {},
                 timeout=30,
             )
             resp.raise_for_status()
@@ -208,7 +240,9 @@ class EtsyAdapter(MarketplaceAdapter):
             api_key = _cred(credentials, "api_key") or config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
             headers = {
                 "Authorization": f"Bearer {token['access_token']}",
-                "x-api-key": api_key,
+                # Etsy requires the credential pair here: "<keystring>:<shared_secret>".
+                # Sending the keystring alone is rejected as an invalid API key.
+                "x-api-key": f"{api_key}:{api_secret}",
             }
 
             shop_id = token.get("shop_id") or (token.get("token_data", {}) or {}).get("shop_id")

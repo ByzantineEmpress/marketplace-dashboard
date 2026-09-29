@@ -32,6 +32,7 @@ from src.email_verification import (
     token_fingerprint,
 )
 from src import mailer, storage
+from src import oauth_pkce
 from src.database import SessionLocal, new_invite_code
 from src.models import (
     AuthSession,
@@ -1335,7 +1336,17 @@ async def oauth_callback(platform: str, request: Request):
         # stored against *their* account using *their* API keys. Without this
         # the row would be created ownerless and invisible to every user.
         owner = get_current_user(request)
-        if not owner:
+        expected_state = request.cookies.get(oauth_pkce.STATE_COOKIE, "")
+        verifier = request.cookies.get(oauth_pkce.VERIFIER_COOKIE, "")
+
+        if not state or not expected_state or state != expected_state:
+            # A mismatch means the callback did not come from a flow this server
+            # started. Refuse rather than exchange an unverified code.
+            result = {
+                "success": False,
+                "error": "Security state mismatch — please start the connection again.",
+            }
+        elif not owner:
             result = {
                 "success": False,
                 "error": "Your session expired during authorisation. "
@@ -1345,15 +1356,22 @@ async def oauth_callback(platform: str, request: Request):
             db = SessionLocal()
             try:
                 credentials = _user_credentials(db, owner["id"], platform)
-                result = adapter.handle_callback(
-                    code, state, credentials=credentials, user_id=owner["id"]
-                )
+                try:
+                    result = adapter.handle_callback(
+                        code, state, credentials=credentials,
+                        user_id=owner["id"], code_verifier=verifier,
+                    )
+                except TypeError:
+                    # Adapter predating PKCE support.
+                    result = adapter.handle_callback(
+                        code, state, credentials=credentials, user_id=owner["id"]
+                    )
             finally:
                 db.close()
     else:
         result = {"success": False, "error": "No authorization code received."}
 
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request=request,
         name="oauth_callback.html",
         context={
@@ -1363,6 +1381,10 @@ async def oauth_callback(platform: str, request: Request):
         },
         status_code=200,
     )
+    # One-shot values: leaving them set would let a stale state be replayed.
+    response.delete_cookie(oauth_pkce.STATE_COOKIE)
+    response.delete_cookie(oauth_pkce.VERIFIER_COOKIE)
+    return response
 
 @api_router.post("/auth/logout")
 async def logout(request: Request):
@@ -2130,6 +2152,11 @@ async def connect_account(body: dict, db: Session = Depends(get_db), user: dict 
 
     Body should contain ``platform`` (e.g. "ebay", "etsy"). The caller's own
     credentials are used, so the marketplace app is theirs, not the instance's.
+
+    A PKCE verifier and a CSRF state are generated here and stored in short-lived
+    HttpOnly cookies. Etsy requires PKCE outright; for every platform it also
+    means an intercepted authorisation code is useless without the verifier,
+    which never leaves this server.
     """
     from src.adapters import get_adapter
 
@@ -2140,8 +2167,48 @@ async def connect_account(body: dict, db: Session = Depends(get_db), user: dict 
         return JSONResponse(status_code=400, content={"ok": False, "error": f"Platform '{platform}' not supported yet"})
 
     credentials = _user_credentials(db, user["id"], platform)
-    auth_url = adapter.get_authorization_url(credentials=credentials)
-    return {"auth_url": auth_url}
+
+    # Check the credentials the flow would need before building a URL, so the
+    # user gets "save your keystring first" rather than a link that fails at the
+    # marketplace.
+    required = [key for key, _ in PLATFORM_CREDENTIALS.get(platform, [])]
+    missing = [key for key in required if not credentials.get(key)]
+    if missing:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "ok": False,
+                "error": "Save these first: " + ", ".join(missing),
+                "missing": missing,
+            },
+        )
+
+    state = oauth_pkce.new_state()
+    verifier = oauth_pkce.new_verifier()
+    challenge = oauth_pkce.challenge_for(verifier)
+
+    try:
+        auth_url = adapter.get_authorization_url(
+            state=state, credentials=credentials, code_challenge=challenge
+        )
+    except TypeError:
+        # Adapters that do not implement PKCE take neither argument.
+        auth_url = adapter.get_authorization_url(state=state, credentials=credentials)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+
+    response = JSONResponse(content={"ok": True, "auth_url": auth_url})
+    # Lax, not Strict: the marketplace navigates the browser back to our
+    # callback with a cross-site top-level GET, and Strict would withhold these.
+    response.set_cookie(
+        key=oauth_pkce.STATE_COOKIE, value=state,
+        httponly=True, samesite="lax", max_age=600, secure=config.REQUIRE_HTTPS,
+    )
+    response.set_cookie(
+        key=oauth_pkce.VERIFIER_COOKIE, value=verifier,
+        httponly=True, samesite="lax", max_age=600, secure=config.REQUIRE_HTTPS,
+    )
+    return response
 
 @api_router.post("/accounts/sync")
 async def sync_account(body: dict, db: Session = Depends(get_db), user: dict = Depends(check_auth)):

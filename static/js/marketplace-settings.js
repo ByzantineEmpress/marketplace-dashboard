@@ -100,15 +100,29 @@
         const actions = el("div");
         actions.style.display = "flex";
         actions.style.gap = "8px";
+        actions.style.flexWrap = "wrap";
         actions.style.marginTop = "6px";
 
         const saveBtn = el("button", "btn btn--primary", "Save");
         saveBtn.type = "button";
 
+        // Connect runs the marketplace's own OAuth flow. Necessary but not
+        // sufficient to just save keys: the API credentials identify the
+        // application, while an access token authorises reading THIS user's
+        // shop. Without it a sync has nothing to authenticate with, which is
+        // exactly the "no valid access token" message this button prevents.
+        const connectBtn = el("button", "btn btn--success", "Connect");
+        connectBtn.type = "button";
+        if (!info.is_configured) {
+            connectBtn.disabled = true;
+            connectBtn.title = "Save your credentials first.";
+        }
+
         const syncBtn = el("button", "btn btn--outline", "Sync now");
         syncBtn.type = "button";
 
         actions.appendChild(saveBtn);
+        actions.appendChild(connectBtn);
         actions.appendChild(syncBtn);
         card.appendChild(actions);
 
@@ -156,6 +170,35 @@
                 .then(function () { saveBtn.disabled = false; });
         });
 
+        connectBtn.addEventListener("click", function () {
+            connectBtn.disabled = true;
+            note.textContent = "Starting authorisation\u2026";
+            fetch("/api/accounts/connect", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ platform: platform }),
+            })
+                .then(function (res) { return res.json().then(function (d) { return [res, d]; }); })
+                .then(function (pair) {
+                    const res = pair[0], data = pair[1];
+                    if (!res.ok || !data.ok || !data.auth_url) {
+                        note.textContent = "Could not start: "
+                            + (data.error || "HTTP " + res.status);
+                        connectBtn.disabled = false;
+                        return;
+                    }
+                    // Leave the button disabled: the page is navigating away, and
+                    // re-enabling it would allow a second concurrent flow whose
+                    // state cookie would overwrite this one.
+                    note.textContent = "Redirecting to " + info.label + "\u2026";
+                    window.location.assign(data.auth_url);
+                })
+                .catch(function (err) {
+                    note.textContent = "Could not start: " + err.message;
+                    connectBtn.disabled = false;
+                });
+        });
+
         syncBtn.addEventListener("click", function () {
             syncBtn.disabled = true;
             note.textContent = "Syncing\u2026";
@@ -173,7 +216,14 @@
                     }
                     const r = data.result || {};
                     if (r.errors && r.errors.length) {
-                        note.textContent = "Sync reported: " + r.errors.join("; ");
+                        // The common case is "no token yet", so point at the
+                        // button that fixes it rather than echoing jargon.
+                        const needsConnect = r.errors.some(function (e) {
+                            return /access token/i.test(e);
+                        });
+                        note.textContent = needsConnect
+                            ? "Not authorised yet \u2014 press Connect to grant access to your shop."
+                            : "Sync reported: " + r.errors.join("; ");
                     } else {
                         note.textContent = "Synced " + (r.listings_fetched || 0) + " listing(s), "
                             + (r.listings_added || 0) + " new.";
