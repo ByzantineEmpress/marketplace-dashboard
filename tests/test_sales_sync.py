@@ -154,18 +154,29 @@ class EbayShippingCostTest(unittest.TestCase):
     def test_label_transactions_become_a_cost_per_order(self):
         costs = self._with_ledger([
             {"transactionType": "SHIPPING_LABEL", "orderId": "02-1",
-             "amount": {"value": "-15.50", "currency": "CAD"}},
+             "bookingEntry": "DEBIT", "amount": {"value": "15.50", "currency": "CAD"}},
             # A sale is money IN and must not be mistaken for postage.
             {"transactionType": "SALE", "orderId": "02-1",
              "amount": {"value": "32.0", "currency": "CAD"}},
+            # One order can carry several labels; they accumulate.
             {"transactionType": "SHIPPING_LABEL", "orderId": "02-1",
-             "amount": {"value": "-3.25", "currency": "CAD"}},
+             "bookingEntry": "DEBIT", "amount": {"value": "3.25", "currency": "CAD"}},
             {"transactionType": "REFUND", "orderId": "02-2",
-             "amount": {"value": "-5.0", "currency": "CAD"}},
+             "amount": {"value": "5.0", "currency": "CAD"}},
         ])
-        # Labels are money out, so the amount is negative and the cost is its
-        # magnitude, summed across every label on the order.
+        # Labels are reported as POSITIVE amounts marked DEBIT, so direction comes
+        # from bookingEntry and the cost is the sum of them.
         self.assertEqual(costs, {"02-1": 1875})
+
+    def test_a_reversed_label_reduces_the_cost(self):
+        """A CREDIT is a refunded label, not a second charge."""
+        costs = self._with_ledger([
+            {"transactionType": "SHIPPING_LABEL", "orderId": "02-1",
+             "bookingEntry": "DEBIT", "amount": {"value": "20.00", "currency": "CAD"}},
+            {"transactionType": "SHIPPING_LABEL", "orderId": "02-1",
+             "bookingEntry": "CREDIT", "amount": {"value": "20.00", "currency": "CAD"}},
+        ])
+        self.assertEqual(costs, {"02-1": 0})
 
     def test_a_denied_scope_leaves_costs_empty(self):
         import src.adapters.ebay as ebay_mod

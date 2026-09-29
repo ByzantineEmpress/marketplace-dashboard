@@ -34,6 +34,10 @@ from src.config import config
 
 # eBay API base URL (production)
 EBAY_API_BASE = "https://api.ebay.com"
+# eBay serves its Commerce and Finances APIs from a SECOND host, "apiz" rather
+# than "api". Calling Finances on the usual host returns an empty 404, which looks
+# like a missing endpoint rather than a wrong host.
+EBAY_APIZ_BASE = "https://apiz.ebay.com"
 # eBay OAuth token endpoint
 EBAY_OAUTH_TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
 
@@ -719,6 +723,9 @@ class eBayAdapter(MarketplaceAdapter):
         that only the Finances API reports, so without this every sale looks more
         profitable than it was by the cost of its label.
 
+        Served from ``apiz.ebay.com`` — the Finances API is not on the usual host,
+        and asking the wrong one answers with an empty 404.
+
         Returns ``{orderId: cents}``. Empty on failure, so a missing scope or an
         empty ledger leaves the figure at zero rather than breaking a sync.
         """
@@ -728,7 +735,7 @@ class eBayAdapter(MarketplaceAdapter):
         try:
             while offset < 2000:
                 resp = httpx.get(
-                    f"{EBAY_API_BASE}/sell/finances/v1/transaction",
+                    f"{EBAY_APIZ_BASE}/sell/finances/v1/transaction",
                     headers=headers,
                     params={"limit": page_size, "offset": offset,
                             "filter": f"transactionDate:[{since}..]"},
@@ -745,9 +752,15 @@ class eBayAdapter(MarketplaceAdapter):
                     order_id = txn.get("orderId") or ""
                     if not order_id:
                         continue
-                    # A label is money OUT, so the amount is negative; the cost is
-                    # its magnitude.
-                    costs[order_id] = costs.get(order_id, 0) + abs(_money(txn.get("amount")))
+                    # Direction is a bookingEntry, not the sign: a label is
+                    # reported as a positive amount marked DEBIT. A CREDIT is a
+                    # reversed or refunded label and reduces the cost. An order
+                    # can carry several labels, so they accumulate.
+                    amount = abs(_money(txn.get("amount")))
+                    if (txn.get("bookingEntry") or "").upper() == "CREDIT":
+                        costs[order_id] = costs.get(order_id, 0) - amount
+                    else:
+                        costs[order_id] = costs.get(order_id, 0) + amount
                 if len(transactions) < page_size:
                     break
                 offset += page_size
