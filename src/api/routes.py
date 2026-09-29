@@ -1403,6 +1403,13 @@ async def oauth_callback(platform: str, request: Request):
     else:
         result = {"success": False, "error": "No authorization code received."}
 
+    if not result.get("success"):
+        # Also put the provider's reason in the server log. The UI shows it, but a
+        # failed reconnect is otherwise undiagnosable after the fact: the message
+        # lives only in the page the user happened to be looking at. No tokens or
+        # secrets are included — this is the error string only.
+        print(f"[oauth] {platform} callback failed: {result.get('error')}", flush=True)
+
     response = templates.TemplateResponse(
         request=request,
         name="oauth_callback.html",
