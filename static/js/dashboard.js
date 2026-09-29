@@ -33,6 +33,33 @@ document.addEventListener("DOMContentLoaded", () => {
     const prevBtn = document.getElementById("prev-page");
     const nextBtn = document.getElementById("next-page");
 
+    // Clicking into a numeric field selects the value that is already there, so a
+    // new number can be typed straight over it instead of backspacing first.
+    //
+    // Delegated on focusin because the modal fields are re-rendered every open.
+    // The select() made on focus is normally undone by the click's own mouseup,
+    // which collapses the selection back to a caret, so that first mouseup is
+    // suppressed. A second click (field already focused) is left alone, which
+    // lets a deliberate click place the caret to edit one digit.
+    let selectingNumberField = false;
+
+    document.addEventListener("focusin", (e) => {
+        const el = e.target;
+        if (!el || el.tagName !== "INPUT" || el.readOnly || el.type !== "number") return;
+        selectingNumberField = true;
+        try { el.select(); } catch (_) { /* harmless if refused */ }
+    });
+
+    document.addEventListener("mouseup", (e) => {
+        if (!selectingNumberField) return;
+        selectingNumberField = false;
+        const el = e.target;
+        if (el && el.tagName === "INPUT" && el.type === "number") {
+            e.preventDefault();
+            try { el.select(); } catch (_) { /* harmless if refused */ }
+        }
+    });
+
     // Modal elements
     const modalBackdrop = document.getElementById("listing-modal-backdrop");
     const modalCloseBtn = document.getElementById("modal-close-btn");
