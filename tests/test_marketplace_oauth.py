@@ -488,20 +488,50 @@ class StoreFailureIsReportedTest(unittest.TestCase):
     """A store failure must not look like an empty account."""
 
     def test_store_listings_reports_the_first_error(self):
+        """The insert is attempted, fails on the bad field, and says so.
+
+        Note the owner: store_listings now refuses before inserting anything if
+        it cannot resolve a destination team, and that refusal happens FIRST. An
+        earlier version of this test passed no owner, so the team guard returned
+        before the insert and the assertion saw 0 failures rather than 1. The
+        owner here has a team, so the insert is genuinely attempted.
+        """
+        import secrets as _secrets
+
         from src.adapters import get_adapter
         from src.database import SessionLocal
+        from src.models import Team, TeamMembership, User
 
-        adapter = get_adapter("etsy")
         db = SessionLocal()
+        user = User(email=f"store.{_secrets.token_hex(4)}@example.com",
+                    name="Store Tester", provider="google", is_admin=False)
+        db.add(user)
+        db.flush()
+        team = Team(name=f"Store Team {_secrets.token_hex(4)}",
+                    invite_code=_secrets.token_urlsafe(16))
+        db.add(team)
+        db.flush()
+        db.add(TeamMembership(team_id=team.id, user_id=user.id, role="owner"))
+        db.commit()
+
         try:
-            # A field that is not a Listing column, i.e. exactly the raw shape.
-            stored = adapter.store_listings(db, [{"listing_id": 1, "title": "x"}])
+            adapter = get_adapter("etsy")
+            # A field that is not a Listing column, i.e. exactly the raw shape
+            # that used to be passed straight through.
+            stored = adapter.store_listings(
+                db, [{"listing_id": 1, "title": "x"}], owner_user_id=user.id)
         finally:
+            ids = [user.id]
             db.rollback()
+            db.query(TeamMembership).filter(
+                TeamMembership.user_id.in_(ids)
+            ).delete(synchronize_session=False)
+            db.query(Team).filter(Team.id == team.id).delete(synchronize_session=False)
+            db.query(User).filter(User.id.in_(ids)).delete(synchronize_session=False)
+            db.commit()
             db.close()
 
-        self.assertEqual(stored["added"], 0)
-        self.assertEqual(stored["failed"], 1)
+        self.assertEqual(stored["failed"], 1, stored)
         self.assertIn("listing_id", str(stored.get("first_error")))
 
     def test_sync_all_surfaces_the_failure(self):
