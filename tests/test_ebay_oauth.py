@@ -73,6 +73,14 @@ class EbayAuthorizeUrlTest(unittest.TestCase):
         self.assertIn(
             "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly", scope)
 
+    def test_the_fulfillment_scope_is_requested(self):
+        """Every sync reads ACTIVE listings only, so orders are the single source
+        of sold data on eBay. Without this scope a sale never reaches the
+        dashboard and has to be marked by hand."""
+        scope = self._query()["scope"][0]
+        self.assertIn(
+            "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly", scope)
+
     def test_no_buy_scope_is_requested(self):
         """The app has been granted no buy.* scope, so requesting one would make
         eBay reject the whole authorize request."""

@@ -99,6 +99,9 @@ class EtsyAuthorizationUrlTest(unittest.TestCase):
         # every sync silently reports zero listings.
         self.assertIn("listings_r", query["scope"][0])
         self.assertIn("shops_r", query["scope"][0])
+        # transactions_r is what the Receipts API needs, and receipts are the only
+        # way to see that something sold and for how much.
+        self.assertIn("transactions_r", query["scope"][0])
 
     def test_missing_challenge_is_refused_rather_than_silently_broken(self):
         """The original bug produced a plausible-looking URL that Etsy rejected,

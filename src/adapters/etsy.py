@@ -82,7 +82,12 @@ class EtsyAdapter(MarketplaceAdapter):
         # has no shop_id, and /v3/application/users/{id}/shops returns 403
         # without it. Requesting only listings_r meant the shop could never be
         # found, so every sync silently reported 0 listings.
-        scopes = "listings_r shops_r"
+        #
+        # transactions_r is what the Receipts API needs — the only way to see an
+        # order, and so the only way to learn that something SOLD and for how
+        # much. Without it a sale never reaches the dashboard and has to be
+        # marked by hand.
+        scopes = "listings_r shops_r transactions_r"
 
         params = {
             "response_type": "code",

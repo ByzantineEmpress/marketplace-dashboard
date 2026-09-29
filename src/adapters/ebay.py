@@ -126,6 +126,10 @@ class eBayAdapter(MarketplaceAdapter):
         #                                GetItem's HitCount was deprecated by eBay,
         #                                but the Analytics traffic report still
         #                                reports LISTING_VIEWS_TOTAL.
+        #   sell.fulfillment.readonly  — "View your order fulfillments". Orders are
+        #                                the only source of SOLD data: every sync
+        #                                reads active listings, so without this a
+        #                                sale on eBay never reaches the dashboard.
         #
         # Deliberately NOT requested: anything under /buy/. The Buy API (Browse)
         # would carry titles and photos too, but eBay has not granted this app any
@@ -136,6 +140,7 @@ class eBayAdapter(MarketplaceAdapter):
             "https://api.ebay.com/oauth/api_scope/sell.listing.read",
             "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
             "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly",
+            "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
         ]
 
         params = {
