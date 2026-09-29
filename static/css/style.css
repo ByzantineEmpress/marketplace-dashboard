@@ -735,9 +735,27 @@ code {
     color: var(--accent-text);
 }
 
-/* Grouped card: a linked-item accent edge so groups read as one unit. */
+/* Grouped card: a linked-item accent edge plus a fanned stack of two cards
+   behind it, so a group reads as several listings piled together. The stack is
+   drawn with box-shadow (not clipped by the card's overflow) and kept within the
+   grid gap. */
 .listing-card--group {
     border-left: 3px solid var(--accent);
+    box-shadow:
+        var(--shadow-sm),
+        5px 5px 0 -1px var(--bg-elevated),
+        5px 5px 0 0 var(--border-strong),
+        10px 10px 0 -1px var(--bg-elevated),
+        10px 10px 0 0 var(--border-strong);
+}
+
+.listing-card--group:hover {
+    box-shadow:
+        var(--shadow-md),
+        5px 5px 0 -1px var(--bg-elevated),
+        5px 5px 0 0 var(--border-strong),
+        10px 10px 0 -1px var(--bg-elevated),
+        10px 10px 0 0 var(--border-strong);
 }
 
 /* Sold on one channel, still live elsewhere — actionable, so it gets an alert
