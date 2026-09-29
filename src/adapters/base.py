@@ -463,6 +463,8 @@ class MarketplaceAdapter(ABC):
                 price_cents = int(sale.get("price_cents") or 0)
                 currency = sale.get("currency") or "CAD"
                 title = sale.get("title") or ""
+                image_url = sale.get("image_url") or ""
+                images = sale.get("images") or ([image_url] if image_url else [])
 
                 if existing:
                     existing.is_sold = True
@@ -481,6 +483,10 @@ class MarketplaceAdapter(ABC):
                         )
                     ):
                         existing.title = title
+                    # Only fill a missing picture; never clobber one the user set.
+                    if image_url and not existing.image_url:
+                        existing.image_url = image_url
+                        existing.images_json = images
                     existing.updated_at = datetime.utcnow()
                     recorded += 1
                 else:
@@ -491,6 +497,8 @@ class MarketplaceAdapter(ABC):
                         price_cents=price_cents,
                         price_raw=f"{currency} {price_cents / 100:.2f}",
                         currency=currency,
+                        image_url=image_url or None,
+                        images_json=images or None,
                         status="sold",
                         is_sold=True,
                         sold_at=sold_at,

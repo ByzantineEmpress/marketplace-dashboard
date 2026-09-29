@@ -29,6 +29,7 @@ import httpx
 
 from src.adapters.base import MarketplaceAdapter, _cred
 from src.database import SessionLocal
+from src.models import Listing
 from src.config import config
 
 # eBay API base URL (production)
@@ -667,9 +668,68 @@ class eBayAdapter(MarketplaceAdapter):
                         "recorded": 0, "created": 0,
                         "error": f"eBay orders failed: {exc}"}
 
+        # Look the pictures up before recording, but never let that cost us the
+        # sale itself: a missing photo is cosmetic, a missing sale is not.
+        try:
+            self._attach_sale_images(db, sales, headers, token["access_token"], marketplace)
+        except Exception as exc:
+            self.last_error = f"eBay sale images failed: {exc}"
+
         applied = self.record_sales(db, sales, owner_user_id=user_id)
         return {"supported": True, "success": True, "fetched": len(sales),
                 "recorded": applied["recorded"], "created": applied["created"]}
+
+    def _attach_sale_images(self, db, sales: List[dict], browse_headers: dict,
+                            access_token: str, marketplace: str) -> int:
+        """Give each sale a photo, so a sold card is not a blank tile.
+
+        Orders carry no images, so each item has to be looked up. Browse answers
+        for these ended listings and returns the clean s-l1600 URL; the Trading
+        API GetItem is the fallback because Browse 404s for some items.
+
+        Items whose picture is already stored are skipped, so a repeated sync does
+        not re-fetch every sale.
+        """
+        import time
+
+        if not sales:
+            return 0
+
+        ids = [s["platform_listing_id"] for s in sales if s.get("platform_listing_id")]
+        already = set()
+        if ids:
+            already = {
+                row[0]
+                for row in db.query(Listing.platform_listing_id).filter(
+                    Listing.platform == self.PLATFORM,
+                    Listing.platform_listing_id.in_(ids),
+                    Listing.image_url.isnot(None),
+                    Listing.image_url != "",
+                ).all()
+            }
+
+        attached = 0
+        for sale in sales:
+            item_id = sale.get("platform_listing_id")
+            if not item_id or item_id in already or sale.get("image_url"):
+                continue
+
+            detail = self._fetch_browse_item(item_id, browse_headers)
+            if detail.get("image_url"):
+                sale["image_url"] = detail["image_url"]
+                sale["images"] = detail.get("images") or [detail["image_url"]]
+                attached += 1
+                time.sleep(0.1)
+                continue
+
+            fallback = self._fetch_getitem(item_id, access_token, marketplace)
+            if fallback.get("image_url"):
+                sale["image_url"] = fallback["image_url"]
+                sale["images"] = fallback.get("images") or [fallback["image_url"]]
+                attached += 1
+            time.sleep(0.1)
+
+        return attached
 
     def _sales_from_order(self, order: dict) -> List[dict]:
         """One entry per order line item, shaped for record_sales().
@@ -754,7 +814,19 @@ class eBayAdapter(MarketplaceAdapter):
                     watchers = int((wc.text or "0").strip())
                 except (ValueError, TypeError):
                     watchers = 0
-            return {"watchers_count": watchers}
+
+            # Pictures come along for free in this response, which matters
+            # because orders carry none and Browse 404s for some items.
+            pictures = [(p.text or "").strip() for p in root.findall(f".//{ns}PictureURL")]
+            pictures = [p for p in pictures if p]
+            title_el = root.find(f".//{ns}Title")
+
+            return {
+                "watchers_count": watchers,
+                "image_url": pictures[0] if pictures else "",
+                "images": pictures,
+                "title": (title_el.text or "").strip() if title_el is not None else "",
+            }
         except Exception:
             return {}
 

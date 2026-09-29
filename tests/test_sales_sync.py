@@ -165,6 +165,82 @@ class RecordSalesTest(unittest.TestCase):
         self.db.refresh(row)
         self.assertEqual(row.title, "My own careful title")
 
+    # -- pictures --
+
+    def test_a_recorded_sale_keeps_its_picture(self):
+        url = "https://i.ebayimg.com/images/g/HOA/s-l1600.jpg"
+        self.adapter.record_sales(self.db, [{
+            "platform_listing_id": "800590825148", "title": "ASUS GTX 1080",
+            "price_cents": 4500, "currency": "CAD", "sold_at": None,
+            "image_url": url, "images": [url],
+        }], owner_user_id=self.user.id)
+
+        row = self.db.query(Listing).filter_by(
+            platform="ebay", platform_listing_id="800590825148").first()
+        self.assertEqual(row.image_url, url)
+        self.assertEqual(row.images_json, [url])
+
+    def test_a_missing_picture_is_filled_and_an_existing_one_kept(self):
+        row = self._listing("800570000003", title="No photo yet")
+        self.adapter.record_sales(self.db, [{
+            "platform_listing_id": "800570000003", "title": "x",
+            "price_cents": 100, "currency": "CAD", "sold_at": None,
+            "image_url": "https://first.jpg", "images": ["https://first.jpg"],
+        }], owner_user_id=self.user.id)
+        self.db.refresh(row)
+        self.assertEqual(row.image_url, "https://first.jpg")
+
+        # A later run must not clobber a picture the row already has.
+        self.adapter.record_sales(self.db, [{
+            "platform_listing_id": "800570000003", "title": "x",
+            "price_cents": 100, "currency": "CAD", "sold_at": None,
+            "image_url": "https://second.jpg", "images": ["https://second.jpg"],
+        }], owner_user_id=self.user.id)
+        self.db.refresh(row)
+        self.assertEqual(row.image_url, "https://first.jpg")
+
+    def test_attach_images_only_fetches_what_is_missing(self):
+        row = self._listing("800570000010", title="Already photographed")
+        row.image_url = "https://i.ebayimg.com/existing.jpg"
+        self.db.commit()
+
+        calls = []
+
+        def fake_browse(item_id, headers):
+            calls.append(item_id)
+            return {"image_url": "https://i.ebayimg.com/new.jpg",
+                    "images": ["https://i.ebayimg.com/new.jpg"]}
+
+        self.adapter._fetch_browse_item = fake_browse
+        sales = [{"platform_listing_id": "800570000010"},
+                 {"platform_listing_id": "800570000011"}]
+        attached = self.adapter._attach_sale_images(self.db, sales, {}, "tok", "EBAY_CA")
+
+        self.assertEqual(attached, 1)
+        # The row that already had a picture must not be looked up again.
+        self.assertEqual(calls, ["800570000011"])
+        self.assertEqual(sales[1]["image_url"], "https://i.ebayimg.com/new.jpg")
+
+    def test_attach_images_falls_back_to_getitem(self):
+        calls = []
+
+        def no_browse(item_id, headers):
+            calls.append(("browse", item_id))
+            return {}
+
+        def fake_getitem(item_id, token, marketplace):
+            calls.append(("getitem", item_id))
+            return {"image_url": "https://fallback.jpg", "images": ["https://fallback.jpg"]}
+
+        self.adapter._fetch_browse_item = no_browse
+        self.adapter._fetch_getitem = fake_getitem
+        sales = [{"platform_listing_id": "800570000012"}]
+        attached = self.adapter._attach_sale_images(self.db, sales, {}, "tok", "EBAY_CA")
+
+        self.assertEqual(attached, 1)
+        self.assertEqual([c[0] for c in calls], ["browse", "getitem"])
+        self.assertEqual(sales[0]["image_url"], "https://fallback.jpg")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
