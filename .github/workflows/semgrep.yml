@@ -98,6 +98,35 @@ jobs:
         # A SARIF-writing problem must not mask the real gate below.
         continue-on-error: true
 
+      # Semgrep writes "suppressions": [{"kind": "inSource"}] and nothing else.
+      # SARIF defaults the missing status to "accepted", but GitHub only honours
+      # the suppression when the field is present, so a nosemgrep would silence
+      # the CLI exit code while the Security tab still opened an alert for it.
+      # Setting it explicitly makes the gate and the dashboard agree.
+      - name: Mark in-source suppressions as accepted
+        if: always() && hashFiles('semgrep.sarif') != ''
+        run: |
+          python - <<'PY'
+          import json
+
+          path = "semgrep.sarif"
+          with open(path, encoding="utf-8") as fh:
+              sarif = json.load(fh)
+
+          marked = 0
+          for run in sarif.get("runs", []):
+              for result in run.get("results", []):
+                  for suppression in result.get("suppressions", []):
+                      if "status" not in suppression:
+                          suppression["status"] = "accepted"
+                          marked += 1
+
+          with open(path, "w", encoding="utf-8") as fh:
+              json.dump(sarif, fh)
+
+          print(f"marked {marked} in-source suppression(s) as accepted")
+          PY
+
       - name: Upload SARIF
         # v4, not v3: v3 is deprecated in December 2026 and GitHub warns on every
         # run that uses it.
