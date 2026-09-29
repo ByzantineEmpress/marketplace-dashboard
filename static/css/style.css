@@ -1846,19 +1846,20 @@ code {
 
 .modal-media {
     width: 100%;
-    /* A fixed 260px height + object-fit:contain letterboxed the photo small
-       with empty space around it. Fill the modal width at 4:3 instead, the same
-       way the listing cards do, so the picture is large and the frame is full. */
+    /* A fixed 260px height + object-fit:contain letterboxed the photo small.
+       Fill the modal width at 4:3 like the listing cards do. It must NOT be a
+       flex container: flex centering fights the image's height:100%, collapsing
+       it to a thin sliver in some browsers. */
     aspect-ratio: 4 / 3;
+    position: relative;
     border-radius: var(--radius);
     overflow: hidden;
     background: var(--bg-inset);
-    display: flex;
-    align-items: center;
-    justify-content: center;
 }
 
 .modal-media img {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
     object-fit: cover;
