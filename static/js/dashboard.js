@@ -948,12 +948,10 @@ document.addEventListener("DOMContentLoaded", () => {
                         loadedListings[listing.id] = { ...listing, ...resData.listing };
                         Object.assign(listing, resData.listing);
 
-                        modalPlatformIcon.innerHTML = renderPlatformBadges(listing.platforms, listing.platform);
-
-                        if (saveCostStatus) saveCostStatus.innerHTML = "<span class='flash flash--success flash--inline'>✓ Saved!</span>";
-                        setTimeout(() => { if (saveCostStatus) saveCostStatus.innerHTML = ""; }, 2500);
-
-                        // Update card in grid if visible
+                        // Refresh the card in the grid, then close the modal.
+                        // Saving is a "done" action, so leaving the modal open
+                        // just meant closing it by hand every time; the updated
+                        // card behind it is the confirmation.
                         const card = document.querySelector(`.listing-card[data-id="${listing.id}"]`);
                         if (card) {
                             const newCardHtml = renderCard(listing);
@@ -965,6 +963,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         }
 
                         loadStats();
+                        closeModal();
                     } else {
                         if (saveCostStatus) saveCostStatus.innerHTML = `<span class='flash flash--error flash--inline'>✗ ${escapeHtml(resData.error || "Save failed")}</span>`;
                     }
