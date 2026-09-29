@@ -98,12 +98,18 @@ jobs:
         # A SARIF-writing problem must not mask the real gate below.
         continue-on-error: true
 
-      # Semgrep writes "suppressions": [{"kind": "inSource"}] and nothing else.
-      # SARIF defaults the missing status to "accepted", but GitHub only honours
-      # the suppression when the field is present, so a nosemgrep would silence
-      # the CLI exit code while the Security tab still opened an alert for it.
-      # Setting it explicitly makes the gate and the dashboard agree.
-      - name: Mark in-source suppressions as accepted
+      # Drop findings that carry an in-source suppression.
+      #
+      # Semgrep marks them rather than removing them: its JSON output omits them
+      # (so the gate ignores them), but the SARIF keeps them with a
+      # "suppressions" entry. GitHub does not honour that entry for third-party
+      # SARIF — it opened an alert anyway — so the two views disagreed: green
+      # build, red Security tab, for a line already assessed as inapplicable.
+      #
+      # Removing them here makes the dashboard report exactly what the gate
+      # reports. The acceptance decision is not hidden: it stays in the source as
+      # the nosemgrep annotation plus its explanation.
+      - name: Drop suppressed findings from the SARIF
         if: always() && hashFiles('semgrep.sarif') != ''
         run: |
           python - <<'PY'
@@ -113,18 +119,17 @@ jobs:
           with open(path, encoding="utf-8") as fh:
               sarif = json.load(fh)
 
-          marked = 0
+          dropped = 0
           for run in sarif.get("runs", []):
-              for result in run.get("results", []):
-                  for suppression in result.get("suppressions", []):
-                      if "status" not in suppression:
-                          suppression["status"] = "accepted"
-                          marked += 1
+              results = run.get("results", [])
+              kept = [r for r in results if not r.get("suppressions")]
+              dropped += len(results) - len(kept)
+              run["results"] = kept
 
           with open(path, "w", encoding="utf-8") as fh:
               json.dump(sarif, fh)
 
-          print(f"marked {marked} in-source suppression(s) as accepted")
+          print(f"dropped {dropped} suppressed finding(s) from the SARIF")
           PY
 
       - name: Upload SARIF
