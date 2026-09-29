@@ -653,35 +653,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     <h4 style="margin: 0; font-size: 13.5px; font-weight: 600;">🏷️ Listed On (Channels &amp; Marketplaces)</h4>
                     <span style="font-size: 11.5px; color: var(--text-muted);">Mark all places where this is active</span>
                 </div>
-                <div class="detail-platforms-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px;">
-                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
-                        <input type="checkbox" class="detail-platform-cb" value="ebay" ${hasPlatform(listing, 'ebay') ? 'checked' : ''}>
-                        <span style="color:#e53238; font-weight:bold;">eBay</span>
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
-                        <input type="checkbox" class="detail-platform-cb" value="etsy" ${hasPlatform(listing, 'etsy') ? 'checked' : ''}>
-                        <span style="color:#F56400; font-weight:bold;">Etsy</span>
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
-                        <input type="checkbox" class="detail-platform-cb" value="facebook" ${hasPlatform(listing, 'facebook') ? 'checked' : ''}>
-                        <span style="color:#1877F2; font-weight:bold;">FB Marketplace</span>
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
-                        <input type="checkbox" class="detail-platform-cb" value="local" ${hasPlatform(listing, 'local') ? 'checked' : ''}>
-                        <span style="color:#10b981; font-weight:bold;">Local / In-Person</span>
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
-                        <input type="checkbox" class="detail-platform-cb" value="poshmark" ${hasPlatform(listing, 'poshmark') ? 'checked' : ''}>
-                        <span style="color:#8E1A34; font-weight:bold;">Poshmark</span>
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
-                        <input type="checkbox" class="detail-platform-cb" value="amazon" ${hasPlatform(listing, 'amazon') ? 'checked' : ''}>
-                        <span style="color:#FF9900; font-weight:bold;">Amazon</span>
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer;">
-                        <input type="checkbox" class="detail-platform-cb" value="craigslist" ${hasPlatform(listing, 'craigslist') ? 'checked' : ''}>
-                        <span style="color:#795548; font-weight:bold;">Craigslist / Kijiji</span>
-                    </label>
+                <div class="platforms-grid detail-platforms-grid">
+                    ${renderPlatformChips(listing, "detail-platform-cb", "")}
                 </div>
             </div>
 
@@ -1746,6 +1719,32 @@ function renderPlatformBadges(platforms, fallback) {
     const list = (Array.isArray(platforms) && platforms.length > 0) ? platforms : (fallback ? [fallback] : []);
     if (list.length === 0) return getPlatformIcon("local");
     return list.map(p => getPlatformIcon(p)).join("");
+}
+
+// Consistent platform selector chips. The previous version was a grid of bare
+// checkboxes with differently-sized coloured labels, which read as scrambled.
+// Each chip has the platform name, a stable checkmark, and a highlighted
+// "checked" state via :has(input:checked).
+function renderPlatformChips(listing, checkboxClass, nameAttr) {
+    const options = [
+        ["ebay", "eBay", "#e53238"],
+        ["etsy", "Etsy", "#F56400"],
+        ["facebook", "FB Marketplace", "#1877F2"],
+        ["local", "Local / In-Person", "#10b981"],
+        ["poshmark", "Poshmark", "#8E1A34"],
+        ["amazon", "Amazon", "#FF9900"],
+        ["craigslist", "Craigslist / Kijiji", "#795548"],
+    ];
+    const name = nameAttr ? `name="${nameAttr}"` : "";
+    return options.map(([value, label, color]) => {
+        const checked = hasPlatform(listing, value) ? "checked" : "";
+        return `
+            <label class="platform-chip">
+                <input type="checkbox" class="${checkboxClass}" value="${value}" ${name} ${checked}>
+                <span class="platform-chip-label" style="color:${color}">${label}</span>
+                <span class="platform-chip-check">✓</span>
+            </label>`;
+    }).join("");
 }
 
 // The grouped-listing section inside the detail modal. Shows every channel the

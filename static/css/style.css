@@ -797,6 +797,87 @@ code {
     cursor: pointer;
 }
 
+/* --- "Listed On" platform selector chips -------------------------
+   Replaces a grid of bare checkboxes whose labels were all different widths,
+   which read as scrambled. Each chip is a uniform, tappable card with the
+   platform name and a stable checkmark. */
+.platforms-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px;
+    padding: 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.platform-chip {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 11px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--bg-elevated);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    min-height: 42px;
+    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+/* The native checkbox is hidden but stays in the DOM for form submission and
+   the save handlers, which read .detail-platform-cb:checked etc. */
+.platform-chip input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    pointer-events: none;
+}
+
+.platform-chip-label {
+    flex: 1;
+    min-width: 0;
+    font-size: 12.5px;
+    font-weight: 650;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.platform-chip-check {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--bg-inset);
+    color: transparent;
+    font-size: 11px;
+    flex-shrink: 0;
+    transition: background 0.15s, color 0.15s;
+}
+
+.platform-chip:has(input:checked) {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    box-shadow: 0 0 0 1px var(--accent);
+}
+
+.platform-chip:has(input:checked) .platform-chip-check {
+    background: var(--accent);
+    color: #fff;
+}
+
+/* On narrow phones, two columns is cleaner than a single overflowing column. */
+@media (max-width: 640px) {
+    .platforms-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
 /* Grouping selection mode */
 .group-action-bar {
     display: flex;
