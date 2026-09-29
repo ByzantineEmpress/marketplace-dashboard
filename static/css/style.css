@@ -722,11 +722,11 @@ code {
 }
 
 /* Sale economics in the detail modal: what the buyer paid, what the marketplace
-   took, what actually arrived, and the profit that follows from it. */
+   took, what actually arrived, and the deductions that turn it into profit. */
 .detail-sale-economics {
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px 16px;
+    flex-direction: column;
+    gap: 4px;
     padding: 8px 10px;
     margin-bottom: 12px;
     border-radius: 6px;
@@ -734,6 +734,14 @@ code {
     border: 1px solid var(--accent);
     font-size: 12px;
     color: var(--text-muted);
+}
+
+/* Each line reads left to right as a sum: the money in, then the deductions,
+   then the result. */
+.detail-sale-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
 }
 
 .detail-sale-economics strong {

@@ -752,7 +752,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 </div>
                 <div class="detail-financial-summary" style="padding: 8px 10px; background: var(--bg-elevated); border: 1px dashed var(--border); border-radius: 6px; font-size: 12px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;">
                     <span>Total Investment: <strong class="detail-total-cost-val">$0.00 CAD</strong></span>
-                    <span>Est. Net Profit: <strong class="detail-net-profit-val" style="color: var(--success);">+$0.00 CAD</strong> <span class="detail-margin-val" style="color: var(--text-muted);">(0%)</span></span>
+                    <span><span class="detail-profit-label">Est. Net Profit</span>: <strong class="detail-net-profit-val" style="color: var(--success);">+$0.00 CAD</strong> <span class="detail-margin-val" style="color: var(--text-muted);">(0%)</span></span>
                 </div>
                 ${renderSaleEconomics(listing)}
                 <div style="display: flex; justify-content: flex-end; align-items: center; gap: 10px;">
@@ -770,6 +770,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const shippingInput = modalBody.querySelector(".detail-shipping-cost-input");
         const totalCostVal = modalBody.querySelector(".detail-total-cost-val");
         const netProfitVal = modalBody.querySelector(".detail-net-profit-val");
+        const profitLabel = modalBody.querySelector(".detail-profit-label");
         const marginVal = modalBody.querySelector(".detail-margin-val");
         const saveCostBtn = modalBody.querySelector(".detail-save-cost-btn");
         const saveCostStatus = modalBody.querySelector(".detail-save-cost-status");
@@ -912,12 +913,25 @@ document.addEventListener("DOMContentLoaded", () => {
             const shippingCost = parseFloat(shippingInput?.value || 0);
             const totalCost = purchasePrice + partsTotal + shippingCost;
             const sellingPrice = parseFloat(sellingInput?.value || 0);
-            const netProfit = sellingPrice - totalCost;
-            const margin = sellingPrice > 0 ? ((netProfit / sellingPrice) * 100).toFixed(1) : "0.0";
+
+            // Once an item has SOLD, the listed price is not its revenue: the
+            // marketplace has already paid out, net of its fee, and that payout is
+            // what profit has to be measured against. Showing a list-price estimate
+            // next to the payout gave two different answers for the same sale.
+            const payout = (listing.net_payout_cents || 0) / 100;
+            const sold = payout > 0;
+            const revenue = sold ? payout : sellingPrice;
+
+            const netProfit = revenue - totalCost;
+            const margin = revenue > 0 ? ((netProfit / revenue) * 100).toFixed(1) : "0.0";
 
             if (totalCostVal) totalCostVal.textContent = `$${totalCost.toFixed(2)} CAD`;
+            if (profitLabel) {
+                profitLabel.textContent = sold ? "Actual Profit / Loss" : "Est. Net Profit";
+            }
             if (netProfitVal) {
-                netProfitVal.textContent = `${netProfit > 0 ? "+" : ""}$${netProfit.toFixed(2)} CAD`;
+                const sign = netProfit > 0 ? "+" : (netProfit < 0 ? "−" : "");
+                netProfitVal.textContent = `${sign}$${Math.abs(netProfit).toFixed(2)} CAD`;
                 netProfitVal.style.color = netProfit >= 0 ? "var(--success)" : "var(--danger)";
             }
             if (marginVal) {
@@ -1998,23 +2012,35 @@ function renderEngagementMetrics(listing) {
 // Marketplace economics for a completed sale. The listed price is not revenue:
 // the marketplace takes a fee, and the buyer's postage was never the seller's to
 // keep. The payout is the only honest basis for profit, so it is shown alongside
-// the numbers that produced it rather than a single unexplained figure.
+// the numbers that produced it.
+//
+// The deduction line matters as much as the total. Showing the payout and then a
+// final figure, with no visible subtraction, reads as though cost of goods and
+// postage were never taken off — and the fees are buried inside the payout, so
+// they need naming too.
 function renderSaleEconomics(listing) {
     const payout = listing.net_payout_cents || 0;
     if (!payout) return "";
     const money = (cents) => `$${((cents || 0) / 100).toFixed(2)}`;
     const fees = listing.fees_cents || 0;
     const charged = listing.shipping_charged_cents || 0;
-    const cost = (listing.purchase_price_cents || 0) + (listing.parts_cost_cents || 0)
-               + (listing.shipping_cost_cents || 0);
-    const profit = payout - cost;
+    const cogs = (listing.purchase_price_cents || 0) + (listing.parts_cost_cents || 0);
+    const postage = listing.shipping_cost_cents || 0;
+    const profit = payout - cogs - postage;
     const color = profit >= 0 ? "var(--success)" : "var(--danger)";
     return `
         <div class="detail-sale-economics">
-            <span>Sale ${money(listing.price_cents)} + postage ${money(charged)}</span>
-            <span>Marketplace fees −${money(fees)}</span>
-            <span>Net payout <strong>${money(payout)}</strong></span>
-            <span>Actual profit <strong style="color:${color}">${profit >= 0 ? "+" : "−"}${money(Math.abs(profit))}</strong></span>
+            <div class="detail-sale-line">
+                <span>Sale ${money(listing.price_cents)} + postage ${money(charged)}</span>
+                <span>Marketplace fees −${money(fees)}</span>
+                <span>= Payout <strong>${money(payout)}</strong></span>
+            </div>
+            <div class="detail-sale-line">
+                <span>− Cost of goods ${money(cogs)}</span>
+                <span>− Postage you paid ${money(postage)}</span>
+                <span>= ${profit >= 0 ? "Actual profit" : "Actual loss"}
+                    <strong style="color:${color}">${profit >= 0 ? "+" : "−"}${money(Math.abs(profit))}</strong></span>
+            </div>
         </div>`;
 }
 
@@ -2145,22 +2171,22 @@ function renderCard(listing) {
     // Once the cost is known — including a deliberate $0 from "got it free" —
     // the profit is real and always shown, so a free item no longer displays no
     // cost information at all.
+    // Everything spent on a sale: cost of goods plus the postage the seller paid.
+    // Shown as its own figure so the profit is visibly the payout less this, rather
+    // than a number that appears from nowhere.
+    const costsOnSale = (listing.total_cost_cents || 0) + (listing.shipping_cost_cents || 0);
+
     const costLine = missingCost
         ? `<div class="card-cost-missing" title="No purchase price recorded for this listing">No COGS recorded — profit unknown</div>`
         : `
                     <div class="card-cost-line">
-                        <span>${hasPayout
-                            ? `Payout: $${(payout / 100).toFixed(2)}`
-                            : (isFree && !hasCost ? "Free" : `Cost: ${totalCostText}`)}</span> · <span style="color: ${listing.status === 'written_off' ? 'var(--danger)' : (hasPayout ? (actualProfit >= 0 ? 'var(--success)' : 'var(--danger)') : profitColor)}; font-weight: 500;">
-                            ${listing.status === 'written_off'
-                                ? `Loss: -$${(listing.total_cost || 0).toFixed(2)} CAD`
-                                : (hasPayout
-                                    ? `Actual: ${actualProfit >= 0 ? "+" : "−"}$${Math.abs(actualProfit).toFixed(2)} CAD`
-                                    : `Net: ${profitSign}$${netProfit.toFixed(2)} CAD`)}
-                        </span>
-                        ${hasPayout && (listing.fees_cents || 0) > 0
-                            ? `<span class="card-fees-note" title="Marketplace fee taken from this sale">· fees −$${((listing.fees_cents || 0) / 100).toFixed(2)}</span>`
-                            : ""}
+                        ${listing.status === 'written_off'
+                            ? `<span>Written off · <span style="color: var(--danger); font-weight: 500;">Loss: −$${(listing.total_cost || 0).toFixed(2)} CAD</span></span>`
+                            : (hasPayout
+                                ? `<span title="What the marketplace paid out, after its fee">Payout $${(payout / 100).toFixed(2)}</span>
+                                   · <span title="Cost of goods plus the postage you paid">Costs $${(costsOnSale / 100).toFixed(2)}</span>
+                                   · <span style="color: ${actualProfit >= 0 ? 'var(--success)' : 'var(--danger)'}; font-weight: 500;" title="Payout less all costs">${actualProfit >= 0 ? 'Profit +' : 'Loss −'}$${Math.abs(actualProfit).toFixed(2)}</span>`
+                                : `<span>${isFree && !hasCost ? "Free" : `Cost: ${totalCostText}`}</span> · <span style="color: ${profitColor}; font-weight: 500;" title="Listed price less costs, before it sells">Est. net: ${profitSign}$${netProfit.toFixed(2)} CAD</span>`)}
                     </div>
                 `;
 
