@@ -723,12 +723,30 @@ code {
 
 /* The bottom line of a sale. Set larger and heavier than the workings beside it
    (payout and costs, at 11.5px) because it is the figure being looked for — the
-   other two are only there to show how it was reached. */
+   other two are only there to show how it was reached.
+   
+   It gets its own line: inline, a long payout or cost pushed it onto a wrap of
+   its own anyway on narrow cards, so the layout was inconsistent between cards. */
 .card-actual-profit {
+    display: block;
+    margin-top: 2px;
     font-size: 14px;
     font-weight: 700;
     letter-spacing: -0.01em;
     font-variant-numeric: tabular-nums;
+}
+
+/* The payout and costs workings, above the profit. */
+.card-cost-working {
+    display: block;
+}
+
+/* An estimated platform fee on a listing that has not sold yet. Muted, and
+   worded as an estimate, because it is derived from this account's past fees
+   rather than quoted by the platform. */
+.card-est-fee {
+    color: var(--text-muted);
+    font-style: italic;
 }
 
 /* Sale economics in the detail modal: what the buyer paid, what the marketplace

@@ -2148,8 +2148,17 @@ function renderCard(listing) {
         : (!((listing.purchase_price_cents || 0) > 0) && !isFree);
     const hasCost = (listing.total_cost_cents || 0) > 0;
     const totalCostText = `$${(listing.total_cost || 0).toFixed(2)} CAD`;
-    const netProfit = listing.net_profit !== undefined ? listing.net_profit : (((listing.price_cents || 0) - (listing.total_cost_cents || 0)) / 100);
-    const profitSign = netProfit > 0 ? "+" : "";
+
+    // Until an item sells there is no payout to reason from, so the best available
+    // figure is the listed price less what it cost — and less the fee the platform
+    // will take, estimated from the rates this account has actually been charged.
+    // Without that last part an active card reads as pure profit.
+    const estFees = listing.est_fees_cents || 0;
+    const estNet = (((listing.price_cents || 0) - (listing.total_cost_cents || 0) - estFees) / 100);
+    const netProfit = listing.net_profit !== undefined && !estFees
+        ? listing.net_profit
+        : estNet;
+    const profitSign = netProfit > 0 ? "+" : (netProfit < 0 ? "−" : "");
     const profitColor = netProfit >= 0 ? "var(--success)" : "var(--danger)";
 
     // A completed sale has real economics: the marketplace's payout is what
@@ -2183,10 +2192,19 @@ function renderCard(listing) {
                         ${listing.status === 'written_off'
                             ? `<span>Written off · <span style="color: var(--danger); font-weight: 500;">Loss: −$${(listing.total_cost || 0).toFixed(2)} CAD</span></span>`
                             : (hasPayout
-                                ? `<span title="What the marketplace paid out, after its fee">Payout $${(payout / 100).toFixed(2)}</span>
-                                   · <span title="Cost of goods plus the postage you paid">Costs $${(costsOnSale / 100).toFixed(2)}</span>
-                                   · <span class="card-actual-profit" style="color: ${actualProfit >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Payout less all costs">${actualProfit >= 0 ? 'Profit +' : 'Loss −'}$${Math.abs(actualProfit).toFixed(2)}</span>`
-                                : `<span>${isFree && !hasCost ? "Free" : `Cost: ${totalCostText}`}</span> · <span style="color: ${profitColor}; font-weight: 500;" title="Listed price less costs, before it sells">Est. net: ${profitSign}$${netProfit.toFixed(2)} CAD</span>`)}
+                                ? `<div class="card-cost-working"><span title="What the marketplace paid out, after its fee">Payout $${(payout / 100).toFixed(2)}</span>
+                                   · <span title="Cost of goods plus the postage you paid">Costs $${(costsOnSale / 100).toFixed(2)}</span></div>
+                                   <div class="card-actual-profit" style="color: ${actualProfit >= 0 ? 'var(--success)' : 'var(--danger)'};" title="Payout less all costs">${actualProfit >= 0 ? 'Profit +' : 'Loss −'}$${Math.abs(actualProfit).toFixed(2)} CAD</div>`
+                                : `<div class="card-cost-working"><span>${isFree && !hasCost ? "Free" : `Cost: ${totalCostText}`}</span>${
+                                       estFees
+                                           ? ` · <span class="card-est-fee" title="${
+                                                 listing.est_fee_basis === "category"
+                                                     ? "Estimated from the fees this category has actually cost you"
+                                                     : "Estimated from the fees this platform has actually cost you"
+                                             } — ${((listing.est_fee_rate || 0) * 100).toFixed(1)}% of the listed price">Est. fees −$${(estFees / 100).toFixed(2)}</span>`
+                                           : ""
+                                   }</div>
+                                   <div class="card-actual-profit" style="color: ${profitColor};" title="Listed price less costs and the estimated platform fee">Est. net: ${profitSign}$${Math.abs(netProfit).toFixed(2)} CAD</div>`)}
                     </div>
                 `;
 

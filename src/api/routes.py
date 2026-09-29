@@ -1802,6 +1802,75 @@ async def set_user_admin(
 
 # -- Listings --
 
+def _leaf_category(category: str) -> str:
+    """The last segment of a stored category path.
+
+    eBay and Etsy both report a category as a "A|B|C" path. The leaf is the part
+    that decides the fee, so that is the key worth grouping on.
+    """
+    if not category:
+        return ""
+    return category.split("|")[-1].strip()
+
+
+def _observed_fee_rates(db, team_ids) -> dict:
+    """Fee rates as actually charged on this account's completed sales.
+
+    The obvious thing to reach for is the platform's own category fee table. eBay
+    does not expose one, and three routes were tried before accepting that:
+
+      - ``getListingFees`` (Inventory API) prices UNPUBLISHED offers only, so it
+        cannot price a listing that is already live;
+      - ``VerifyAddItem`` (Trading API) does return a ``<Fees>`` container, but
+        only ever the insertion fees — a flat 0.35 across every category and price
+        tested — and never the final value fee, which is the one that matters;
+      - ``GetItem`` returns no ``<Fees>`` at all for an active listing.
+
+    What the API does hand over is the fee it actually charged on each completed
+    sale, and that already folds in the category, the store level and any promoted
+    rate. So the estimate is built from the seller's own results: a rate per
+    category, falling back to the whole platform when a category has no history.
+
+    The rate is fees over item price. Postage the buyer paid is part of what the
+    platform charges on, so it is inside the numerator — leaving it out of the
+    denominator would understate the rate. It is an average, and it is labelled as
+    an estimate wherever it is shown.
+    """
+    from collections import defaultdict
+
+    query = (db.query(Listing.platform, Listing.category, Listing.price_cents,
+                      Listing.fees_cents)
+             .filter(Listing.is_sold.is_(True),
+                     Listing.price_cents > 0,
+                     Listing.fees_cents > 0))
+    if team_ids:
+        query = query.filter(Listing.team_id.in_(team_ids))
+
+    totals = defaultdict(lambda: [0, 0])
+    for platform, category, price, fees in query.all():
+        for key in {(platform, None), (platform, _leaf_category(category))}:
+            totals[key][0] += fees or 0
+            totals[key][1] += price or 0
+
+    return {key: value[0] / value[1] for key, value in totals.items() if value[1] > 0}
+
+
+def _estimated_fees(listing, rates: dict):
+    """A fee estimate for one listing, or ``None`` when there is no basis.
+
+    A category with its own sales history wins over the platform average: the fee
+    genuinely does vary by category, so the closest evidence is the best evidence.
+    """
+    if not listing.price_cents or listing.is_sold:
+        return None
+    rate = rates.get((listing.platform, _leaf_category(listing.category)))
+    if not rate:
+        rate = rates.get((listing.platform, None))
+    if not rate:
+        return None
+    return int(round(listing.price_cents * rate))
+
+
 @api_router.get("/listings")
 async def get_listings(
     platform: str = None,
@@ -1906,10 +1975,25 @@ async def get_listings(
         group_summaries = {gid: _serialise_group(db, gid) for gid in group_ids}
 
     items = []
+    # Fee rates observed on this account's own completed sales, applied to the
+    # listings that have not sold yet so an active card can show a net figure that
+    # has the platform's cut taken off.
+    fee_rates = _observed_fee_rates(db, user_team_ids)
     for l in listings:
         item = l.to_dict()
         item["team_name"] = team_names.get(l.team_id) if l.team_id else "Unassigned"
         item["group_summary"] = group_summaries.get(l.group_id)
+        estimated = _estimated_fees(l, fee_rates)
+        if estimated is not None:
+            item["est_fees_cents"] = estimated
+            item["est_fee_rate"] = round(
+                fee_rates.get((l.platform, _leaf_category(l.category)))
+                or fee_rates.get((l.platform, None)) or 0, 4
+            )
+            item["est_fee_basis"] = (
+                "category" if (l.platform, _leaf_category(l.category)) in fee_rates
+                else "platform"
+            )
         items.append(item)
 
     return {

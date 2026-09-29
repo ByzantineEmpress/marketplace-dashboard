@@ -692,5 +692,118 @@ class EtsyReceiptTest(unittest.TestCase):
         self.assertIsNot(type(self.adapter).sync_sales, MarketplaceAdapter.sync_sales)
 
 
+class EstimatedFeeTest(unittest.TestCase):
+    """An active listing shows a net with the platform's cut taken off.
+
+    eBay exposes no category final-value-fee rate through its API, so the estimate
+    is built from the fees this account has actually been charged: per category
+    where that category has history, per platform otherwise.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        init_db()
+        from src.api.routes import _estimated_fees, _observed_fee_rates  # noqa: F401
+        cls.rates_for = staticmethod(_observed_fee_rates)
+        cls.estimate = staticmethod(_estimated_fees)
+
+    def setUp(self):
+        self.db = SessionLocal()
+        self.user = User(email=f"fees.{secrets.token_hex(4)}@example.com",
+                         name="Fee Tester", provider="google", is_admin=False)
+        self.db.add(self.user)
+        self.db.flush()
+        self.team = Team(name=f"Fees {secrets.token_hex(4)}",
+                         invite_code=secrets.token_urlsafe(16))
+        self.db.add(self.team)
+        self.db.flush()
+        self.db.add(TeamMembership(team_id=self.team.id, user_id=self.user.id, role="owner"))
+        self.db.commit()
+
+    def tearDown(self):
+        tid = self.team.id
+        self.db.rollback()
+        self.db.query(Listing).filter(Listing.team_id == tid).delete(synchronize_session=False)
+        self.db.query(TeamMembership).filter(TeamMembership.team_id == tid).delete(synchronize_session=False)
+        self.db.query(Team).filter(Team.id == tid).delete(synchronize_session=False)
+        self.db.query(User).filter(User.id == self.user.id).delete(synchronize_session=False)
+        self.db.commit()
+        self.db.close()
+
+    def _listing(self, **kw):
+        kw.setdefault("platform", "ebay")
+        kw.setdefault("currency", "CAD")
+        kw.setdefault("title", "Thing")
+        row = Listing(team_id=self.team.id, **kw)
+        self.db.add(row)
+        self.db.commit()
+        return row
+
+    def test_the_rate_comes_from_what_was_actually_charged(self):
+        """110.00 sold, 26.54 of fees -> 24.1%, which the next listing inherits."""
+        self._listing(platform_listing_id="a", status="sold", is_sold=True,
+                      price_cents=11000, fees_cents=2654,
+                      category="Computers|GPUs")
+        rates = self.rates_for(self.db, [self.team.id])
+        leaf = "GPUs"
+        self.assertAlmostEqual(rates[("ebay", leaf)], 2654 / 11000, places=6)
+
+    def test_a_category_rate_beats_the_platform_average(self):
+        """Category is what the fee actually depends on, so its own history wins."""
+        self._listing(platform_listing_id="a", status="sold", is_sold=True,
+                      price_cents=10000, fees_cents=1000, category="Computers|GPUs")
+        self._listing(platform_listing_id="b", status="sold", is_sold=True,
+                      price_cents=10000, fees_cents=3000, category="Cameras|VCRs")
+
+        rates = self.rates_for(self.db, [self.team.id])
+        self.assertAlmostEqual(rates[("ebay", "GPUs")], 0.10, places=6)
+        self.assertAlmostEqual(rates[("ebay", "VCRs")], 0.30, places=6)
+        # Platform-wide blends both.
+        self.assertAlmostEqual(rates[("ebay", None)], 0.20, places=6)
+
+        gpu = self._listing(platform_listing_id="c", status="active",
+                            price_cents=5000, category="Computers|GPUs")
+        self.assertEqual(self.estimate(gpu, rates), 500)
+
+    def test_a_category_with_no_history_falls_back_to_the_platform(self):
+        self._listing(platform_listing_id="a", status="sold", is_sold=True,
+                      price_cents=10000, fees_cents=2000, category="Computers|GPUs")
+        rates = self.rates_for(self.db, [self.team.id])
+
+        unknown = self._listing(platform_listing_id="b", status="active",
+                                price_cents=10000, category="Cameras|Something New")
+        self.assertEqual(self.estimate(unknown, rates), 2000)
+
+    def test_history_from_another_platform_is_never_borrowed(self):
+        """eBay's fee is not Etsy's, so a new Etsy listing must not inherit one."""
+        self._listing(platform_listing_id="a", status="sold", is_sold=True,
+                      price_cents=10000, fees_cents=2500, category="Computers|GPUs")
+        rates = self.rates_for(self.db, [self.team.id])
+
+        etsy = self._listing(platform="etsy", platform_listing_id="b", status="active",
+                             price_cents=10000, category="Computers|GPUs")
+        self.assertIsNone(self.estimate(etsy, rates))
+
+    def test_no_estimate_without_a_basis(self):
+        self.assertEqual(self.rates_for(self.db, [self.team.id]), {})
+        row = self._listing(platform_listing_id="a", status="active", price_cents=10000)
+        self.assertIsNone(self.estimate(row, {}))
+
+    def test_a_sold_listing_is_not_given_an_estimate(self):
+        """Its fee is already known, so an estimate would compete with the truth."""
+        self._listing(platform_listing_id="a", status="sold", is_sold=True,
+                      price_cents=10000, fees_cents=2500, category="Computers|GPUs")
+        rates = self.rates_for(self.db, [self.team.id])
+        sold = self.db.query(Listing).filter(Listing.team_id == self.team.id).first()
+        self.assertIsNone(self.estimate(sold, rates))
+
+    def test_a_listing_with_no_price_gets_no_estimate(self):
+        self._listing(platform_listing_id="a", status="sold", is_sold=True,
+                      price_cents=10000, fees_cents=2500, category="Computers|GPUs")
+        rates = self.rates_for(self.db, [self.team.id])
+        free = self._listing(platform_listing_id="b", status="active", price_cents=0)
+        self.assertIsNone(self.estimate(free, rates))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
