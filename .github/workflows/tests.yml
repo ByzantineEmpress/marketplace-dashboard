@@ -88,6 +88,7 @@ jobs:
           # is documented in README.md as an end-to-end check to run by hand.
           SUITES="
             tests/test_api_client.py
+            tests/test_ebay_deletion.py
             tests/test_ebay_oauth.py
             tests/test_email_verification.py
             tests/test_google_callback.py

@@ -482,6 +482,36 @@ class User(Base):
         }
 
 
+class EbayAccountDeletion(Base):
+    """A Marketplace Account Deletion notification received from eBay.
+
+    eBay requires any application using User tokens to accept these and to
+    actually erase the person's data. Recording each one gives a durable audit
+    trail (logs alone are lost when the container is replaced) and means a
+    notification we could not match yet is still actioned later rather than
+    silently dropped.
+
+    Only the notification's identifiers are kept, never the eiasToken itself:
+    that is another handle on the person whose data we were asked to delete.
+    """
+
+    __tablename__ = "ebay_account_deletions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    notification_id = Column(String(120), nullable=True, index=True)
+    topic = Column(String(80), nullable=True)
+
+    # eBay's identifiers for the person who asked for deletion.
+    username = Column(String(120), nullable=True, index=True)
+    ebay_user_id = Column(String(120), nullable=True, index=True)
+
+    event_date = Column(String(40), nullable=True)
+    # How many stored eBay connections this notification disconnected.
+    accounts_disconnected = Column(Integer, nullable=False, default=0)
+
+    received_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
 class RateLimitEvent(Base):
     """One recorded rate-limited action, used to enforce limits across workers.
 

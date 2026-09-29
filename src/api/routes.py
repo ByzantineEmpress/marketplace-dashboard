@@ -1397,6 +1397,83 @@ async def oauth_callback(platform: str, request: Request):
     response.delete_cookie(oauth_pkce.VERIFIER_COOKIE)
     return response
 
+# -- eBay Marketplace Account Deletion notifications --
+#
+# Public by design: eBay calls these server-to-server with no auth cookie, and
+# they MUST stay reachable or eBay eventually marks the application
+# non-compliant and disables the keyset (which is what blocked connecting eBay).
+
+@api_router.get("/ebay/account-deletion")
+async def ebay_account_deletion_verify(request: Request):
+    """Answer eBay's endpoint-verification challenge.
+
+    eBay GETs ``?challenge_code=<random>`` and expects a 200 with
+    ``{"challengeResponse": "<sha256 hex>"}`` where the hash is over
+    challengeCode + verificationToken + endpoint, in that order.
+    """
+    from src import ebay_notifications
+    from src.config import config
+
+    challenge_code = request.query_params.get("challenge_code", "")
+    token = (config.EBAY_VERIFICATION_TOKEN or "").strip()
+
+    if not token:
+        # Cannot be verified without the secret; tell eBay the setup is not
+        # complete rather than hashing an empty token (which would never match).
+        return JSONResponse(
+            status_code=503,
+            content={"error": "verification token is not configured"},
+        )
+
+    if not challenge_code:
+        return JSONResponse(status_code=400, content={"error": "challenge_code is required"})
+
+    response_hash = ebay_notifications.challenge_response(challenge_code, token)
+    return JSONResponse(content={"challengeResponse": response_hash})
+
+
+@api_router.post("/ebay/account-deletion")
+async def ebay_account_deletion_notification(request: Request):
+    """Receive and acknowledge an account-deletion notification.
+
+    eBay requires the callback to answer immediately with a 2xx, otherwise it
+    retries. The payload is recorded for audit and, on a best-effort match,
+    stored eBay connections naming this person are disconnected and their tokens
+    cleared.
+    """
+    from src import ebay_notifications
+    from src.database import SessionLocal
+    from src.models import EbayAccountDeletion
+
+    try:
+        payload = await request.json()
+    except Exception:
+        # Malformed body: still acknowledge so eBay stops retrying. Nothing to
+        # action, so nothing is recorded.
+        return JSONResponse(status_code=200, content={"status": "acknowledged"})
+
+    info = ebay_notifications.parse_notification(payload)
+
+    db = SessionLocal()
+    try:
+        disconnected = ebay_notifications.disconnect_matching_ebay_accounts(
+            db, info["username"], info["user_id"])
+
+        record = EbayAccountDeletion(
+            notification_id=info["notification_id"] or None,
+            topic=info["topic"] or None,
+            username=info["username"] or None,
+            ebay_user_id=info["user_id"] or None,
+            event_date=info["event_date"] or None,
+            accounts_disconnected=disconnected,
+        )
+        db.add(record)
+        db.commit()
+    finally:
+        db.close()
+
+    return JSONResponse(status_code=200, content={"status": "acknowledged"})
+
 @api_router.post("/auth/logout")
 async def logout(request: Request):
     """Clear the auth cookie and drop the session from the database."""

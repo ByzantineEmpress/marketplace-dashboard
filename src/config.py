@@ -57,6 +57,17 @@ class Config:
     # eBay "redirect URL name". Required for the authorize URL: eBay takes the
     # RuName as redirect_uri and looks up the real callback URL from it.
     EBAY_RUNAME: str = ""
+
+    # -- eBay Marketplace Account Deletion notifications --
+    # eBay will not enable a keyset that uses User tokens until an HTTPS
+    # endpoint for account-deletion notifications is registered and verified.
+    # This token is a secret you invent and paste into the eBay portal; it is
+    # hashed with the challenge code and the endpoint URL (in that order) to
+    # prove we control the endpoint.
+    EBAY_VERIFICATION_TOKEN: str = ""
+    # Override only if the public endpoint differs from APP_BASE_URL; the hash
+    # is computed over this exact string, so it must match the portal entry.
+    EBAY_DELETION_ENDPOINT: str = ""
     ETSY_API_KEY: str = ""
     ETSY_API_SECRET: str = ""
 
