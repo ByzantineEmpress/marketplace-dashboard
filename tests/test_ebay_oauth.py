@@ -81,6 +81,14 @@ class EbayAuthorizeUrlTest(unittest.TestCase):
         self.assertIn(
             "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly", scope)
 
+    def test_the_finances_scope_is_requested(self):
+        """Note that this is the FULL sell.finances scope, not the readonly one:
+        that is what eBay lists as granted, and requesting an ungranted scope makes
+        eBay reject the whole authorize request."""
+        scope = self._query()["scope"][0]
+        self.assertIn("https://api.ebay.com/oauth/api_scope/sell.finances", scope)
+        self.assertNotIn("sell.finances.readonly", scope)
+
     def test_no_buy_scope_is_requested(self):
         """The app has been granted no buy.* scope, so requesting one would make
         eBay reject the whole authorize request."""

@@ -125,6 +125,76 @@ class EbayOrderParsingTest(unittest.TestCase):
         self.assertEqual(res["fetched"], 0)
 
 
+class EbayShippingCostTest(unittest.TestCase):
+    """Actual postage paid, which only the payment ledger records.
+
+    An order says what the BUYER paid for shipping, never what the seller paid to
+    ship it. A label bought through eBay is its own money movement.
+    """
+
+    def setUp(self):
+        self.adapter = get_adapter("ebay")
+
+    def _with_ledger(self, transactions):
+        import src.adapters.ebay as ebay_mod
+
+        class Resp:
+            status_code = 200
+            def json(self):
+                return {"transactions": transactions}
+
+        real = ebay_mod.httpx.get
+        ebay_mod.httpx.get = lambda *a, **kw: Resp()
+        try:
+            return self.adapter._fetch_shipping_costs(
+                {"Authorization": "Bearer t"}, "2026-01-01T00:00:00.000Z")
+        finally:
+            ebay_mod.httpx.get = real
+
+    def test_label_transactions_become_a_cost_per_order(self):
+        costs = self._with_ledger([
+            {"transactionType": "SHIPPING_LABEL", "orderId": "02-1",
+             "amount": {"value": "-15.50", "currency": "CAD"}},
+            # A sale is money IN and must not be mistaken for postage.
+            {"transactionType": "SALE", "orderId": "02-1",
+             "amount": {"value": "32.0", "currency": "CAD"}},
+            {"transactionType": "SHIPPING_LABEL", "orderId": "02-1",
+             "amount": {"value": "-3.25", "currency": "CAD"}},
+            {"transactionType": "REFUND", "orderId": "02-2",
+             "amount": {"value": "-5.0", "currency": "CAD"}},
+        ])
+        # Labels are money out, so the amount is negative and the cost is its
+        # magnitude, summed across every label on the order.
+        self.assertEqual(costs, {"02-1": 1875})
+
+    def test_a_denied_scope_leaves_costs_empty(self):
+        import src.adapters.ebay as ebay_mod
+
+        class Denied:
+            status_code = 403
+
+        real = ebay_mod.httpx.get
+        ebay_mod.httpx.get = lambda *a, **kw: Denied()
+        try:
+            self.assertEqual(
+                self.adapter._fetch_shipping_costs({"Authorization": "Bearer t"}, "x"), {})
+        finally:
+            ebay_mod.httpx.get = real
+
+    def test_an_order_without_a_label_gets_no_cost(self):
+        """Shipping outside eBay must leave the manual figure alone rather than
+        asserting a zero."""
+        sales = [{"order_id": "o1", "price_cents": 1000},
+                 {"order_id": "o1", "price_cents": 3000},
+                 {"order_id": "o2", "price_cents": 500}]
+        attached = self.adapter._attach_shipping_costs(sales, {"o1": 1000, "o2": 0})
+        self.assertEqual(attached, 2)
+        self.assertEqual(sales[0]["shipping_cost_cents"], 250)
+        self.assertEqual(sales[1]["shipping_cost_cents"], 750)
+        self.assertEqual(sales[0]["shipping_cost_cents"] + sales[1]["shipping_cost_cents"], 1000)
+        self.assertNotIn("shipping_cost_cents", sales[2])
+
+
 class RecordSalesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -238,6 +308,35 @@ class RecordSalesTest(unittest.TestCase):
         self.db.commit()
         self.db.refresh(row)
         self.assertEqual(row.actual_profit_cents, 4189 - 1000 - 1500)
+
+    def test_a_marketplace_label_cost_is_recorded(self):
+        """A label bought through the platform is authoritative, so it is applied
+        and the profit drops to match."""
+        row = self._listing("800657064070", title="Shipped by eBay", price=3200)
+        self.adapter.record_sales(self.db, [{
+            "platform_listing_id": "800657064070", "title": "Shipped by eBay",
+            "price_cents": 3200, "currency": "CAD", "sold_at": None,
+            "net_payout_cents": 4189, "shipping_cost_cents": 1550,
+        }], owner_user_id=self.user.id)
+
+        self.db.refresh(row)
+        self.assertEqual(row.shipping_cost_cents, 1550)
+        self.assertEqual(row.actual_profit_cents, 4189 - 1550)
+
+    def test_a_manual_postage_figure_survives_when_no_label_is_recorded(self):
+        """Shipping outside the platform must not be reset to zero by a sync."""
+        row = self._listing("800657064071", title="Shipped myself", price=3200)
+        row.shipping_cost_cents = 1200
+        self.db.commit()
+
+        self.adapter.record_sales(self.db, [{
+            "platform_listing_id": "800657064071", "title": "Shipped myself",
+            "price_cents": 3200, "currency": "CAD", "sold_at": None,
+            "net_payout_cents": 4189,
+        }], owner_user_id=self.user.id)
+
+        self.db.refresh(row)
+        self.assertEqual(row.shipping_cost_cents, 1200)
 
     def test_actual_profit_falls_back_to_the_price_before_a_sale(self):
         """An active listing has no payout yet, so the listed price is the best

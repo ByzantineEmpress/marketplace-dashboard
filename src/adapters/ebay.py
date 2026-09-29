@@ -149,6 +149,14 @@ class eBayAdapter(MarketplaceAdapter):
         #                                the only source of SOLD data: every sync
         #                                reads active listings, so without this a
         #                                sale on eBay never reaches the dashboard.
+        #   sell.finances              — "View and manage your payment and order
+        #                                information". Orders say what the BUYER
+        #                                paid for shipping, never what the seller
+        #                                paid to ship it: a label bought through
+        #                                eBay is a separate money movement that
+        #                                only the Finances API records. Without it
+        #                                every sale looks more profitable than it
+        #                                was, by the cost of its label.
         #
         # Deliberately NOT requested: anything under /buy/. The Buy API (Browse)
         # would carry titles and photos too, but eBay has not granted this app any
@@ -160,6 +168,7 @@ class eBayAdapter(MarketplaceAdapter):
             "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
             "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly",
             "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
+            "https://api.ebay.com/oauth/api_scope/sell.finances",
         ]
 
         params = {
@@ -690,9 +699,88 @@ class eBayAdapter(MarketplaceAdapter):
         except Exception as exc:
             self.last_error = f"eBay sale images failed: {exc}"
 
+        # Actual postage paid, from the payment ledger. Same reasoning: a missing
+        # figure must not cost us the sale.
+        try:
+            shipping_by_order = self._fetch_shipping_costs(headers, since)
+            self._attach_shipping_costs(sales, shipping_by_order)
+        except Exception as exc:
+            self.last_error = f"eBay shipping costs failed: {exc}"
+
         applied = self.record_sales(db, sales, owner_user_id=user_id)
         return {"supported": True, "success": True, "fetched": len(sales),
                 "recorded": applied["recorded"], "created": applied["created"]}
+
+    def _fetch_shipping_costs(self, headers: dict, since: str) -> dict:
+        """What was actually paid for postage, per order, from the Finances API.
+
+        An order records what the BUYER paid for shipping, never what the seller
+        paid to ship it. A label bought through eBay is a separate money movement
+        that only the Finances API reports, so without this every sale looks more
+        profitable than it was by the cost of its label.
+
+        Returns ``{orderId: cents}``. Empty on failure, so a missing scope or an
+        empty ledger leaves the figure at zero rather than breaking a sync.
+        """
+        costs: Dict[str, int] = {}
+        offset = 0
+        page_size = 100
+        try:
+            while offset < 2000:
+                resp = httpx.get(
+                    f"{EBAY_API_BASE}/sell/finances/v1/transaction",
+                    headers=headers,
+                    params={"limit": page_size, "offset": offset,
+                            "filter": f"transactionDate:[{since}..]"},
+                    timeout=60,
+                )
+                if resp.status_code != 200:
+                    return costs
+                transactions = (resp.json() or {}).get("transactions") or []
+                for txn in transactions:
+                    if not isinstance(txn, dict):
+                        continue
+                    if (txn.get("transactionType") or "").upper() != "SHIPPING_LABEL":
+                        continue
+                    order_id = txn.get("orderId") or ""
+                    if not order_id:
+                        continue
+                    # A label is money OUT, so the amount is negative; the cost is
+                    # its magnitude.
+                    costs[order_id] = costs.get(order_id, 0) + abs(_money(txn.get("amount")))
+                if len(transactions) < page_size:
+                    break
+                offset += page_size
+        except Exception:
+            return costs
+        return costs
+
+    def _attach_shipping_costs(self, sales: List[dict], shipping_by_order: dict) -> int:
+        """Spread each order's label cost across its line items.
+
+        Split by line value with the last line taking the remainder, so the parts
+        add back up to what was actually paid.
+        """
+        grouped: Dict[str, List[dict]] = {}
+        for sale in sales:
+            grouped.setdefault(sale.get("order_id") or "", []).append(sale)
+
+        attached = 0
+        for order_id, group in grouped.items():
+            total = shipping_by_order.get(order_id, 0)
+            if not total:
+                continue
+            basis = sum(s.get("price_cents") or 0 for s in group) or 1
+            left = total
+            for index, sale in enumerate(group):
+                if index == len(group) - 1:
+                    share = left
+                else:
+                    share = int(round(total * (sale.get("price_cents") or 0) / basis))
+                    left -= share
+                sale["shipping_cost_cents"] = max(0, share)
+                attached += 1
+        return attached
 
     def _attach_sale_images(self, db, sales: List[dict], browse_headers: dict,
                             access_token: str, marketplace: str) -> int:

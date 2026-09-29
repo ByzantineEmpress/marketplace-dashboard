@@ -465,12 +465,15 @@ class MarketplaceAdapter(ABC):
                 title = sale.get("title") or ""
                 image_url = sale.get("image_url") or ""
                 images = sale.get("images") or ([image_url] if image_url else [])
-                # Marketplace economics. shipping_cost_cents is deliberately NOT
-                # taken from a sale: it is what the seller paid out of pocket,
-                # which the marketplace does not know.
+                # Marketplace economics. Fees and the payout come from the sale.
+                # shipping_cost_cents only does when the marketplace actually
+                # recorded a label purchase — that figure is authoritative, and it
+                # is absent when the seller shipped outside the platform, in which
+                # case whatever they entered by hand must survive.
                 fees_cents = int(sale.get("fees_cents") or 0)
                 shipping_charged_cents = int(sale.get("shipping_charged_cents") or 0)
                 net_payout_cents = int(sale.get("net_payout_cents") or 0)
+                shipping_cost_cents = int(sale.get("shipping_cost_cents") or 0)
 
                 if existing:
                     existing.is_sold = True
@@ -499,6 +502,8 @@ class MarketplaceAdapter(ABC):
                         existing.shipping_charged_cents = shipping_charged_cents
                     if net_payout_cents:
                         existing.net_payout_cents = net_payout_cents
+                    if shipping_cost_cents:
+                        existing.shipping_cost_cents = shipping_cost_cents
                     existing.updated_at = datetime.utcnow()
                     recorded += 1
                 else:
@@ -513,6 +518,7 @@ class MarketplaceAdapter(ABC):
                         images_json=images or None,
                         fees_cents=fees_cents,
                         shipping_charged_cents=shipping_charged_cents,
+                        shipping_cost_cents=shipping_cost_cents,
                         net_payout_cents=net_payout_cents,
                         status="sold",
                         is_sold=True,
