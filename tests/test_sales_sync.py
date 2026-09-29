@@ -626,6 +626,64 @@ class EtsyReceiptTest(unittest.TestCase):
             etsy_mod.httpx.get = real
         self.assertEqual([r["receipt_id"] for r in receipts], [1])
 
+    def test_label_costs_attach_to_the_right_receipt(self):
+        """Etsy records a label against the LABEL id, not the receipt, so the
+        link is made by matching the label's purchase time to the receipt's
+        shipment notification."""
+        entries = [
+            # Label charge, then an adjustment to the SAME label days later.
+            {"amount": -13036, "reference_type": "shipping_label",
+             "reference_id": 1, "ledger_type": "shipping_labels", "create_date": 1789228357},
+            {"amount": -607, "reference_type": "shipping_label",
+             "reference_id": 1, "ledger_type": "shipping_label_adjustment",
+             "create_date": 1789473617},
+            {"amount": -1803, "reference_type": "shipping_label",
+             "reference_id": 2, "ledger_type": "shipping_labels", "create_date": 1789062361},
+            # A sale is money IN and must never count as postage.
+            {"amount": 41027, "reference_type": "shop_payment",
+             "ledger_type": "PAYMENT_GROSS", "create_date": 1789184394},
+        ]
+        receipts = [
+            {"receipt_id": 111, "created_timestamp": 1789184386,
+             "shipments": [{"shipment_notification_timestamp": 1789228800}]},
+            {"receipt_id": 222, "created_timestamp": 1789042240,
+             "shipments": [{"shipment_notification_timestamp": 1789062400}]},
+        ]
+
+        costs = self.adapter._label_costs_by_receipt(entries, receipts)
+
+        # The adjustment rides along with its own label rather than landing on
+        # whichever receipt happens to be nearest.
+        self.assertEqual(costs[111], 13036 + 607)
+        self.assertEqual(costs[222], 1803)
+
+    def test_an_unrelated_label_is_left_unattached(self):
+        """A label bought days from any shipment must not be pinned on the
+        nearest receipt: that would silently inflate its postage."""
+        entries = [{"amount": -5000, "reference_type": "shipping_label",
+                    "reference_id": 9, "ledger_type": "shipping_labels",
+                    "create_date": 1788000000}]
+        receipts = [{"receipt_id": 111, "created_timestamp": 1789184386,
+                     "shipments": [{"shipment_notification_timestamp": 1789228800}]}]
+        self.assertEqual(self.adapter._label_costs_by_receipt(entries, receipts), {})
+
+    def test_label_cost_reaches_the_sale(self):
+        sale = self.adapter._sales_from_receipt(
+            self.RECEIPT, {4172298896: 6590}, {4172298896: 13643})[0]
+        self.assertEqual(sale["shipping_cost_cents"], 13643)
+        # The buyer's postage and the seller's label are different figures.
+        self.assertEqual(sale["shipping_charged_cents"], 10297)
+
+    def test_a_multi_item_receipt_splits_label_costs_exactly(self):
+        receipt = dict(self.RECEIPT, transactions=[
+            dict(self.RECEIPT["transactions"][0], listing_id=111,
+                 price={"amount": 10000, "divisor": 100}),
+            dict(self.RECEIPT["transactions"][0], listing_id=222,
+                 price={"amount": 30000, "divisor": 100}),
+        ])
+        sales = self.adapter._sales_from_receipt(receipt, {}, {4172298896: 1000})
+        self.assertEqual(sum(s["shipping_cost_cents"] for s in sales), 1000)
+
     def test_etsy_implements_its_own_sales_sync(self):
         """It used to inherit the base no-op, which is why Etsy solds never
         appeared even though the scope was granted."""

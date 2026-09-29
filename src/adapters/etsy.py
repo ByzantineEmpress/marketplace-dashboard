@@ -429,13 +429,18 @@ class EtsyAdapter(MarketplaceAdapter):
                     "recorded": 0, "created": 0}
 
         try:
-            fees_by_receipt = self._fetch_receipt_fees(headers, shop_id, days)
+            entries = self._fetch_ledger_entries(headers, shop_id, days)
         except Exception:
-            fees_by_receipt = {}
+            entries = []
+
+        fees_by_receipt = self._fees_by_receipt(entries)
+        shipping_by_receipt = self._label_costs_by_receipt(entries, receipts)
 
         sales = []
         for receipt in receipts:
-            sales.extend(self._sales_from_receipt(receipt, fees_by_receipt))
+            sales.extend(
+                self._sales_from_receipt(receipt, fees_by_receipt, shipping_by_receipt)
+            )
 
         # Receipts carry no photos, and a sold item is not in the active-listing
         # sync, so its picture has to be fetched here or the sold card is blank.
@@ -541,28 +546,22 @@ class EtsyAdapter(MarketplaceAdapter):
             offset += page_size
         return receipts
 
-    def _fetch_receipt_fees(self, headers: dict, shop_id, days: int) -> dict:
-        """Etsy's own charges, per receipt, from the payment ledger.
+    def _fetch_ledger_entries(self, headers: dict, shop_id, days: int) -> list:
+        """The shop's payment ledger, newest window first.
 
-        Etsy does not put fees on the receipt. The ledger does, and a fee entry
-        points at its receipt either directly (reference_type "receipt") or
-        through the receipt's transaction (reference_type "transaction"), so both
-        keys are used.
-
-        The ledger refuses a window wider than 31 days, so it is walked a month at
-        a time.
+        Etsy refuses a window wider than 31 days, so it is walked a month at a
+        time. Walking newest-first means a shop with a long history still gets its
+        recent months before the page cap is reached.
         """
         import time as _time
 
-        fees: Dict[int, int] = {}
+        span = max(1, min(int(days), 900)) * 86400
         now = int(_time.time())
-        window = 30 * 86400
+        entries = []
         newest = now
 
-        # Newest first, so a shop with a long history still gets its recent fees
-        # before the page cap is reached.
-        while newest > now - max(1, min(int(days), 900)) * 86400:
-            oldest = max(newest - window, now - max(1, min(int(days), 900)) * 86400)
+        while newest > now - span:
+            oldest = max(newest - 30 * 86400, now - span)
             offset = 0
             while offset < 1000:
                 resp = httpx.get(
@@ -575,23 +574,102 @@ class EtsyAdapter(MarketplaceAdapter):
                 if resp.status_code != 200:
                     break
                 batch = (resp.json() or {}).get("results") or []
-                for entry in batch:
-                    amount = int(entry.get("amount") or 0)
-                    # Only money OUT is a cost; PAYMENT_GROSS is the buyer's money.
-                    if amount >= 0:
-                        continue
-                    ref_type = (entry.get("reference_type") or "").lower()
-                    ref_id = entry.get("reference_id")
-                    if ref_type == "receipt" and ref_id:
-                        fees[int(ref_id)] = fees.get(int(ref_id), 0) + abs(amount)
+                entries.extend(batch)
                 if len(batch) < 100:
                     break
                 offset += 100
             newest = oldest
 
+        return entries
+
+    @staticmethod
+    def _fees_by_receipt(entries: list) -> dict:
+        """Etsy's charges per receipt.
+
+        Etsy does not put fees on the receipt. The ledger does, and a fee entry
+        points at its receipt either directly (reference_type "receipt": sales
+        tax, operating fee, shipping transaction, VAT) or through the receipt's
+        transaction, so both keys are used.
+        """
+        fees: Dict[int, int] = {}
+        for entry in entries:
+            amount = int(entry.get("amount") or 0)
+            # Only money OUT is a cost; PAYMENT_GROSS is the buyer's money.
+            if amount >= 0:
+                continue
+            if (entry.get("reference_type") or "").lower() != "receipt":
+                continue
+            ref_id = entry.get("reference_id")
+            if ref_id:
+                fees[int(ref_id)] = fees.get(int(ref_id), 0) + abs(amount)
         return fees
 
-    def _sales_from_receipt(self, receipt: dict, fees_by_receipt: dict) -> List[dict]:
+    @staticmethod
+    def _label_costs_by_receipt(entries: list, receipts: list) -> dict:
+        """What the seller actually paid for postage, per receipt.
+
+        Etsy records a label as its own ledger movement referencing the LABEL, not
+        the receipt, so there is no id to join on. Two things make the link
+        reliable: the label's charges (the label itself, its tax and any later
+        adjustment all share one label id) are totalled first, then matched to the
+        receipt whose shipment notification is nearest in time.
+
+        The match is bounded to a day either side. Without the bound, an
+        adjustment made days later lands on whichever receipt happens to be
+        closest and silently inflates its cost.
+        """
+        labels: Dict[object, dict] = {}
+        for entry in entries:
+            amount = int(entry.get("amount") or 0)
+            if amount >= 0:
+                continue
+            if (entry.get("reference_type") or "").lower() != "shipping_label":
+                continue
+            ref_id = entry.get("reference_id")
+            if ref_id is None:
+                continue
+            record = labels.setdefault(ref_id, {"amount": 0, "time": None})
+            record["amount"] += abs(amount)
+            # The label charge itself fixes the purchase time. A later adjustment
+            # must not drag the total away from the receipt it belongs to.
+            stamp = entry.get("create_date")
+            if (entry.get("ledger_type") or "") == "shipping_labels":
+                record["time"] = stamp
+            elif not record["time"]:
+                record["time"] = stamp
+
+        if not labels:
+            return {}
+
+        ships = []
+        for receipt in receipts:
+            stamps = [
+                (s or {}).get("shipment_notification_timestamp")
+                for s in (receipt.get("shipments") or [])
+            ]
+            stamps = [s for s in stamps if s]
+            # Fall back to the receipt's own time for an order not yet marked
+            # shipped: the label is normally bought around then.
+            when = min(stamps) if stamps else receipt.get("created_timestamp")
+            if when:
+                ships.append((int(when), receipt.get("receipt_id")))
+
+        if not ships:
+            return {}
+
+        window = 24 * 3600
+        costs: Dict[int, int] = {}
+        for record in labels.values():
+            when = record["time"]
+            if not when:
+                continue
+            gap, receipt_id = min((abs(stamp - when), rid) for stamp, rid in ships)
+            if gap <= window and receipt_id is not None:
+                costs[int(receipt_id)] = costs.get(int(receipt_id), 0) + record["amount"]
+        return costs
+
+    def _sales_from_receipt(self, receipt: dict, fees_by_receipt: dict,
+                            shipping_by_receipt: dict = None) -> List[dict]:
         """One entry per receipt line item, shaped for record_sales().
 
         ``grandtotal`` is what the buyer actually paid, which is the honest
@@ -612,6 +690,10 @@ class EtsyAdapter(MarketplaceAdapter):
         # because tax Etsy remits is charged out again here.
         gross_cents = int((receipt.get("grandtotal") or {}).get("amount") or 0)
         payout_cents = max(0, gross_cents - fees_cents)
+        # Postage the seller paid, from the label they bought for this order. This
+        # is a separate out-of-pocket cost and is NOT part of the payout, which
+        # already includes the shipping the BUYER was charged.
+        label_cents = int((shipping_by_receipt or {}).get(int(receipt_id) if receipt_id else 0, 0))
 
         lines = [t for t in (receipt.get("transactions") or []) if t.get("listing_id")]
         if not lines:
@@ -625,18 +707,21 @@ class EtsyAdapter(MarketplaceAdapter):
 
         sales = []
         fee_left, ship_left, payout_left = fees_cents, shipping_total, payout_cents
+        label_left = label_cents
         for index, (line, line_total) in enumerate(zip(lines, totals)):
             last = index == len(lines) - 1
             if last:
-                fee, ship, payout = fee_left, ship_left, payout_left
+                fee, ship, payout, label = fee_left, ship_left, payout_left, label_left
             else:
                 share = line_total / basis
                 fee = int(round(fees_cents * share))
                 ship = int(round(shipping_total * share))
                 payout = int(round(payout_cents * share))
+                label = int(round(label_cents * share))
                 fee_left -= fee
                 ship_left -= ship
                 payout_left -= payout
+                label_left -= label
 
             sales.append({
                 "platform_listing_id": str(line.get("listing_id")),
@@ -648,6 +733,7 @@ class EtsyAdapter(MarketplaceAdapter):
                 "order_id": str(receipt_id) if receipt_id else None,
                 "fees_cents": max(0, fee),
                 "shipping_charged_cents": max(0, ship),
+                "shipping_cost_cents": max(0, label),
                 "net_payout_cents": max(0, payout),
             })
         return sales
