@@ -545,5 +545,194 @@ class StoreFailureIsReportedTest(unittest.TestCase):
         self.assertIn("could not be", source)
 
 
+class EtsyOnlyFetchesOwnShopTest(unittest.TestCase):
+    """A sync must never read Etsy's public marketplace feed.
+
+    The adapter called /v3/application/listings/active first, which returns
+    listings from every seller on Etsy. On a real account that imported 900
+    pages of other people's inventory. Nothing else in the suite would notice,
+    because a fake HTTP layer will happily answer any URL.
+    """
+
+    def setUp(self):
+        from src.adapters import get_adapter
+
+        self.adapter = get_adapter("etsy")
+
+    def test_the_public_feed_is_never_requested(self):
+        import src.adapters.etsy as etsy_mod
+
+        requested = []
+
+        class FakeResp:
+            status_code = 200
+            def json(self):
+                return {"count": 0, "results": []}
+
+        def fake_get(url, **kwargs):
+            requested.append(url)
+            return FakeResp()
+
+        real = etsy_mod.httpx.get
+        etsy_mod.httpx.get = fake_get
+        try:
+            self.adapter._fetch_shop_listings({"x-api-key": "k:s"}, "64488261", 25)
+        finally:
+            etsy_mod.httpx.get = real
+
+        self.assertTrue(requested, "no request was made at all")
+        for url in requested:
+            self.assertNotIn(
+                "listings/active", url,
+                "the public marketplace feed was requested",
+            )
+            self.assertIn(f"/shops/64488261/listings", url)
+
+    def test_the_source_no_longer_mentions_the_public_endpoint_as_a_call(self):
+        """Stops a future edit reintroducing it, and keeps the docstrings honest."""
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parent.parent
+                  / "src" / "adapters" / "etsy.py").read_text(encoding="utf-8")
+
+        for line in source.splitlines():
+            stripped = line.strip()
+            if "listings/active" in stripped:
+                # Allowed only when explaining that it is not used.
+                self.assertTrue(
+                    stripped.startswith("#") or stripped.startswith("-")
+                    or stripped.startswith("*") or "NOT used" in stripped
+                    or "PUBLIC" in stripped or "public" in stripped,
+                    f"a live reference to the public feed remains: {stripped}",
+                )
+
+    def test_foreign_listings_are_dropped_if_etsy_ever_returns_them(self):
+        """Defence in depth: even a correct endpoint must not leak other sellers."""
+        import src.adapters.etsy as etsy_mod
+
+        class FakeResp:
+            status_code = 200
+            def json(self):
+                return {
+                    "count": 2,
+                    "results": [
+                        {"listing_id": 1, "shop_id": 64488261, "title": "Mine",
+                         "state": "active"},
+                        {"listing_id": 2, "shop_id": 99999999, "title": "Someone else's",
+                         "state": "active"},
+                    ],
+                }
+
+        def fake_get(url, **kwargs):
+            return FakeResp()
+
+        real = etsy_mod.httpx.get
+        etsy_mod.httpx.get = fake_get
+        try:
+            rows = self.adapter._fetch_shop_listings({"x-api-key": "k:s"}, "64488261", 25)
+        finally:
+            etsy_mod.httpx.get = real
+            self.adapter.last_error = None
+
+        titles = [r["title"] for r in rows]
+        self.assertIn("Mine", titles)
+        self.assertNotIn("Someone else's", titles)
+
+    def test_only_active_listings_are_requested(self):
+        """Sold and expired listings are not inventory."""
+        import src.adapters.etsy as etsy_mod
+
+        params_seen = []
+
+        class FakeResp:
+            status_code = 200
+            def json(self):
+                return {"count": 0, "results": []}
+
+        def fake_get(url, **kwargs):
+            params_seen.append(kwargs.get("params", {}))
+            return FakeResp()
+
+        real = etsy_mod.httpx.get
+        etsy_mod.httpx.get = fake_get
+        try:
+            self.adapter._fetch_shop_listings({"x-api-key": "k:s"}, "64488261", 25)
+        finally:
+            etsy_mod.httpx.get = real
+
+        self.assertTrue(params_seen)
+        self.assertEqual(params_seen[0].get("state"), "active")
+
+
+class EtsyImageImportTest(unittest.TestCase):
+    """Images must actually come through.
+
+    Etsy returns four sized URLs per image and no plain "url" field, but the
+    normaliser read img.get("url"), so every imported listing had a blank photo.
+    """
+
+    def setUp(self):
+        from src.adapters import get_adapter
+
+        self.adapter = get_adapter("etsy")
+
+    def _image(self, rank, image_id):
+        return {
+            "listing_id": 1,
+            "listing_image_id": image_id,
+            "rank": rank,
+            "url_75x75": f"https://i.etsystatic.com/{image_id}/il_75x75.jpg",
+            "url_170x135": f"https://i.etsystatic.com/{image_id}/il_170x135.jpg",
+            "url_570xN": f"https://i.etsystatic.com/{image_id}/il_570xN.jpg",
+            "url_fullxfull": f"https://i.etsystatic.com/{image_id}/il_fullxfull.jpg",
+        }
+
+    def _raw(self, images):
+        return {
+            "listing_id": 4580441182,
+            "title": "Something",
+            "description": "",
+            "state": "active",
+            "price": {"amount": 1000, "divisor": 100, "currency_code": "CAD"},
+            "images": images,
+        }
+
+    def test_image_urls_are_extracted(self):
+        row = self.adapter._normalise_listing(self._raw([self._image(1, "aaa")]))
+        self.assertTrue(row["image_url"], "image_url was empty")
+        # Etsy's sized variant appears in the filename as il_570xN.
+        self.assertIn("il_570xN", row["image_url"])
+        self.assertEqual(len(row["images_json"]), 1)
+
+    def test_the_primary_image_follows_etsys_rank(self):
+        """Rank 1 is the seller's chosen primary, regardless of array order."""
+        row = self.adapter._normalise_listing(
+            self._raw([self._image(2, "second"), self._image(1, "first")]))
+        self.assertIn("first", row["image_url"])
+        self.assertEqual(row["images_json"][0], row["image_url"])
+
+    def test_a_listing_with_no_images_is_not_an_error(self):
+        row = self.adapter._normalise_listing(self._raw([]))
+        self.assertEqual(row["image_url"], "")
+        self.assertEqual(row["images_json"], [])
+
+    def test_an_image_with_no_known_url_field_is_skipped(self):
+        row = self.adapter._normalise_listing(
+            self._raw([{"rank": 1, "listing_image_id": 1}]))
+        self.assertEqual(row["image_url"], "")
+
+    def test_it_falls_back_to_smaller_sizes(self):
+        only_small = {"rank": 1, "url_75x75": "https://x/75.jpg"}
+        row = self.adapter._normalise_listing(self._raw([only_small]))
+        self.assertEqual(row["image_url"], "https://x/75.jpg")
+
+    def test_all_urls_are_storable_columns(self):
+        from src.models import Listing
+
+        row = self.adapter._normalise_listing(self._raw([self._image(1, "a")]))
+        columns = {c.name for c in Listing.__table__.columns}
+        self.assertEqual([k for k in row if k not in columns], [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

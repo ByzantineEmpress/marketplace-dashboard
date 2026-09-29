@@ -4,9 +4,12 @@ Implements the MarketplaceAdapter ABC for Etsy's REST API.
 
 Auth: OAuth 2.0 with Etsy's Seller App access.
 Endpoints used:
-- GET /v3/application/listings/active — get all active listings
-- GET /v3/application/shops/{shop_id}/listings — get listings by shop
-- GET /v3/application/listings/{listing_id} — get details for one listing
+- GET /v3/application/shops/{shop_id}/listings — this shop's active listings
+- GET /v3/application/users/{user_id}/shops — resolve the shop at connect time
+
+Note: /v3/application/listings/active is NOT used. It is Etsy's public
+marketplace-wide feed and returns listings from every seller on Etsy, which is
+not something this application should ever read.
 
 References:
 - https://developers.etsy.com/documentation/apis/reference/shop-listing
@@ -275,11 +278,13 @@ class EtsyAdapter(MarketplaceAdapter):
 
     def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None,
                       user_id=None, credentials: dict = None) -> List[Dict[str, Any]]:
-        """Fetch active Etsy listings via the Open API v3.
+        """Fetch this shop's active Etsy listings.
 
-        Uses:
-        - GET /v3/application/listings/active — all active listings
-        - GET /v3/application/shops/{shop_id}/listings — shop-specific listings
+        Uses only GET /v3/application/shops/{shop_id}/listings.
+
+        The public /v3/application/listings/active feed is deliberately NOT
+        used: it returns listings from every seller on Etsy, and using it once
+        imported 900 pages of other people's inventory.
 
         Paginates through results up to max_results.
         """
@@ -336,15 +341,14 @@ class EtsyAdapter(MarketplaceAdapter):
                 )
                 return []
 
-            listings = []
-
-            # Method 1: Get active listings directly
-            listings = self._fetch_active_listings(headers, shop_id, max_results)
-
-            if not listings:
-                # Method 2: Get listings by shop
-                listings = self._fetch_shop_listings(headers, shop_id, max_results)
-
+            # One source only: this shop's own listings.
+            #
+            # There used to be two "methods", the first of which called Etsy's
+            # public marketplace feed. That is where 900 pages of other people's
+            # listings came from. There is no fallback now: if the shop endpoint
+            # fails, that is reported, because reading the public feed instead
+            # would be far worse than returning nothing.
+            listings = self._fetch_shop_listings(headers, shop_id, max_results)
             return listings
         finally:
             if close_db:
@@ -366,49 +370,21 @@ class EtsyAdapter(MarketplaceAdapter):
             normalised = normalised[:limit]
         return normalised
 
-    def _fetch_active_listings(self, headers: dict, shop_id: str, limit: int) -> List[dict]:
-        """Fetch active listings using the /listings/active endpoint."""
-        listings = []
-        page = 1
-        limit_per_page = 25  # Etsy max per page
-
-        while len(listings) < limit:
-            try:
-                resp = httpx.get(
-                    f"{ETSY_API_BASE}/application/listings/active",
-                    headers=headers,
-                    params={
-                        "page": page,
-                        "limit": min(limit_per_page, limit - len(listings)),
-                    },
-                    timeout=30,
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    results = data.get("results", [])
-                    if not results:
-                        break
-                    # Normalise here: the raw Etsy object is not a Listing row.
-                    listings.extend(self._normalise_results(results))
-                    if len(results) < limit_per_page:
-                        break  # Last page
-                    page += 1
-                else:
-                    # If /listings/active returns 404, try shop-specific endpoint
-                    break
-            except httpx.HTTPError:
-                break
-
-        return listings[:limit]
-
     def _fetch_shop_listings(self, headers: dict, shop_id: str, limit: int) -> List[dict]:
-        """Fetch listings for a specific shop.
+        """Fetch this shop's own active listings.
 
         Endpoint: GET /v3/application/shops/{shop_id}/listings
+
+        Only ever this endpoint. The previous version called
+        /v3/application/listings/active first, which is Etsy's PUBLIC
+        marketplace-wide feed: it returns listings from every seller on Etsy.
+        Run against a real account it pulled in 900 pages of other people's
+        listings. A sync must never read anything but the connected shop.
         """
         listings = []
         page = 1
         limit_per_page = 25
+        seen_ids = set()
 
         while len(listings) < limit:
             try:
@@ -418,22 +394,48 @@ class EtsyAdapter(MarketplaceAdapter):
                     params={
                         "page": page,
                         "limit": min(limit_per_page, limit - len(listings)),
+                        # Only this shop's live listings; sold and expired ones
+                        # are not inventory.
+                        "state": "active",
                     },
                     timeout=30,
                 )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    results = data.get("results", [])
-                    if not results:
-                        break
-                    # Normalise here: the raw Etsy object is not a Listing row.
-                    listings.extend(self._normalise_results(results))
-                    if len(results) < limit_per_page:
-                        break  # Last page
-                    page += 1
-                else:
+                if resp.status_code != 200:
+                    self.last_error = (
+                        f"Etsy returned HTTP {resp.status_code} for the shop's "
+                        f"listings: {resp.text[:160]}"
+                    )
                     break
-            except httpx.HTTPError:
+
+                data = resp.json()
+                results = data.get("results") or []
+                if not results:
+                    break
+
+                # Defensive: the shop endpoint should only ever return this
+                # shop's listings, but a mismatched response must not leak
+                # another seller's rows into the database.
+                mine = [r for r in results
+                        if str((r or {}).get("shop_id", "")) == str(shop_id)]
+                if len(mine) != len(results):
+                    skipped = len(results) - len(mine)
+                    self.last_error = (
+                        f"{skipped} listing(s) were not from this shop and were "
+                        f"skipped. Tell the maintainer: Etsy returned foreign rows."
+                    )
+
+                fresh = [r for r in mine
+                         if str(r.get("listing_id")) not in seen_ids]
+                if not fresh:
+                    break  # No new rows; stop rather than loop forever.
+                seen_ids.update(str(r.get("listing_id")) for r in fresh)
+
+                listings.extend(self._normalise_results(fresh))
+                if len(results) < limit_per_page:
+                    break  # Last page
+                page += 1
+            except httpx.HTTPError as exc:
+                self.last_error = f"Could not reach Etsy: {exc}"
                 break
 
         return listings[:limit]
@@ -474,10 +476,27 @@ class EtsyAdapter(MarketplaceAdapter):
                         else:
                             price_raw = str(price_data)
 
-            # Extract images
+            # Extract images, ordered by Etsy's own rank so the primary photo is
+            # stable between syncs.
+            #
+            # Etsy returns four sizes per image and NO plain "url" field, so the
+            # previous img.get("url") always produced "" and every imported
+            # listing had a blank photo. url_570xN is the sensible default:
+            # large enough for the card, small enough not to waste bandwidth.
+            raw_images = [i for i in (item.get("images") or []) if isinstance(i, dict)]
+            raw_images.sort(key=lambda i: i.get("rank", 0) or 0)
+
             images = []
-            for img in (item.get("images") or [])[:5]:  # Limit to 5 images
-                images.append(img.get("url", ""))
+            for img in raw_images[:10]:
+                url = (
+                    img.get("url_570xN")
+                    or img.get("url_fullxfull")
+                    or img.get("url_170x135")
+                    or img.get("url_75x75")
+                    or img.get("url", "")
+                )
+                if url:
+                    images.append(url)
 
             # Extract category path
             category = ""
