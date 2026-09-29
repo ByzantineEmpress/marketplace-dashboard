@@ -2270,3 +2270,96 @@ function getPlatformIcon(platform) {
     };
     return icons[p] || `<span class="platform-icon">${escapeHtml(platform || '')}</span>`;
 }
+
+// ---------------------------------------------------------------------------
+// Card density and back-to-top.
+//
+// Both are pure presentation, independent of the listing data, so they sit
+// outside the data-loading flow: changing density must not refetch anything, and
+// the back-to-top button has to work whatever the page length.
+// ---------------------------------------------------------------------------
+(function initViewControls() {
+    const STORAGE_KEY = "marketplace.cardView";
+    const VIEWS = ["comfortable", "compact"];
+    const toggleButtons = Array.prototype.slice.call(
+        document.querySelectorAll(".view-toggle-btn")
+    );
+
+    function applyView(view) {
+        const chosen = VIEWS.indexOf(view) >= 0 ? view : "comfortable";
+        document.body.dataset.cardView = chosen;
+        toggleButtons.forEach(function (btn) {
+            // aria-pressed rather than a class alone: it is the state the
+            // assistive tech reads, and the styling hangs off the same attribute
+            // so the two can never disagree.
+            btn.setAttribute("aria-pressed", String(btn.dataset.view === chosen));
+        });
+        return chosen;
+    }
+
+    function remember(view) {
+        try {
+            window.localStorage.setItem(STORAGE_KEY, view);
+        } catch (e) {
+            // Private browsing or storage disabled. The toggle still works for
+            // this view; it just will not be remembered.
+        }
+    }
+
+    function recall() {
+        try {
+            return window.localStorage.getItem(STORAGE_KEY);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    applyView(recall());
+
+    toggleButtons.forEach(function (btn) {
+        btn.addEventListener("click", function () {
+            remember(applyView(btn.dataset.view));
+        });
+    });
+
+    // -- Back to top --------------------------------------------------------
+    const backToTop = document.getElementById("back-to-top");
+    if (!backToTop) {
+        return;
+    }
+
+    // About a screen and a half. Below that the top is a short flick away and
+    // the button would only be clutter over the inventory.
+    const SHOW_AFTER = 600;
+    let queued = false;
+
+    function syncVisibility() {
+        queued = false;
+        backToTop.hidden = window.scrollY <= SHOW_AFTER;
+    }
+
+    window.addEventListener("scroll", function () {
+        // One update per frame. The check is cheap but scroll fires constantly.
+        if (queued) {
+            return;
+        }
+        queued = true;
+        window.requestAnimationFrame(syncVisibility);
+    }, { passive: true });
+
+    backToTop.addEventListener("click", function () {
+        const reduced = window.matchMedia
+            && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        window.scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" });
+
+        // Scrolling alone does nothing for a keyboard or screen-reader user, so
+        // move focus to the top of the page as well.
+        const heading = document.querySelector("h1");
+        if (heading) {
+            heading.setAttribute("tabindex", "-1");
+            heading.focus({ preventScroll: true });
+        }
+    });
+
+    syncVisibility();
+})();

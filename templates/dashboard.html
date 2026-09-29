@@ -102,6 +102,38 @@
             </label>
         </div>
         <div class="toolbar-right">
+            <!-- Card density. Two buttons rather than a switch: each state is
+                 named by its own icon, so neither has to be inferred from the
+                 other's position. -->
+            <div class="view-toggle" role="group" aria-label="Card size">
+                <button type="button" class="view-toggle-btn" id="view-comfortable"
+                        data-view="comfortable" aria-pressed="true"
+                        title="Comfortable cards">
+                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                        <rect x="1" y="1" width="6" height="6" rx="1"></rect>
+                        <rect x="9" y="1" width="6" height="6" rx="1"></rect>
+                        <rect x="1" y="9" width="6" height="6" rx="1"></rect>
+                        <rect x="9" y="9" width="6" height="6" rx="1"></rect>
+                    </svg>
+                    <span class="sr-only">Comfortable cards</span>
+                </button>
+                <button type="button" class="view-toggle-btn" id="view-compact"
+                        data-view="compact" aria-pressed="false"
+                        title="Compact grid — more listings per screen">
+                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                        <rect x="1" y="1" width="4" height="4" rx="1"></rect>
+                        <rect x="6.5" y="1" width="4" height="4" rx="1"></rect>
+                        <rect x="12" y="1" width="3" height="4" rx="1"></rect>
+                        <rect x="1" y="6.5" width="4" height="4" rx="1"></rect>
+                        <rect x="6.5" y="6.5" width="4" height="4" rx="1"></rect>
+                        <rect x="12" y="6.5" width="3" height="4" rx="1"></rect>
+                        <rect x="1" y="12" width="4" height="3" rx="1"></rect>
+                        <rect x="6.5" y="12" width="4" height="3" rx="1"></rect>
+                        <rect x="12" y="12" width="3" height="3" rx="1"></rect>
+                    </svg>
+                    <span class="sr-only">Compact grid</span>
+                </button>
+            </div>
             <button class="btn btn--sm btn--outline" id="group-mode-btn" title="Select listings to group, or drag one card onto another to group them">🔗 Group Listings</button>
             <button class="btn btn--sm btn--outline" id="open-teams-modal-btn">👥 Teams &amp; Invites</button>
             <button class="btn btn--sm btn--success" id="add-manual-listing-btn">+ Add Listing / Sale</button>
@@ -347,6 +379,16 @@
         </div>
     </div>
 </div>
+
+<!-- Back to top. Hidden until the page has been scrolled a screen or so: on a
+     long inventory the listing grid runs for many screens, and on a phone the
+     scroll back is a lot of swiping. It sits bottom-right, inside thumb reach. -->
+<button type="button" class="back-to-top" id="back-to-top" aria-label="Back to top of page" title="Back to top of page" hidden>
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M8 3.5 3.5 8l1 1L7.2 6.3V13h1.6V6.3L11.5 9l1-1z"></path>
+    </svg>
+</button>
+
 {% endblock %}
 
 {% block extra_scripts %}
