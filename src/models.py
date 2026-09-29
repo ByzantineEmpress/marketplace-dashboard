@@ -199,6 +199,16 @@ class Listing(Base):
     # has entered yet, and the listing stays flagged "No COGS" forever.
     cost_is_free = Column(Boolean, nullable=False, default=False)
 
+    # Marketplace economics of a completed sale. A sale price is not revenue:
+    # the marketplace takes a fee and the buyer's postage is not the seller's to
+    # keep, so profit computed from the listed price alone is always overstated.
+    # The marketplace reports what it actually paid out, which is the only figure
+    # that yields real profit.
+    fees_cents = Column(Integer, nullable=False, default=0)              # marketplace's cut
+    shipping_charged_cents = Column(Integer, nullable=False, default=0)  # buyer paid
+    shipping_cost_cents = Column(Integer, nullable=False, default=0)     # seller paid
+    net_payout_cents = Column(Integer, nullable=False, default=0)        # actually received
+
     # State
     status = Column(String(20), nullable=False, default="active", index=True)
     is_sold = Column(Boolean, nullable=False, default=False, index=True)
@@ -268,6 +278,28 @@ class Listing(Base):
         return (self.price_cents or 0) - self.total_cost_cents
 
     @property
+    def actual_revenue_cents(self) -> int:
+        """What the sale actually brought in.
+
+        The marketplace payout when it is known — fees and the buyer's postage
+        are already accounted for inside that number — otherwise the listed
+        price, which is the best available estimate before a sale completes.
+        """
+        return self.net_payout_cents or self.price_cents or 0
+
+    @property
+    def actual_profit_cents(self) -> int:
+        """Profit after fees, postage and cost of goods.
+
+        Only postage the seller paid out of pocket is subtracted, because the
+        marketplace's payout already has its own fee and the buyer's shipping
+        handled. Packaging and out-of-band labels live in shipping_cost_cents.
+        """
+        return (self.actual_revenue_cents
+                - self.total_cost_cents
+                - (self.shipping_cost_cents or 0))
+
+    @property
     def profit_margin_pct(self) -> float:
         if not self.price_cents or self.price_cents <= 0:
             return 0.0
@@ -307,6 +339,17 @@ class Listing(Base):
             "net_profit_cents": self.net_profit_cents,
             "net_profit": round(self.net_profit_cents / 100, 2),
             "profit_margin_pct": self.profit_margin_pct,
+            "fees_cents": self.fees_cents or 0,
+            "fees": round((self.fees_cents or 0) / 100, 2),
+            "shipping_charged_cents": self.shipping_charged_cents or 0,
+            "shipping_charged": round((self.shipping_charged_cents or 0) / 100, 2),
+            "shipping_cost_cents": self.shipping_cost_cents or 0,
+            "shipping_cost": round((self.shipping_cost_cents or 0) / 100, 2),
+            "net_payout_cents": self.net_payout_cents or 0,
+            "net_payout": round((self.net_payout_cents or 0) / 100, 2),
+            "actual_revenue": round(self.actual_revenue_cents / 100, 2),
+            "actual_profit_cents": self.actual_profit_cents,
+            "actual_profit": round(self.actual_profit_cents / 100, 2),
             "status": self.status,
             "is_sold": bool(self.is_sold),
             "sold_at": self.sold_at.isoformat() if self.sold_at else None,

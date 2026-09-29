@@ -465,6 +465,12 @@ class MarketplaceAdapter(ABC):
                 title = sale.get("title") or ""
                 image_url = sale.get("image_url") or ""
                 images = sale.get("images") or ([image_url] if image_url else [])
+                # Marketplace economics. shipping_cost_cents is deliberately NOT
+                # taken from a sale: it is what the seller paid out of pocket,
+                # which the marketplace does not know.
+                fees_cents = int(sale.get("fees_cents") or 0)
+                shipping_charged_cents = int(sale.get("shipping_charged_cents") or 0)
+                net_payout_cents = int(sale.get("net_payout_cents") or 0)
 
                 if existing:
                     existing.is_sold = True
@@ -487,6 +493,12 @@ class MarketplaceAdapter(ABC):
                     if image_url and not existing.image_url:
                         existing.image_url = image_url
                         existing.images_json = images
+                    if fees_cents:
+                        existing.fees_cents = fees_cents
+                    if shipping_charged_cents:
+                        existing.shipping_charged_cents = shipping_charged_cents
+                    if net_payout_cents:
+                        existing.net_payout_cents = net_payout_cents
                     existing.updated_at = datetime.utcnow()
                     recorded += 1
                 else:
@@ -499,6 +511,9 @@ class MarketplaceAdapter(ABC):
                         currency=currency,
                         image_url=image_url or None,
                         images_json=images or None,
+                        fees_cents=fees_cents,
+                        shipping_charged_cents=shipping_charged_cents,
+                        net_payout_cents=net_payout_cents,
                         status="sold",
                         is_sold=True,
                         sold_at=sold_at,

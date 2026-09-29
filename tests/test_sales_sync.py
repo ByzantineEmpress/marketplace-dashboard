@@ -17,18 +17,30 @@ from src.models import Listing, Team, TeamMembership, User
 
 
 class EbayOrderParsingTest(unittest.TestCase):
-    """A faithful slice of an eBay Fulfillment order response."""
+    """A faithful slice of an eBay Fulfillment order response.
+
+    The money figures are the real ones from a live order: item 32.00 + buyer
+    shipping 19.45 = 51.45, of which eBay took 9.56, leaving a 41.89 payout.
+    """
 
     ORDER = {
         "orderId": "02-15233-11166",
         "creationDate": "2026-09-26T18:00:59.000Z",
         "orderPaymentStatus": "PAID",
+        "pricingSummary": {
+            "priceSubtotal": {"value": "32.0", "currency": "CAD"},
+            "deliveryCost": {"value": "19.45", "currency": "CAD"},
+            "total": {"value": "51.45", "currency": "CAD"},
+        },
+        "totalMarketplaceFee": {"value": "9.56", "currency": "CAD"},
+        "paymentSummary": {"totalDueSeller": {"value": "41.89", "currency": "CAD"}},
         "lineItems": [
             {
                 "legacyItemId": "800657064053",
                 "title": "Memorex 4 Head VHS VCR MVR-4049 Works No Remote",
                 "quantity": 1,
                 "lineItemCost": {"value": "32.0", "currency": "CAD"},
+                "deliveryCost": {"shippingCost": {"value": "19.45", "currency": "CAD"}},
             },
         ],
     }
@@ -45,6 +57,38 @@ class EbayOrderParsingTest(unittest.TestCase):
         self.assertEqual(sale["currency"], "CAD")
         self.assertEqual(sale["title"], "Memorex 4 Head VHS VCR MVR-4049 Works No Remote")
         self.assertEqual(sale["sold_at"].isoformat(), "2026-09-26T18:00:59")
+
+    def test_fees_shipping_and_payout_are_captured(self):
+        """The whole point: a sale price is not revenue. These three make profit
+        real instead of a best case."""
+        sale = self.adapter._sales_from_order(self.ORDER)[0]
+        self.assertEqual(sale["fees_cents"], 956)
+        self.assertEqual(sale["shipping_charged_cents"], 1945)
+        self.assertEqual(sale["net_payout_cents"], 4189)
+        # price + shipping - fees == payout, i.e. the figures reconcile.
+        self.assertEqual(
+            sale["price_cents"] + sale["shipping_charged_cents"] - sale["fees_cents"],
+            sale["net_payout_cents"])
+
+    def test_a_multi_item_order_allocates_money_exactly(self):
+        """Fees and payout are reported per ORDER, so they must be split across
+        the items without losing or inventing a penny."""
+        order = dict(self.ORDER, lineItems=[
+            dict(self.ORDER["lineItems"][0],
+                 legacyItemId="111", lineItemCost={"value": "10.0", "currency": "CAD"},
+                 deliveryCost={}),
+            dict(self.ORDER["lineItems"][0],
+                 legacyItemId="222", lineItemCost={"value": "30.0", "currency": "CAD"},
+                 deliveryCost={}),
+        ])
+        sales = self.adapter._sales_from_order(order)
+        self.assertEqual(len(sales), 2)
+        self.assertEqual(sum(s["fees_cents"] for s in sales), 956)
+        self.assertEqual(sum(s["net_payout_cents"] for s in sales), 4189)
+        self.assertEqual(sum(s["shipping_charged_cents"] for s in sales), 1945)
+        # The 10/30 split should give the smaller item roughly a quarter.
+        self.assertEqual(sales[0]["net_payout_cents"], 1047)
+        self.assertEqual(sales[1]["net_payout_cents"], 4189 - 1047)
 
     def test_line_item_cost_is_taken_as_the_line_total(self):
         """Realised revenue sums price_cents across sold rows, so a per-unit
@@ -63,6 +107,15 @@ class EbayOrderParsingTest(unittest.TestCase):
     def test_a_missing_date_does_not_raise(self):
         order = dict(self.ORDER, creationDate="")
         self.assertIsNone(self.adapter._sales_from_order(order)[0]["sold_at"])
+
+    def test_an_order_with_no_money_blocks_does_not_raise(self):
+        """Nothing here may crash a sync: absent fee data must degrade to zero."""
+        order = {"orderId": "x", "creationDate": "2026-09-01T00:00:00.000Z",
+                 "lineItems": [{"legacyItemId": "9", "title": "t", "quantity": 1,
+                                "lineItemCost": {"value": "5.0"}}]}
+        sale = self.adapter._sales_from_order(order)[0]
+        self.assertEqual(sale["fees_cents"], 0)
+        self.assertEqual(sale["net_payout_cents"], 0)
 
     def test_a_platform_without_a_sales_api_is_a_noop(self):
         """Poshmark and Amazon have no orders API; the route calls sync_sales
@@ -155,6 +208,43 @@ class RecordSalesTest(unittest.TestCase):
         }], owner_user_id=self.user.id)
         self.db.refresh(row)
         self.assertEqual(row.title, "XPG GAMMIX D10 16GB DDR4")
+
+    def test_actual_profit_uses_the_payout_not_the_sale_price(self):
+        """The headline number. A 32.00 sale with a 9.56 fee and no recorded cost
+        is NOT 32.00 of profit."""
+        row = self._listing("800657064053", title="Memorex VCR", price=3200)
+        self.adapter.record_sales(self.db, [{
+            "platform_listing_id": "800657064053", "title": "Memorex VCR",
+            "price_cents": 3200, "currency": "CAD", "sold_at": None,
+            "fees_cents": 956, "shipping_charged_cents": 1945,
+            "net_payout_cents": 4189,
+        }], owner_user_id=self.user.id)
+
+        self.db.refresh(row)
+        self.assertEqual(row.fees_cents, 956)
+        self.assertEqual(row.shipping_charged_cents, 1945)
+        self.assertEqual(row.net_payout_cents, 4189)
+        # Payout is revenue; the sale price is not.
+        self.assertEqual(row.actual_revenue_cents, 4189)
+        self.assertEqual(row.actual_profit_cents, 4189)
+
+    def test_postage_the_seller_paid_is_subtracted(self):
+        """A payout already nets off marketplace fees and the buyer's shipping,
+        so the seller's own postage is the remaining deduction."""
+        row = self._listing("800657064060", title="VCR", price=3200)
+        row.net_payout_cents = 4189
+        row.purchase_price_cents = 1000
+        row.shipping_cost_cents = 1500
+        self.db.commit()
+        self.db.refresh(row)
+        self.assertEqual(row.actual_profit_cents, 4189 - 1000 - 1500)
+
+    def test_actual_profit_falls_back_to_the_price_before_a_sale(self):
+        """An active listing has no payout yet, so the listed price is the best
+        available estimate rather than a zero."""
+        row = self._listing("800570000020", title="Still listed", price=2500)
+        self.assertEqual(row.actual_revenue_cents, 2500)
+        self.assertEqual(row.actual_profit_cents, 2500)
 
     def test_a_real_title_is_not_overwritten(self):
         row = self._listing("800570000001", title="My own careful title")

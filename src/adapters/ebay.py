@@ -34,12 +34,27 @@ from src.config import config
 
 # eBay API base URL (production)
 EBAY_API_BASE = "https://api.ebay.com"
-
 # eBay OAuth token endpoint
 EBAY_OAUTH_TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
 
 # eBay OAuth authorisation URL
 EBAY_AUTH_URL = "https://auth.ebay.com/oauth2/authorize"
+
+
+def _money(value) -> int:
+    """An eBay money object — {"value": "9.56", "currency": "CAD"} — in cents.
+
+    eBay reports every amount as a decimal string, so a bare float() on the
+    string gets the unit right but loses the cent: 9.56 * 100 is 955.9999...
+    and truncating it would lose a penny on every fee.
+    """
+    if not isinstance(value, dict):
+        return 0
+    try:
+        return int(round(float(value.get("value") or 0) * 100))
+    except (TypeError, ValueError):
+        return 0
+
 
 # Supported marketplaces
 EBAY_MARKETPLACES = ["EBAY_US", "EBAY_GB", "EBAY_DE", "EBAY_FR", "EBAY_IT", "EBAY_CA", "EBAY_AU"]
@@ -734,9 +749,13 @@ class eBayAdapter(MarketplaceAdapter):
     def _sales_from_order(self, order: dict) -> List[dict]:
         """One entry per order line item, shaped for record_sales().
 
-        ``lineItemCost`` is the total for the line, so it is used as the revenue
-        figure directly: the dashboard's realised revenue sums price_cents, and
-        using a per-unit price would understate any multi-quantity sale.
+        ``lineItemCost`` is the total for the line, so it doubles as both the
+        sale price and the revenue share.
+
+        Fees and the payout are reported per ORDER, not per item, so they are
+        allocated across the line items by their share of the order. The last
+        line takes the remainder rather than a rounded share, so the parts always
+        add back up to the order total instead of drifting a penny at a time.
         """
         from datetime import datetime
 
@@ -748,24 +767,53 @@ class eBayAdapter(MarketplaceAdapter):
             except ValueError:
                 sold_at = None
 
+        lines = [li for li in (order.get("lineItems") or []) if li.get("legacyItemId")]
+        if not lines:
+            return []
+
+        pricing = order.get("pricingSummary") or {}
+        payment = order.get("paymentSummary") or {}
+        order_fee = _money(order.get("totalMarketplaceFee"))
+        order_shipping = _money(pricing.get("deliveryCost"))
+        order_payout = _money(payment.get("totalDueSeller"))
+        currency = ((pricing.get("total") or {}).get("currency")
+                    or (order.get("totalMarketplaceFee") or {}).get("currency")
+                    or "CAD")
+
+        totals = [_money(li.get("lineItemCost")) for li in lines]
+        basis = sum(totals) or 1
+
         sales = []
-        for line in order.get("lineItems") or []:
-            item_id = str(line.get("legacyItemId") or "")
-            if not item_id:
-                continue
-            cost = line.get("lineItemCost") or {}
-            try:
-                price_cents = int(round(float(cost.get("value") or 0) * 100))
-            except (TypeError, ValueError):
-                price_cents = 0
+        fee_left, ship_left, payout_left = order_fee, order_shipping, order_payout
+        for index, (line, line_total) in enumerate(zip(lines, totals)):
+            last = index == len(lines) - 1
+            if last:
+                fee, ship_alloc, payout = fee_left, ship_left, payout_left
+            else:
+                share = line_total / basis
+                fee = int(round(order_fee * share))
+                ship_alloc = int(round(order_shipping * share))
+                payout = int(round(order_payout * share))
+                fee_left -= fee
+                ship_left -= ship_alloc
+                payout_left -= payout
+
+            # The line's own shipping charge is more precise than the allocated
+            # share when eBay provides it.
+            line_ship = _money((line.get("deliveryCost") or {}).get("shippingCost"))
+            shipping_charged = line_ship if line_ship else ship_alloc
+
             sales.append({
-                "platform_listing_id": item_id,
+                "platform_listing_id": str(line.get("legacyItemId")),
                 "title": line.get("title") or "",
-                "price_cents": price_cents,
-                "currency": cost.get("currency") or "CAD",
+                "price_cents": line_total,
+                "currency": currency,
                 "sold_at": sold_at,
                 "quantity": int(line.get("quantity") or 1),
                 "order_id": order.get("orderId"),
+                "fees_cents": max(0, fee),
+                "shipping_charged_cents": max(0, shipping_charged),
+                "net_payout_cents": max(0, payout),
             })
         return sales
 

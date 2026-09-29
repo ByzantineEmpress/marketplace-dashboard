@@ -733,6 +733,10 @@ document.addEventListener("DOMContentLoaded", () => {
                         <label style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px;">Selling / Listed Price ($ CAD)</label>
                         <input type="number" step="0.01" min="0" class="detail-selling-price-input" value="${((listing.price_cents || 0) / 100).toFixed(2)}" style="width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); color: var(--text);">
                     </div>
+                    <div class="form-group" style="flex: 1; margin-bottom: 0;">
+                        <label style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px;">Postage You Paid ($ CAD)</label>
+                        <input type="number" step="0.01" min="0" class="detail-shipping-cost-input" value="${((listing.shipping_cost_cents || 0) / 100).toFixed(2)}" title="What you paid to ship it. Marketplace fees and the buyer's postage are already netted off the payout." style="width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); color: var(--text);">
+                    </div>
                 </div>
                 <div style="margin-bottom: 10px;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
@@ -746,10 +750,11 @@ document.addEventListener("DOMContentLoaded", () => {
                         <!-- Dynamic parts injected here -->
                     </div>
                 </div>
-                <div class="detail-financial-summary" style="padding: 8px 10px; background: var(--bg-elevated); border: 1px dashed var(--border); border-radius: 6px; font-size: 12px; display: flex; justify-content: space-between; margin-bottom: 12px;">
+                <div class="detail-financial-summary" style="padding: 8px 10px; background: var(--bg-elevated); border: 1px dashed var(--border); border-radius: 6px; font-size: 12px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;">
                     <span>Total Investment: <strong class="detail-total-cost-val">$0.00 CAD</strong></span>
                     <span>Est. Net Profit: <strong class="detail-net-profit-val" style="color: var(--success);">+$0.00 CAD</strong> <span class="detail-margin-val" style="color: var(--text-muted);">(0%)</span></span>
                 </div>
+                ${renderSaleEconomics(listing)}
                 <div style="display: flex; justify-content: flex-end; align-items: center; gap: 10px;">
                     <span class="detail-save-cost-status" style="font-size: 12px;"></span>
                     <button type="button" class="btn btn--sm btn--primary detail-save-cost-btn">💾 Save Changes (Costs, Channels &amp; Photo)</button>
@@ -762,6 +767,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const addPartBtn = modalBody.querySelector(".detail-add-part-btn");
         const purchaseInput = modalBody.querySelector(".detail-purchase-price-input");
         const sellingInput = modalBody.querySelector(".detail-selling-price-input");
+        const shippingInput = modalBody.querySelector(".detail-shipping-cost-input");
         const totalCostVal = modalBody.querySelector(".detail-total-cost-val");
         const netProfitVal = modalBody.querySelector(".detail-net-profit-val");
         const marginVal = modalBody.querySelector(".detail-margin-val");
@@ -901,7 +907,10 @@ document.addEventListener("DOMContentLoaded", () => {
                     partsTotal += parseFloat(input.value || 0);
                 });
             }
-            const totalCost = purchasePrice + partsTotal;
+            // Postage the seller paid belongs in the investment total: it is money
+            // out of pocket on this item, exactly like a part.
+            const shippingCost = parseFloat(shippingInput?.value || 0);
+            const totalCost = purchasePrice + partsTotal + shippingCost;
             const sellingPrice = parseFloat(sellingInput?.value || 0);
             const netProfit = sellingPrice - totalCost;
             const margin = sellingPrice > 0 ? ((netProfit / sellingPrice) * 100).toFixed(1) : "0.0";
@@ -972,6 +981,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 const purchasePrice = parseFloat(purchaseInput?.value || 0);
                 const sellingPrice = parseFloat(sellingInput?.value || 0);
+                const shippingCost = parseFloat(shippingInput?.value || 0);
 
                 const checkedPlatforms = [];
                 modalBody.querySelectorAll(".detail-platform-cb:checked").forEach(cb => {
@@ -986,6 +996,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         body: JSON.stringify({
                             purchase_price: purchasePrice,
                             cost_is_free: !!(costFreeCb && costFreeCb.checked),
+                            shipping_cost: shippingCost,
                             price: sellingPrice,
                             parts: parts,
                             platforms: checkedPlatforms,
@@ -1984,6 +1995,29 @@ function renderEngagementMetrics(listing) {
         </div>`;
 }
 
+// Marketplace economics for a completed sale. The listed price is not revenue:
+// the marketplace takes a fee, and the buyer's postage was never the seller's to
+// keep. The payout is the only honest basis for profit, so it is shown alongside
+// the numbers that produced it rather than a single unexplained figure.
+function renderSaleEconomics(listing) {
+    const payout = listing.net_payout_cents || 0;
+    if (!payout) return "";
+    const money = (cents) => `$${((cents || 0) / 100).toFixed(2)}`;
+    const fees = listing.fees_cents || 0;
+    const charged = listing.shipping_charged_cents || 0;
+    const cost = (listing.purchase_price_cents || 0) + (listing.parts_cost_cents || 0)
+               + (listing.shipping_cost_cents || 0);
+    const profit = payout - cost;
+    const color = profit >= 0 ? "var(--success)" : "var(--danger)";
+    return `
+        <div class="detail-sale-economics">
+            <span>Sale ${money(listing.price_cents)} + postage ${money(charged)}</span>
+            <span>Marketplace fees −${money(fees)}</span>
+            <span>Net payout <strong>${money(payout)}</strong></span>
+            <span>Actual profit <strong style="color:${color}">${profit >= 0 ? "+" : "−"}${money(Math.abs(profit))}</strong></span>
+        </div>`;
+}
+
 // Engagement stats for a card, as labelled rectangular boxes so they stand out
 // from the rounded status/alerts. eBay has views + watchers; Etsy has views +
 // favorites. Always shown, including while the value is still zero.
@@ -2092,6 +2126,18 @@ function renderCard(listing) {
     const profitSign = netProfit > 0 ? "+" : "";
     const profitColor = netProfit >= 0 ? "var(--success)" : "var(--danger)";
 
+    // A completed sale has real economics: the marketplace's payout is what
+    // actually arrived, after its fee and the buyer's postage. That is the only
+    // figure worth showing as profit once it exists, because the listed price
+    // overstates it by the fee every time.
+    const payout = (listing.net_payout_cents || 0);
+    const hasPayout = payout > 0;
+    const actualProfit = listing.actual_profit !== undefined
+        ? listing.actual_profit
+        : ((payout || listing.price_cents || 0)
+           - (listing.total_cost_cents || 0)
+           - (listing.shipping_cost_cents || 0)) / 100;
+
     // With no purchase price there is no profit figure to trust: the listing
     // would otherwise show its full sale price as margin. Say so instead of
     // printing a misleading green number.
@@ -2103,9 +2149,18 @@ function renderCard(listing) {
         ? `<div class="card-cost-missing" title="No purchase price recorded for this listing">No COGS recorded — profit unknown</div>`
         : `
                     <div class="card-cost-line">
-                        <span>${isFree && !hasCost ? "Free" : `Cost: ${totalCostText}`}</span> · <span style="color: ${listing.status === 'written_off' ? 'var(--danger)' : profitColor}; font-weight: 500;">
-                            ${listing.status === 'written_off' ? `Loss: -$${(listing.total_cost || 0).toFixed(2)} CAD` : `Net: ${profitSign}$${netProfit.toFixed(2)} CAD`}
+                        <span>${hasPayout
+                            ? `Payout: $${(payout / 100).toFixed(2)}`
+                            : (isFree && !hasCost ? "Free" : `Cost: ${totalCostText}`)}</span> · <span style="color: ${listing.status === 'written_off' ? 'var(--danger)' : (hasPayout ? (actualProfit >= 0 ? 'var(--success)' : 'var(--danger)') : profitColor)}; font-weight: 500;">
+                            ${listing.status === 'written_off'
+                                ? `Loss: -$${(listing.total_cost || 0).toFixed(2)} CAD`
+                                : (hasPayout
+                                    ? `Actual: ${actualProfit >= 0 ? "+" : "−"}$${Math.abs(actualProfit).toFixed(2)} CAD`
+                                    : `Net: ${profitSign}$${netProfit.toFixed(2)} CAD`)}
                         </span>
+                        ${hasPayout && (listing.fees_cents || 0) > 0
+                            ? `<span class="card-fees-note" title="Marketplace fee taken from this sale">· fees −$${((listing.fees_cents || 0) / 100).toFixed(2)}</span>`
+                            : ""}
                     </div>
                 `;
 

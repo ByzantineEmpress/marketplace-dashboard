@@ -3436,6 +3436,18 @@ async def update_listing(listing_id: int, body: dict, db: Session = Depends(get_
             # and profit, which are read from the cents field.
             listing.purchase_price_cents = 0
 
+    if "shipping_cost" in body or "shipping_cost_cents" in body:
+        # Postage the seller paid out of pocket. The marketplace's payout already
+        # nets off its own fees and the buyer's shipping, so only this figure is
+        # subtracted on top of cost of goods.
+        ship_cents = body.get("shipping_cost_cents")
+        if ship_cents is None:
+            try:
+                ship_cents = int(round(float(body.get("shipping_cost") or 0) * 100))
+            except (ValueError, TypeError):
+                ship_cents = 0
+        listing.shipping_cost_cents = max(0, int(ship_cents))
+
     if "parts" in body:
         parts_raw = body.get("parts") or []
         cleaned_parts = []

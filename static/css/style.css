@@ -715,6 +715,31 @@ code {
     margin: 0;
 }
 
+/* The marketplace fee that came off a completed sale, kept muted: it explains
+   why the payout is lower than the sale price. */
+.card-fees-note {
+    color: var(--text-muted);
+}
+
+/* Sale economics in the detail modal: what the buyer paid, what the marketplace
+   took, what actually arrived, and the profit that follows from it. */
+.detail-sale-economics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    padding: 8px 10px;
+    margin-bottom: 12px;
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--accent);
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.detail-sale-economics strong {
+    color: var(--text);
+}
+
 /* "Got it free" toggle under the cost field in the detail modal. */
 .cost-free-toggle {
     display: inline-flex;

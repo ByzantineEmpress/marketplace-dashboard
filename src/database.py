@@ -121,6 +121,17 @@ def _migrate_existing_db():
         if "cost_is_free" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN cost_is_free BOOLEAN NOT NULL DEFAULT 0"))
 
+        # 1m. Sale economics: fees, shipping and the marketplace payout, so profit
+        #     can be computed from what actually landed rather than the list price.
+        if "fees_cents" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN fees_cents INTEGER NOT NULL DEFAULT 0"))
+        if "shipping_charged_cents" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN shipping_charged_cents INTEGER NOT NULL DEFAULT 0"))
+        if "shipping_cost_cents" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN shipping_cost_cents INTEGER NOT NULL DEFAULT 0"))
+        if "net_payout_cents" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN net_payout_cents INTEGER NOT NULL DEFAULT 0"))
+
         # 1e. sold_at timestamp for date-range metrics
         if "sold_at" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN sold_at TIMESTAMP"))
