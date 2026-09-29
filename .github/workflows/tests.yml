@@ -93,6 +93,7 @@ jobs:
             tests/test_mailer_smtp.py
             tests/test_marketplace_accounts.py
             tests/test_marketplace_oauth.py
+            tests/test_missing_cost.py
             tests/test_multitenancy.py
             tests/test_other_marketplaces.py
             tests/test_rate_limiting.py

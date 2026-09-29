@@ -1679,6 +1679,7 @@ async def get_listings(
     status: str = None,
     search: str = None,
     team: str = None,
+    missing_cost: str = None,
     page: int = 1,
     page_size: int = 50,
     sort: str = "created_at",
@@ -1686,7 +1687,12 @@ async def get_listings(
     db: Session = Depends(get_db),
     _user: dict = Depends(check_auth),
 ):
-    """Return a paginated, filtered list of listings."""
+    """Return a paginated, filtered list of listings.
+
+    ``missing_cost=true`` returns only listings with no purchase price recorded.
+    Filtering server-side matters because the result is paginated: filtering in
+    the browser would only ever see the current page.
+    """
     from sqlalchemy import or_
 
     query = db.query(Listing)
@@ -1728,6 +1734,17 @@ async def get_listings(
     # Filter by status
     if status:
         query = query.filter(Listing.status == status)
+
+    # Filter to listings with no purchase price recorded. Matches the
+    # Listing.missing_cost property: purchase price only, so a listing with a
+    # parts cost but no purchase price still shows up here.
+    if missing_cost and str(missing_cost).lower() in ("1", "true", "yes"):
+        query = query.filter(
+            or_(
+                Listing.purchase_price_cents == 0,
+                Listing.purchase_price_cents.is_(None),
+            )
+        )
 
     # Full-text search on title (LIKE with wildcards — SQLAlchemy escapes)
     if search:

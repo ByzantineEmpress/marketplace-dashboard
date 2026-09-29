@@ -93,6 +93,13 @@
             <select id="filter-team" class="filter-select" style="display:none">
                 <option value="">All My Teams</option>
             </select>
+            <!-- Listings with no purchase price recorded. A checkbox rather
+                 than another select entry, so it combines with the filters
+                 above instead of replacing them. -->
+            <label class="filter-check" for="filter-missing-cost" title="Show only listings with no purchase price (COGS) recorded">
+                <input type="checkbox" id="filter-missing-cost">
+                <span>Missing cost</span>
+            </label>
         </div>
         <div class="toolbar-right" style="display: flex; gap: 8px;">
             <button class="btn btn--sm btn--outline" id="open-teams-modal-btn">👥 Teams & Invites</button>

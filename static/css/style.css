@@ -684,6 +684,57 @@ code {
 .card-status--expired { background: var(--danger-soft); color: var(--danger-text); }
 .card-status--unknown { background: var(--bg-inset); color: var(--text-muted); }
 
+/* "No Cost" flag: a listing with no purchase price recorded.
+   Amber, not red: this is missing information to fill in, not a failure. */
+.card-status--missing-cost {
+    background: var(--warning-soft);
+    color: var(--warning-text);
+    border: 1px dashed rgba(217, 119, 6, 0.55);
+}
+
+/* The replaced profit line on a card with no COGS. Muted, because the absence
+   of a number is the point: showing a profit here would be misleading. */
+.card-cost-missing {
+    font-size: 11.5px;
+    color: var(--warning-text);
+    margin-top: -4px;
+    margin-bottom: 6px;
+    font-style: italic;
+}
+
+/* A subtle left edge so flagged cards are scannable in a grid. */
+.listing-card--missing-cost {
+    border-left: 3px solid rgba(217, 119, 6, 0.65);
+}
+
+/* "Missing cost" toolbar filter */
+.filter-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elevated);
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.filter-check:hover {
+    border-color: var(--accent);
+}
+
+.filter-check input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
 /* Team name chip on listing cards */
 .card-team {
     display: inline-block;

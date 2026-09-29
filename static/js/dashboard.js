@@ -11,6 +11,7 @@ document.addEventListener("DOMContentLoaded", () => {
         platform: "",
         status: "",
         team: "",
+        missingCost: false,
         sort: "created_at",
         order: "desc",
         total: 0,
@@ -44,6 +45,10 @@ document.addEventListener("DOMContentLoaded", () => {
             sort: state.sort,
             order: state.order,
         });
+        // Only sent when active, so the URL stays clean otherwise.
+        if (state.missingCost) {
+            params.set("missing_cost", "true");
+        }
 
         try {
             grid.style.opacity = "0.6";
@@ -92,7 +97,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function renderEmptyState() {
-        const isFiltering = state.search || state.platform || state.status || state.team;
+        const isFiltering = state.search || state.platform || state.status || state.team || state.missingCost;
         if (isFiltering) {
             grid.innerHTML = `
                 <div class="empty-state">
@@ -111,12 +116,17 @@ document.addEventListener("DOMContentLoaded", () => {
                     state.platform = "";
                     state.status = "";
                     state.team = "";
+                    state.missingCost = false;
                     state.page = 1;
                     document.getElementById("search-input").value = "";
                     document.getElementById("filter-platform").value = "";
                     document.getElementById("filter-status").value = "";
                     const teamSel = document.getElementById("filter-team");
                     if (teamSel) teamSel.value = "";
+                    // Reset the missing-cost control too, or the filter would
+                    // stay applied while its control looked cleared.
+                    const costEl = document.getElementById("filter-missing-cost");
+                    if (costEl) costEl.checked = false;
                     loadListings();
                     loadStats();
                 });
@@ -1537,6 +1547,16 @@ document.addEventListener("DOMContentLoaded", () => {
         loadListings();
     });
 
+    // Event: "missing cost" filter
+    const missingCostEl = document.getElementById("filter-missing-cost");
+    if (missingCostEl) {
+        missingCostEl.addEventListener("change", (e) => {
+            state.missingCost = e.target.checked;
+            state.page = 1;
+            loadListings();
+        });
+    }
+
     // Event: refresh button
     document.getElementById("refresh-btn").addEventListener("click", () => {
         loadListings();
@@ -1587,14 +1607,32 @@ function renderCard(listing) {
     const price = listing.price_raw || `$${((listing.price_cents || 0) / 100).toFixed(2)} CAD`;
     const image = listing.image_url || "/static/img/placeholder.svg";
 
+    // Prefer the server's verdict so the badge and the filter can never
+    // disagree; fall back to the purchase price, which is what it is based on.
+    const missingCost = listing.missing_cost !== undefined
+        ? !!listing.missing_cost
+        : !((listing.purchase_price_cents || 0) > 0);
     const hasCost = (listing.total_cost_cents || 0) > 0;
     const costText = hasCost ? `$${(listing.total_cost || 0).toFixed(2)} CAD` : null;
     const netProfit = listing.net_profit !== undefined ? listing.net_profit : (((listing.price_cents || 0) - (listing.total_cost_cents || 0)) / 100);
     const profitSign = netProfit > 0 ? "+" : "";
     const profitColor = netProfit >= 0 ? "var(--success)" : "var(--danger)";
 
+    // With no purchase price there is no profit figure to trust: the listing
+    // would otherwise show its full sale price as margin. Say so instead of
+    // printing a misleading green number.
+    const costLine = missingCost
+        ? `<div class="card-cost-missing" title="No purchase price recorded for this listing">No COGS recorded — profit unknown</div>`
+        : (hasCost ? `
+                    <div style="font-size: 11.5px; color: var(--text-muted); margin-top: -4px; margin-bottom: 6px;">
+                        <span>Cost: ${costText}</span> · <span style="color: ${listing.status === 'written_off' ? 'var(--danger)' : profitColor}; font-weight: 500;">
+                            ${listing.status === 'written_off' ? `Loss: -$${(listing.total_cost || 0).toFixed(2)} CAD` : `Net: ${profitSign}$${netProfit.toFixed(2)} CAD`}
+                        </span>
+                    </div>
+                ` : "");
+
     return `
-        <div class="listing-card" data-id="${listing.id}" data-platform="${listing.platform}">
+        <div class="listing-card${missingCost ? " listing-card--missing-cost" : ""}" data-id="${listing.id}" data-platform="${listing.platform}">
             <div class="card-platform-badge" style="display:flex;gap:4px;flex-wrap:wrap;max-width:85%;">${platformBadges}</div>
             <div class="card-image">
                 <img src="${image}" alt="${escapeHtml(listing.title || 'Listing')}" loading="lazy" onerror="this.src='/static/img/placeholder.svg'">
@@ -1602,15 +1640,10 @@ function renderCard(listing) {
             <div class="card-body">
                 <h3 class="card-title">${escapeHtml(listing.title || "Untitled")}</h3>
                 <p class="card-price">${price}</p>
-                ${hasCost ? `
-                    <div style="font-size: 11.5px; color: var(--text-muted); margin-top: -4px; margin-bottom: 6px;">
-                        <span>Cost: ${costText}</span> · <span style="color: ${listing.status === 'written_off' ? 'var(--danger)' : profitColor}; font-weight: 500;">
-                            ${listing.status === 'written_off' ? `Loss: -$${(listing.total_cost || 0).toFixed(2)} CAD` : `Net: ${profitSign}$${netProfit.toFixed(2)} CAD`}
-                        </span>
-                    </div>
-                ` : ""}
+                ${costLine}
                 <div class="card-meta">
                     <span class="card-status card-status--${listing.status || 'unknown'}">${listing.status === 'written_off' ? 'Written Off' : (listing.status || "unknown")}</span>
+                    ${missingCost ? `<span class="card-status card-status--missing-cost" title="No purchase price recorded">No Cost</span>` : ""}
                     ${listing.team_name ? `<span class="card-team" title="Team">${escapeHtml(listing.team_name)}</span>` : ""}
                 </div>
             </div>

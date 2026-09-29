@@ -225,6 +225,26 @@ class Listing(Base):
         return (self.purchase_price_cents or 0) + (self.parts_cost_cents or 0)
 
     @property
+    def has_cost(self) -> bool:
+        """Whether the purchase price has actually been recorded.
+
+        Deliberately keyed on the purchase price alone, not on total cost. A
+        listing whose only recorded cost is a repair part still needs its
+        purchase price entered, so counting parts here would hide it.
+
+        Synced listings arrive with no cost data at all, which is exactly the
+        set that needs attention: a listing with no COGS shows a fake 100%
+        margin, so net profit and margin must not be read as real until this
+        is filled in.
+        """
+        return (self.purchase_price_cents or 0) > 0
+
+    @property
+    def missing_cost(self) -> bool:
+        """True when no purchase price has been recorded for this listing."""
+        return not self.has_cost
+
+    @property
     def net_profit_cents(self) -> int:
         return (self.price_cents or 0) - self.total_cost_cents
 
@@ -258,6 +278,9 @@ class Listing(Base):
             "parts_cost_cents": self.parts_cost_cents or 0,
             "parts_cost": round((self.parts_cost_cents or 0) / 100, 2),
             "parts": self.parts_json or [],
+            # Drives the "No Cost" badge and the missing-cost filter. The UI
+            # must not have to re-derive this from the cents fields.
+            "missing_cost": self.missing_cost,
             "total_cost_cents": self.total_cost_cents,
             "total_cost": round(self.total_cost_cents / 100, 2),
             "net_profit_cents": self.net_profit_cents,
