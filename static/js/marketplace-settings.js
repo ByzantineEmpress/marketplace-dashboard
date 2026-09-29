@@ -124,6 +124,51 @@
         actions.appendChild(saveBtn);
         actions.appendChild(connectBtn);
         actions.appendChild(syncBtn);
+
+        // Disconnect & delete this marketplace's data. Shown when there is
+        // anything to remove: either a live connection or saved credentials.
+        const hasAnything = (account && account.is_connected) || info.is_configured;
+        if (hasAnything) {
+            const disconnectBtn = el("button", "btn btn--danger", "Disconnect & delete data");
+            disconnectBtn.type = "button";
+            disconnectBtn.style.marginLeft = "auto";
+            disconnectBtn.addEventListener("click", function () {
+                const ok = window.confirm(
+                    "Disconnect " + info.label + " and delete its data?\n\n"
+                    + "This removes the connection, your API keys for this platform, "
+                    + "and the listings synced from it. It cannot be undone."
+                );
+                if (!ok) return;
+                disconnectBtn.disabled = true;
+                disconnectBtn.textContent = "Deleting\u2026";
+                fetch("/api/accounts/" + encodeURIComponent(platform), { method: "DELETE" })
+                    .then(function (res) { return res.json().then(function (d) { return [res, d]; }); })
+                    .then(function (pair) {
+                        const res = pair[0], data = pair[1];
+                        if (!res.ok || !data.ok) {
+                            note.textContent = "Could not disconnect: "
+                                + (data.error || "HTTP " + res.status);
+                            disconnectBtn.disabled = false;
+                            disconnectBtn.textContent = "Disconnect & delete data";
+                            return;
+                        }
+                        const d = data.deleted || {};
+                        const bits = [];
+                        if (d.marketplace_account) bits.push("connection");
+                        if (d.credentials) bits.push("keys");
+                        if (d.listings) bits.push(d.listings + " listing(s)");
+                        setStatus("Disconnected " + info.label + (bits.length ? " (" + bits.join(", ") + ")." : "."), "ok");
+                        load();
+                    })
+                    .catch(function (err) {
+                        note.textContent = "Could not disconnect: " + err.message;
+                        disconnectBtn.disabled = false;
+                        disconnectBtn.textContent = "Disconnect & delete data";
+                    });
+            });
+            actions.appendChild(disconnectBtn);
+        }
+
         card.appendChild(actions);
 
         const note = el("div", "section-desc");

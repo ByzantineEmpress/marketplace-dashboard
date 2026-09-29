@@ -146,6 +146,61 @@ def delete_user_data(db, user_id: int) -> Dict[str, object]:
     }
 
 
+def delete_marketplace_data(db, user_id: int, platform: str) -> Dict[str, object]:
+    """Disconnect one marketplace and erase just that marketplace's data.
+
+    Removes the ``MarketplaceAccount`` (OAuth tokens), the user's API keys for
+    that platform, and the listings synced from that platform in teams the user
+    is the sole member of. Shared teams are left untouched because their listings
+    cannot be attributed to one user's connection.
+
+    Other marketplaces and the user's account are not affected.
+    """
+    account_deleted = (
+        db.query(MarketplaceAccount)
+        .filter(MarketplaceAccount.user_id == user_id,
+                MarketplaceAccount.platform == platform)
+        .delete(synchronize_session=False)
+    )
+    credentials_deleted = (
+        db.query(UserMarketplaceCredential)
+        .filter(UserMarketplaceCredential.user_id == user_id,
+                UserMarketplaceCredential.platform == platform)
+        .delete(synchronize_session=False)
+    )
+
+    memberships = (
+        db.query(TeamMembership).filter(TeamMembership.user_id == user_id).all()
+        if user_id else []
+    )
+    sole_team_ids = []
+    for m in memberships:
+        others = (
+            db.query(TeamMembership)
+            .filter(TeamMembership.team_id == m.team_id,
+                    TeamMembership.user_id != user_id)
+            .count()
+        )
+        if others == 0:
+            sole_team_ids.append(m.team_id)
+
+    listings_deleted = 0
+    if sole_team_ids:
+        listings_deleted = (
+            db.query(Listing)
+            .filter(Listing.team_id.in_(sole_team_ids),
+                    Listing.platform == platform)
+            .delete(synchronize_session=False)
+        )
+
+    db.commit()
+    return {
+        "marketplace_account": account_deleted,
+        "credentials": credentials_deleted,
+        "listings": listings_deleted,
+    }
+
+
 def delete_ebay_connection_data(db, account: MarketplaceAccount) -> Dict[str, object]:
     """Erase one matched eBay connection and its data.
 

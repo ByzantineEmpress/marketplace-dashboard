@@ -19,7 +19,11 @@ from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.config import config
-from src.data_deletion import delete_ebay_connection_data, delete_user_data
+from src.data_deletion import (
+    delete_ebay_connection_data,
+    delete_marketplace_data,
+    delete_user_data,
+)
 from src.database import SessionLocal, init_db
 from src.models import (
     AuthSession,
@@ -277,6 +281,154 @@ class DeleteEbayConnectionDataTest(unittest.TestCase):
         db.query(TeamMembership).filter(TeamMembership.user_id == uid).delete(
             synchronize_session=False)
         db.query(Team).filter(Team.id == team_id).delete(synchronize_session=False)
+        db.query(User).filter(User.id == uid).delete(synchronize_session=False)
+        db.commit()
+        db.close()
+
+
+class DeleteMarketplaceDataTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        init_db()
+
+    def test_deletes_just_one_platform(self):
+        db = SessionLocal()
+        user = User(email=f"mp.{secrets.token_hex(4)}@example.com",
+                    name="Multi Seller", provider="password", is_admin=False)
+        db.add(user)
+        db.flush()
+        uid = user.id
+        team = Team(name=f"MP {secrets.token_hex(4)}",
+                    invite_code=secrets.token_urlsafe(16))
+        db.add(team)
+        db.flush()
+        team_id = team.id
+        db.add(TeamMembership(team_id=team_id, user_id=uid, role="owner"))
+
+        ebay_listing = Listing(platform="ebay",
+                               platform_listing_id=f"EB-{secrets.token_hex(4)}",
+                               title="eBay", price_cents=100, team_id=team_id)
+        etsy_listing = Listing(platform="etsy",
+                               platform_listing_id=f"ET-{secrets.token_hex(4)}",
+                               title="Etsy", price_cents=100, team_id=team_id)
+        db.add_all([ebay_listing, etsy_listing])
+        db.flush()
+        ebay_listing_id = ebay_listing.id
+        etsy_listing_id = etsy_listing.id
+
+        ebay_acct = MarketplaceAccount(platform="ebay", user_id=uid,
+                                       is_connected=True, access_token="etok")
+        etsy_acct = MarketplaceAccount(platform="etsy", user_id=uid,
+                                       is_connected=True, access_token="stok")
+        db.add_all([ebay_acct, etsy_acct])
+        db.flush()
+        ebay_acct_id = ebay_acct.id
+        etsy_acct_id = etsy_acct.id
+        db.add(UserMarketplaceCredential(user_id=uid, platform="ebay",
+                                         credential_key="client_id", value="cid"))
+        db.add(UserMarketplaceCredential(user_id=uid, platform="etsy",
+                                         credential_key="api_key", value="k"))
+        db.commit()
+
+        result = delete_marketplace_data(db, uid, "ebay")
+        self.assertEqual(result["marketplace_account"], 1)
+        self.assertEqual(result["credentials"], 1)
+        self.assertEqual(result["listings"], 1)
+
+        # Only eBay is gone; Etsy and the user remain.
+        self.assertIsNone(db.get(MarketplaceAccount, ebay_acct_id))
+        self.assertIsNotNone(db.get(MarketplaceAccount, etsy_acct_id))
+        self.assertIsNone(db.get(Listing, ebay_listing_id))
+        self.assertIsNotNone(db.get(Listing, etsy_listing_id))
+        self.assertIsNotNone(db.get(User, uid))
+
+        # cleanup
+        db.query(Listing).filter(Listing.team_id == team_id).delete(synchronize_session=False)
+        db.query(UserMarketplaceCredential).filter(
+            UserMarketplaceCredential.user_id == uid).delete(synchronize_session=False)
+        db.query(MarketplaceAccount).filter(MarketplaceAccount.user_id == uid).delete(
+            synchronize_session=False)
+        db.query(TeamMembership).filter(TeamMembership.user_id == uid).delete(
+            synchronize_session=False)
+        db.query(Team).filter(Team.id == team_id).delete(synchronize_session=False)
+        db.query(User).filter(User.id == uid).delete(synchronize_session=False)
+        db.commit()
+        db.close()
+
+
+class DisconnectMarketplaceEndpointTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        init_db()
+        cls._cm = TestClient(app)
+        cls.client = cls._cm.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._cm.__exit__(None, None, None)
+
+    def test_disconnect_endpoint(self):
+        db = SessionLocal()
+        user = User(email=f"dc.{secrets.token_hex(4)}@example.com",
+                    name="DC", provider="password", is_admin=False)
+        db.add(user)
+        db.flush()
+        uid = user.id
+        token = secrets.token_urlsafe(48)
+        db.add(AuthSession(token=token, user_id=uid,
+                           expires_at=datetime.utcnow() + timedelta(hours=1)))
+        db.add(MarketplaceAccount(platform="ebay", user_id=uid,
+                                  is_connected=True, access_token="t"))
+        db.add(UserMarketplaceCredential(user_id=uid, platform="ebay",
+                                         credential_key="client_id", value="cid"))
+        db.commit()
+        db.close()
+
+        self.client.cookies.clear()
+        self.client.cookies.set("auth_token", token)
+
+        res = self.client.delete("/api/accounts/ebay")
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertTrue(res.json()["ok"])
+        self.assertEqual(res.json()["deleted"]["marketplace_account"], 1)
+
+        db = SessionLocal()
+        try:
+            self.assertEqual(db.query(MarketplaceAccount).filter(
+                MarketplaceAccount.user_id == uid,
+                MarketplaceAccount.platform == "ebay").count(), 0)
+        finally:
+            db.query(UserMarketplaceCredential).filter(
+                UserMarketplaceCredential.user_id == uid).delete(synchronize_session=False)
+            db.query(MarketplaceAccount).filter(
+                MarketplaceAccount.user_id == uid).delete(synchronize_session=False)
+            db.query(AuthSession).filter(AuthSession.user_id == uid).delete(
+                synchronize_session=False)
+            db.query(User).filter(User.id == uid).delete(synchronize_session=False)
+            db.commit()
+            db.close()
+
+    def test_disconnect_unknown_platform_is_rejected(self):
+        db = SessionLocal()
+        user = User(email=f"dc2.{secrets.token_hex(4)}@example.com",
+                    name="DC2", provider="password", is_admin=False)
+        db.add(user)
+        db.flush()
+        uid = user.id
+        token = secrets.token_urlsafe(48)
+        db.add(AuthSession(token=token, user_id=uid,
+                           expires_at=datetime.utcnow() + timedelta(hours=1)))
+        db.commit()
+        db.close()
+
+        self.client.cookies.clear()
+        self.client.cookies.set("auth_token", token)
+        res = self.client.delete("/api/accounts/notreal")
+        self.assertEqual(res.status_code, 400)
+
+        db = SessionLocal()
+        db.query(AuthSession).filter(AuthSession.user_id == uid).delete(
+            synchronize_session=False)
         db.query(User).filter(User.id == uid).delete(synchronize_session=False)
         db.commit()
         db.close()

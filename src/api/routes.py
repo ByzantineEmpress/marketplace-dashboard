@@ -2431,6 +2431,30 @@ async def sync_account(body: dict, db: Session = Depends(get_db), user: dict = D
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
+@api_router.delete("/accounts/{platform}")
+async def delete_marketplace_account(platform: str, db: Session = Depends(get_db),
+                                     user: dict = Depends(check_auth)):
+    """Disconnect one marketplace and delete just that marketplace's data.
+
+    Removes the connection (OAuth tokens), the caller's API keys for that
+    platform, and the listings synced from it in their solely-owned teams.
+    Other marketplaces and the account itself are untouched.
+    """
+    from src.adapters import get_adapter
+    from src.data_deletion import delete_marketplace_data
+
+    platform = platform.strip().lower()
+    try:
+        get_adapter(platform)
+    except KeyError:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": f"Platform '{platform}' not supported yet"},
+        )
+
+    summary = delete_marketplace_data(db, user["id"], platform)
+    return {"ok": True, "platform": platform, "deleted": summary}
+
 # -- Teams (shared inventory) --
 
 @api_router.get("/teams")
