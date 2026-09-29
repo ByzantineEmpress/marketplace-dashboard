@@ -370,7 +370,6 @@ class eBayAdapter(MarketplaceAdapter):
         import io
         import re
         import time
-        import xml.etree.ElementTree as ET
         import zipfile
 
         base = f"{EBAY_API_BASE}/sell/feed/v1"
@@ -429,8 +428,12 @@ class eBayAdapter(MarketplaceAdapter):
         image — so the title is generated and the image left empty.
         """
         import io
-        import xml.etree.ElementTree as ET
         import zipfile
+        # defusedxml, not the stdlib parser: the report arrives over the network,
+        # and the stdlib XML parser expands entities, so a hostile or corrupted
+        # response could be an XML bomb and take the worker down. defusedxml is a
+        # drop-in that rejects entities and DTDs outright.
+        from defusedxml import ElementTree as ET
 
         items = []
         try:
@@ -599,7 +602,8 @@ class eBayAdapter(MarketplaceAdapter):
         Browse API), using the same user token in the ``X-EBAY-API-IAF-TOKEN``
         header. ``IncludeWatchCount=true`` makes it return ``WatchCount``.
         """
-        import xml.etree.ElementTree as ET
+        # defusedxml, not the stdlib parser: see _parse_active_inventory_report.
+        from defusedxml import ElementTree as ET
 
         site_ids = {
             "EBAY_US": "0", "EBAY_CA": "2", "EBAY_GB": "3", "EBAY_AU": "15",

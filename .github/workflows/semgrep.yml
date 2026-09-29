@@ -1,0 +1,113 @@
+name: Semgrep
+
+# Static security scan, run alongside the test suite.
+#
+# Why its own workflow rather than a job in tests.yml: the SARIF upload needs
+# security-events: write, and tests.yml is deliberately contents: read only.
+# Keeping the elevated permission in a separate file means the test job can never
+# gain it by accident.
+#
+# Why it REPORTS everything but only FAILS on ERROR:
+#   - reporting every severity is what fills the Security tab, so warnings are
+#     visible rather than silently dropped;
+#   - failing on every finding would, on a codebase that has never been scanned,
+#     produce a wall of best-practice warnings. A gate that is red on day one for
+#     style gets muted or bypassed, which is worse than not gating at all.
+# Warnings still appear on every run; they just do not block a merge.
+#
+# Actions are pinned to commit SHAs, matching tests.yml, so a moved tag cannot
+# silently change what executes.
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+  schedule:
+    # Weekly. A rule can start matching existing code the day it ships, with no
+    # push involved, so a periodic run is the only thing that would catch it.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: semgrep-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      # Needed by the SARIF upload. Scoped to this job; the workflow default
+      # above stays read-only.
+      security-events: write
+
+    env:
+      # Semgrep is a Python program and writes the SARIF itself. On a non-UTF-8
+      # locale it can die mid-write on a non-ASCII character in a rule message
+      # (reproduced on Windows, where the default is cp1252), leaving a truncated
+      # or empty SARIF. Linux runners already default to UTF-8; this makes it
+      # explicit rather than incidental.
+      PYTHONUTF8: "1"
+
+      # Rule sets in one place, so the reporting pass and the gating pass cannot
+      # drift apart.
+      #
+      # p/default is deliberately NOT used: it pulls in Django rules, and this is
+      # a Jinja2/FastAPI app, so it reports "missing csrf_token" on plain HTML
+      # forms that have nothing to do with Django. The sets below are the
+      # security-focused ones.
+      SEMGREP_CONFIGS: >-
+        --config p/python
+        --config p/secrets
+        --config p/security-audit
+        --config p/owasp-top-ten
+        --config p/jwt
+        --config p/sql-injection
+        --config p/command-injection
+        --config p/xss
+
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Set up Python
+        uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d # v5.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Semgrep
+        run: |
+          python -m pip install --upgrade pip
+          # Pinned. A scanner that changes under us would make a green run mean
+          # something different from one week to the next.
+          pip install semgrep==1.178.0
+          semgrep --version
+
+      # Pass 1 — report everything. Produces the SARIF that feeds the Security
+      # tab, including warnings, so nothing is hidden. Does not gate.
+      - name: Scan (all severities, for the Security tab)
+        run: |
+          semgrep scan --metrics=off $SEMGREP_CONFIGS \
+            --sarif --output semgrep.sarif
+        # A SARIF-writing problem must not mask the real gate below.
+        continue-on-error: true
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3
+        if: always() && hashFiles('semgrep.sarif') != ''
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      # Pass 2 — the gate. Same rule sets, ERROR severity only; --error turns
+      # findings into a non-zero exit. Rules are already cached from pass 1.
+      - name: Fail on ERROR-severity findings
+        run: |
+          semgrep scan --metrics=off $SEMGREP_CONFIGS \
+            --quiet --severity ERROR --error
