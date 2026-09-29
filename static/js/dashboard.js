@@ -17,6 +17,9 @@ document.addEventListener("DOMContentLoaded", () => {
         total: 0,
         pageSize: 50,
         metricsDays: "all",
+        // Grouping selection mode (button-based; drag is a follow-up).
+        groupingMode: false,
+        selectedIds: new Set(),
     };
 
     let loadedListings = {};
@@ -64,20 +67,60 @@ document.addEventListener("DOMContentLoaded", () => {
             state.pageSize = data.page_size || 50;
             const totalPages = Math.max(1, Math.ceil(state.total / state.pageSize));
 
-            // Cache for modal lookup
-            loadedListings = {};
-            (data.listings || []).forEach(item => {
-                loadedListings[item.id] = item;
+            // Collapse grouped listings into one card each. The backend sends
+            // every member plus a group_summary; we keep one representative card
+            // and attach the member list so the modal can show the whole group.
+            const raw = data.listings || [];
+            const grouped = new Map();
+            const order = [];
+            raw.forEach(item => {
+                if (item.group_summary && item.group_summary.id != null) {
+                    const gid = item.group_summary.id;
+                    if (!grouped.has(gid)) {
+                        grouped.set(gid, { members: [] });
+                        order.push(grouped.get(gid));
+                    }
+                    grouped.get(gid).members.push(item);
+                } else {
+                    order.push(item);
+                }
+            });
+            const displayListings = order.map(entry => {
+                if (entry.members) {
+                    const rep = entry.members.find(
+                        m => m.id === entry.members[0].group_summary.representative_id
+                    ) || entry.members[0];
+                    return {
+                        ...rep,
+                        group_member_list: entry.members,
+                    };
+                }
+                return entry;
             });
 
-            if (!data.listings || data.listings.length === 0) {
+            // Cache for modal lookup (every member, not just representatives).
+            loadedListings = {};
+            raw.forEach(item => { loadedListings[item.id] = item; });
+
+            if (!displayListings || displayListings.length === 0) {
                 renderEmptyState();
             } else {
-                grid.innerHTML = data.listings.map(listing => renderCard(listing)).join("");
+                grid.innerHTML = displayListings.map(listing => renderCard(listing)).join("");
                 // Wire click events on cards
                 grid.querySelectorAll(".listing-card").forEach(card => {
+                    card.classList.add("listing-card--selectable");
+                    if (state.groupingMode) {
+                        card.classList.add("listing-card--grouping-mode");
+                    }
+                    const id = Number(card.dataset.id);
+                    if (state.selectedIds.has(id)) {
+                        card.classList.add("listing-card--selected");
+                    }
                     card.addEventListener("click", () => {
-                        const id = Number(card.dataset.id);
+                        if (state.groupingMode) {
+                            toggleGroupSelection(id, card);
+                            return;
+                        }
                         if (loadedListings[id]) {
                             openListingModal(loadedListings[id]);
                         }
@@ -602,6 +645,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 </div>
             </div>
 
+            ${renderGroupSection(listing)}
+
             <!-- Multi-Channel Cross-Listing Section -->
             <div class="modal-platforms-section" style="margin-bottom: 14px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
@@ -714,6 +759,32 @@ document.addEventListener("DOMContentLoaded", () => {
         const marginVal = modalBody.querySelector(".detail-margin-val");
         const saveCostBtn = modalBody.querySelector(".detail-save-cost-btn");
         const saveCostStatus = modalBody.querySelector(".detail-save-cost-status");
+
+        // Wire the group's Ungroup buttons (one per member row).
+        modalBody.querySelectorAll(".group-ungroup-btn").forEach(btn => {
+            btn.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                const memberId = Number(btn.dataset.id);
+                btn.disabled = true;
+                btn.textContent = "Removing…";
+                try {
+                    const res = await fetch(`/api/listings/${memberId}/ungroup`, {
+                        method: "POST",
+                    });
+                    const data = await res.json();
+                    if (!res.ok || !data.ok) {
+                        throw new Error(data.error || "Ungroup failed");
+                    }
+                    closeListingModal();
+                    loadListings();
+                    loadStats();
+                } catch (err) {
+                    btn.disabled = false;
+                    btn.textContent = "Ungroup";
+                    alert(`Could not ungroup: ${err.message}`);
+                }
+            });
+        });
 
         // Wire Photo Upload & Camera in detail modal
         const detailCameraFileInput = modalBody.querySelector(".detail-camera-file");
@@ -1557,6 +1628,82 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // -- Grouping selection mode (button-based; drag-and-drop is a follow-up) --
+
+    const groupModeBtn = document.getElementById("group-mode-btn");
+    const groupActionBar = document.getElementById("group-action-bar");
+    const groupSelectionCount = document.getElementById("group-selection-count");
+    const groupConfirmBtn = document.getElementById("group-confirm-btn");
+    const groupCancelBtn = document.getElementById("group-cancel-btn");
+
+    function setGroupingMode(on) {
+        state.groupingMode = !!on;
+        if (!on) {
+            state.selectedIds.clear();
+        }
+        updateGroupingUI();
+        loadListings();
+    }
+
+    function updateGroupingUI() {
+        const count = state.selectedIds.size;
+        if (groupActionBar) {
+            groupActionBar.style.display = state.groupingMode ? "flex" : "none";
+        }
+        if (groupModeBtn) {
+            groupModeBtn.textContent = state.groupingMode ? "✕ Exit Group Mode" : "🔗 Group Listings";
+            groupModeBtn.classList.toggle("is-active", state.groupingMode);
+        }
+        if (groupSelectionCount) {
+            groupSelectionCount.textContent = `${count} selected`;
+        }
+        if (groupConfirmBtn) {
+            groupConfirmBtn.disabled = count < 2;
+        }
+    }
+
+    function toggleGroupSelection(id, card) {
+        if (state.selectedIds.has(id)) {
+            state.selectedIds.delete(id);
+        } else {
+            state.selectedIds.add(id);
+        }
+        if (card) {
+            card.classList.toggle("listing-card--selected", state.selectedIds.has(id));
+        }
+        updateGroupingUI();
+    }
+
+    if (groupModeBtn) {
+        groupModeBtn.addEventListener("click", () => setGroupingMode(!state.groupingMode));
+    }
+    if (groupCancelBtn) {
+        groupCancelBtn.addEventListener("click", () => setGroupingMode(false));
+    }
+    if (groupConfirmBtn) {
+        groupConfirmBtn.addEventListener("click", async () => {
+            const ids = [...state.selectedIds];
+            if (ids.length < 2) return;
+            groupConfirmBtn.disabled = true;
+            try {
+                const res = await fetch("/api/listings/group", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ listing_ids: ids }),
+                });
+                const data = await res.json();
+                if (!res.ok || !data.ok) {
+                    throw new Error(data.error || "Grouping failed");
+                }
+                setGroupingMode(false);
+                loadStats();
+            } catch (err) {
+                alert(`Could not group listings: ${err.message}`);
+                groupConfirmBtn.disabled = false;
+            }
+        });
+    }
+
     // Event: refresh button
     document.getElementById("refresh-btn").addEventListener("click", () => {
         loadListings();
@@ -1601,9 +1748,54 @@ function renderPlatformBadges(platforms, fallback) {
     return list.map(p => getPlatformIcon(p)).join("");
 }
 
+// The grouped-listing section inside the detail modal. Shows every channel the
+// item is listed on, plus an Ungroup control; a channel sold while others are
+// live becomes a "delist elsewhere" alert.
+function renderGroupSection(listing) {
+    const summary = listing.group_summary;
+    if (!summary || !summary.members || summary.members.length < 2) return "";
+
+    const memberRows = summary.members.map(m => {
+        const badges = renderPlatformBadges([m.platform], m.platform);
+        const status = m.is_sold || (m.status === "sold")
+            ? `<span class="card-status card-status--sold">Sold</span>`
+            : `<span class="card-status card-status--active">Active</span>`;
+        return `<div class="group-member-row">
+            ${badges}
+            <span class="group-member-title">${escapeHtml(m.title || "Untitled")}</span>
+            ${status}
+            <button type="button" class="btn btn--sm btn--outline group-ungroup-btn" data-id="${m.id}">Ungroup</button>
+        </div>`;
+    }).join("");
+
+    const alert = summary.needs_delist
+        ? `<div class="card-delist-alert" style="margin-bottom: 8px;">Sold on ${escapeHtml((summary.sold_platforms || []).join(", "))} — delist from ${escapeHtml((summary.active_platforms || []).join(", "))}</div>`
+        : "";
+
+    return `
+        <div class="modal-group-section" style="margin-bottom: 14px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--accent); border-radius: var(--radius);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <h4 style="margin:0;font-size:13.5px;font-weight:600;">🔗 Grouped Item · ${summary.members.length} channels</h4>
+                <span style="font-size:11.5px;color:var(--text-muted);">One unit, listed ${summary.members.length} places</span>
+            </div>
+            ${alert}
+            ${memberRows}
+            <div style="font-size:11.5px;color:var(--text-muted);margin-top:8px;">
+                Shared qty: ${summary.available_quantity ?? 1} ·
+                Shared cost: $${((summary.total_cost_cents || 0) / 100).toFixed(2)} CAD
+            </div>
+        </div>`;
+}
+
 // Render a single listing card
 function renderCard(listing) {
-    const platformBadges = renderPlatformBadges(listing.platforms, listing.platform);
+    const groupMembers = (listing.group_member_list || []);
+    const isGroup = groupMembers.length > 1;
+    const platformList = isGroup
+        ? [...new Set(groupMembers.map(m => m.platform))]
+        : listing.platforms;
+    const platformBadges = renderPlatformBadges(platformList, listing.platform);
+
     const price = listing.price_raw || `$${((listing.price_cents || 0) / 100).toFixed(2)} CAD`;
     const image = listing.image_url || "/static/img/placeholder.svg";
 
@@ -1631,8 +1823,20 @@ function renderCard(listing) {
                     </div>
                 ` : "");
 
+    const groupSummary = listing.group_summary;
+    const delistAlert = (groupSummary && groupSummary.needs_delist)
+        ? `<div class="card-delist-alert" title="This item sold on one channel but is still listed elsewhere.">
+            Sold on ${escapeHtml((groupSummary.sold_platforms || []).join(", "))} — delist from ${escapeHtml((groupSummary.active_platforms || []).join(", "))}
+        </div>`
+        : "";
+
+    const groupChip = isGroup
+        ? `<span class="card-status card-status--group" title="Same item on ${groupMembers.length} channels">Group · ${groupMembers.length}</span>`
+        : "";
+
     return `
-        <div class="listing-card${missingCost ? " listing-card--missing-cost" : ""}" data-id="${listing.id}" data-platform="${listing.platform}">
+        <div class="listing-card${missingCost ? " listing-card--missing-cost" : ""}${isGroup ? " listing-card--group" : ""}" data-id="${listing.id}" data-platform="${listing.platform}">
+            <span class="card-select-check">✓</span>
             <div class="card-platform-badge" style="display:flex;gap:4px;flex-wrap:wrap;max-width:85%;">${platformBadges}</div>
             <div class="card-image">
                 <img src="${image}" alt="${escapeHtml(listing.title || 'Listing')}" loading="lazy" onerror="this.src='/static/img/placeholder.svg'">
@@ -1640,9 +1844,11 @@ function renderCard(listing) {
             <div class="card-body">
                 <h3 class="card-title">${escapeHtml(listing.title || "Untitled")}</h3>
                 <p class="card-price">${price}</p>
+                ${delistAlert}
                 ${costLine}
                 <div class="card-meta">
                     <span class="card-status card-status--${listing.status || 'unknown'}">${listing.status === 'written_off' ? 'Written Off' : (listing.status || "unknown")}</span>
+                    ${groupChip}
                     ${missingCost ? `<span class="card-status card-status--missing-cost" title="No purchase price recorded">No Cost</span>` : ""}
                     ${listing.team_name ? `<span class="card-team" title="Team">${escapeHtml(listing.team_name)}</span>` : ""}
                 </div>

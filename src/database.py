@@ -106,6 +106,10 @@ def _migrate_existing_db():
         if "platforms_json" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN platforms_json JSON DEFAULT '[]'"))
 
+        # 1j. Listing groups (same item across marketplaces)
+        if "group_id" not in cols:
+            conn.execute(text("ALTER TABLE listings ADD COLUMN group_id INTEGER REFERENCES listing_groups(id)"))
+
         # 1e. sold_at timestamp for date-range metrics
         if "sold_at" not in cols:
             conn.execute(text("ALTER TABLE listings ADD COLUMN sold_at TIMESTAMP"))

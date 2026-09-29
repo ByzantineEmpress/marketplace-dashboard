@@ -213,6 +213,12 @@ class Listing(Base):
     # shared — e.g. items imported by a marketplace sync).
     team_id = Column(Integer, ForeignKey("teams.id"), nullable=True, index=True)
 
+    # Listing group: links the same physical item across marketplaces
+    # (eBay + Etsy + Facebook). Grouped listings are still one row per
+    # platform, but share one COGS and one stock count via their group, so
+    # totals do not double-count the same item for each channel it is on.
+    group_id = Column(Integer, ForeignKey("listing_groups.id"), nullable=True, index=True)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -268,6 +274,7 @@ class Listing(Base):
             "platforms": self.platforms,
             "platform_listing_id": self.platform_listing_id,
             "team_id": self.team_id,
+            "group_id": self.group_id,
             "title": self.title,
             "description": self.description,
             "price_raw": self.price_raw,
@@ -304,6 +311,42 @@ class Listing(Base):
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
             "last_fetched": self.last_fetched.isoformat() if self.last_fetched else None,
         }
+
+
+class ListingGroup(Base):
+    """A group of listings that are the same physical item on different channels.
+
+    Grouping the eBay, Etsy and Facebook listings for one item means the
+    dashboard counts its stock and COGS once instead of once per channel.
+    The group owns the shared cost and quantity; each member Listing keeps its
+    own platform, price, image and status so syncing stays per-channel.
+    """
+
+    __tablename__ = "listing_groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    # Shared cost & investment tracking (COGS). Entering it here applies to the
+    # whole group, so an item listed on three channels does not need its cost
+    # typed in three times.
+    purchase_price_cents = Column(Integer, nullable=False, default=0)
+    parts_cost_cents = Column(Integer, nullable=False, default=0)
+    parts_json = Column(JSON, nullable=True)
+
+    # Shared stock count. One number for the group, because eBay + Etsy + FB are
+    # the same physical unit, not three.
+    available_quantity = Column(Integer, nullable=False, default=1)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def total_cost_cents(self) -> int:
+        return (self.purchase_price_cents or 0) + (self.parts_cost_cents or 0)
+
+    @property
+    def has_cost(self) -> bool:
+        return (self.purchase_price_cents or 0) > 0
 
 
 class MarketplaceAccount(Base):

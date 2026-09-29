@@ -102,9 +102,16 @@
             </label>
         </div>
         <div class="toolbar-right" style="display: flex; gap: 8px;">
-            <button class="btn btn--sm btn--outline" id="open-teams-modal-btn">👥 Teams & Invites</button>
+            <button class="btn btn--sm btn--outline" id="group-mode-btn">🔗 Group Listings</button>
+            <button class="btn btn--sm btn--outline" id="open-teams-modal-btn">👥 Teams &amp; Invites</button>
             <button class="btn btn--sm btn--success" id="add-manual-listing-btn">+ Add Listing / Sale</button>
             <button class="btn btn--sm btn--primary" id="refresh-btn">⟳ Refresh</button>
+        </div>
+        <!-- Shown only in grouping selection mode -->
+        <div class="group-action-bar" id="group-action-bar" style="display:none;">
+            <span id="group-selection-count">0 selected</span>
+            <button class="btn btn--sm btn--primary" id="group-confirm-btn" disabled>Group Selected</button>
+            <button class="btn btn--sm btn--outline" id="group-cancel-btn">Cancel</button>
         </div>
     </div>
 

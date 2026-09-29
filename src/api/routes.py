@@ -1766,10 +1766,19 @@ async def get_listings(
 
     # Attach team name from caller's teams only (prevents leaking other tenant team names)
     team_names = {t.id: t.name for t in db.query(Team).filter(Team.id.in_(user_team_ids)).all()}
+
+    # Group summaries for any grouped listing on this page, so the UI can show
+    # one card per group and the "delist elsewhere" alert without extra calls.
+    group_ids = {l.group_id for l in listings if l.group_id}
+    group_summaries = {}
+    if group_ids:
+        group_summaries = {gid: _serialise_group(db, gid) for gid in group_ids}
+
     items = []
     for l in listings:
         item = l.to_dict()
         item["team_name"] = team_names.get(l.team_id) if l.team_id else "Unassigned"
+        item["group_summary"] = group_summaries.get(l.group_id)
         items.append(item)
 
     return {
@@ -1782,7 +1791,7 @@ async def get_listings(
 @api_router.get("/stats")
 async def get_stats(team: str = None, days: str = None, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
     """Return summary stats for the dashboard header (team-scoped, optional time-filtered)."""
-    from sqlalchemy import func, or_, and_
+    from sqlalchemy import func, or_, and_, not_
     from sqlalchemy.sql.functions import coalesce
 
     # Same strict team scoping as the listings endpoint.
@@ -1828,12 +1837,39 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
         total_scope = scope
         written_off_scope = and_(scope, Listing.status == "written_off")
 
-    total = db.query(func.count(Listing.id)).filter(total_scope).scalar() or 0
-    active = db.query(func.count(Listing.id)).filter(active_scope).scalar() or 0
-    sold = db.query(func.count(Listing.id)).filter(sold_scope).scalar() or 0
-    written_off = db.query(func.count(Listing.id)).filter(written_off_scope).scalar() or 0
+    # Group-aware dedup: a group is ONE unit, not one per channel. Compute the
+    # set of member rows to EXCLUDE from sums/counts so each group is counted
+    # once. The representative (lowest id) is kept.
+    grouped_member_ids = {
+        l.id
+        for l in db.query(Listing.id).filter(Listing.group_id.isnot(None)).all()
+    }
+    representative_ids = set()
+    if grouped_member_ids:
+        for (gid,) in db.query(Listing.group_id).filter(
+                Listing.group_id.isnot(None)).distinct().all():
+            rep = (
+                db.query(Listing.id)
+                .filter(Listing.group_id == gid)
+                .order_by(Listing.id)
+                .first()
+            )
+            if rep:
+                representative_ids.add(rep[0])
+    duplicate_group_ids = grouped_member_ids - representative_ids
 
-    # Count per platform
+    def _dedup(scope):
+        """Exclude non-representative group members from a scope."""
+        if duplicate_group_ids:
+            return and_(scope, not_(Listing.id.in_(duplicate_group_ids)))
+        return scope
+
+    total = db.query(func.count(Listing.id)).filter(_dedup(total_scope)).scalar() or 0
+    active = db.query(func.count(Listing.id)).filter(_dedup(active_scope)).scalar() or 0
+    sold = db.query(func.count(Listing.id)).filter(_dedup(sold_scope)).scalar() or 0
+    written_off = db.query(func.count(Listing.id)).filter(_dedup(written_off_scope)).scalar() or 0
+
+    # Count per platform (a grouped item still counts once per platform it is on)
     platform_counts = (
         db.query(Listing.platform, func.count(Listing.id))
         .filter(total_scope)
@@ -1844,24 +1880,24 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
     platforms = {p: c for p, c in platform_counts}
 
     # Total value (sum of active listings in scope)
-    total_value = db.query(func.sum(Listing.price_cents)).filter(active_scope).scalar() or 0
+    total_value = db.query(func.sum(Listing.price_cents)).filter(_dedup(active_scope)).scalar() or 0
 
     # Total investment / cost across active listings in scope
     total_cost = db.query(
         func.sum(Listing.purchase_price_cents + Listing.parts_cost_cents)
-    ).filter(active_scope).scalar() or 0
+    ).filter(_dedup(active_scope)).scalar() or 0
 
     # Total profit realized from sold items in scope (revenue - costs)
-    sold_revenue = db.query(func.sum(Listing.price_cents)).filter(sold_scope).scalar() or 0
+    sold_revenue = db.query(func.sum(Listing.price_cents)).filter(_dedup(sold_scope)).scalar() or 0
     sold_cost = db.query(
         func.sum(Listing.purchase_price_cents + Listing.parts_cost_cents)
-    ).filter(sold_scope).scalar() or 0
+    ).filter(_dedup(sold_scope)).scalar() or 0
     sold_profit = sold_revenue - sold_cost
 
     # Written-off inventory loss cost
     written_off_cost = db.query(
         func.sum(Listing.purchase_price_cents + Listing.parts_cost_cents)
-    ).filter(written_off_scope).scalar() or 0
+    ).filter(_dedup(written_off_scope)).scalar() or 0
 
     # Build timeline buckets for the chart
     from datetime import date
@@ -1869,13 +1905,14 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
     buckets = []
     bucket_map = {}
 
-    # Query sold items in scope
+    # Query sold items in scope (deduped: a grouped item is one sale, not one
+    # per channel).
     sold_rows = db.query(
         Listing.price_cents,
         Listing.purchase_price_cents,
         Listing.parts_cost_cents,
         coalesce(Listing.sold_at, Listing.updated_at).label("sold_date")
-    ).filter(sold_scope).all()
+    ).filter(_dedup(sold_scope)).all()
 
     if days_int:
         # Daily buckets for 7 or 30 days
@@ -2988,6 +3025,209 @@ async def delete_listing(listing_id: int, db: Session = Depends(get_db), _user: 
     db.delete(listing)
     db.commit()
     return {"ok": True}
+
+
+# -- Listing groups (same item across marketplaces) --
+
+def _group_members(db: Session, group_id: int) -> list:
+    """The listings in a group, ordered so the representative is first."""
+    return (
+        db.query(Listing)
+        .filter(Listing.group_id == group_id)
+        .order_by(Listing.id)
+        .all()
+    )
+
+
+def _serialise_group(db: Session, group_id: int) -> dict:
+    """A group summary: one card, members listed inside."""
+    from src.models import ListingGroup
+
+    members = _group_members(db, group_id)
+    if not members:
+        return {"id": group_id, "members": [], "representative": None}
+
+    group = db.get(ListingGroup, group_id)
+    # The oldest member is the representative; its title/image represent the
+    # group on the card, and its price is the card's headline price.
+    representative = members[0]
+
+    # A member sold on one channel while others are still live means the seller
+    # must delist the remaining channels. Surface that, because the natural
+    # consequence of a group is that eBay/Etsy/FB describe ONE unit.
+    sold_platforms = sorted({
+        m.platform for m in members
+        if m.is_sold or (m.status or "").lower() == "sold"
+    })
+    active_platforms = sorted({
+        m.platform for m in members
+        if not (m.is_sold or (m.status or "").lower() in ("sold", "written_off"))
+    })
+    any_written_off = any((m.status or "").lower() == "written_off" for m in members)
+
+    return {
+        "id": group_id,
+        "representative_id": representative.id,
+        "member_count": len(members),
+        "platforms": sorted({m.platform for m in members}),
+        "members": [m.to_dict() for m in members],
+        "available_quantity": group.available_quantity if group else representative.available_quantity,
+        "purchase_price_cents": group.purchase_price_cents if group else 0,
+        "parts_cost_cents": group.parts_cost_cents if group else 0,
+        "total_cost_cents": group.total_cost_cents if group else 0,
+        "missing_cost": not (group.has_cost if group else representative.has_cost),
+        "sold_platforms": sold_platforms,
+        "active_platforms": active_platforms,
+        # True when one channel sold but the item is still live elsewhere.
+        "needs_delist": bool(sold_platforms and active_platforms),
+        "all_sold": bool(sold_platforms and not active_platforms),
+        "written_off": any_written_off,
+    }
+
+
+@api_router.post("/listings/group")
+async def group_listings(body: dict, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
+    """Link several listings as the same item across marketplaces.
+
+    Body: ``{ "listing_ids": [1, 2, 3] }``. Requires at least two distinct ids.
+    Creates (or adds to) a group whose shared COGS and stock are counted once.
+
+    Tenant-scoped: every id must belong to the caller's teams, and a group is
+    never formed across teams.
+    """
+    from src.models import ListingGroup
+
+    raw_ids = body.get("listing_ids") or []
+    try:
+        ids = sorted({int(i) for i in raw_ids})
+    except (TypeError, ValueError):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "listing_ids must be integers"})
+
+    if len(ids) < 2:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Pick at least two listings to group"})
+
+    user_team_ids = _user.get("team_ids") or []
+    rows = db.query(Listing).filter(Listing.id.in_(ids)).all()
+    if len(rows) != len(ids):
+        return JSONResponse(status_code=404, content={"ok": False, "error": "One or more listings not found"})
+    for l in rows:
+        if not l.team_id or l.team_id not in user_team_ids:
+            return JSONResponse(status_code=403, content={"ok": False, "error": "You do not have access to one of these listings"})
+
+    # A group can only span one team: sharing a unit across teams would leak one
+    # team's inventory into another.
+    teams = {l.team_id for l in rows}
+    if len(teams) > 1:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Grouped listings must belong to the same team"})
+
+    # Determine the group: reuse an existing group if every target already shares
+    # one, otherwise create a new group and move every target into it.
+    existing_groups = {l.group_id for l in rows if l.group_id}
+    if len(existing_groups) == 1:
+        group_id = existing_groups.pop()
+    else:
+        # Start from the cheapest-to-adopt shape: seed the new group's shared
+        # COGS/quantity from whichever listing already has a purchase price.
+        cost_seed = next((l for l in rows if (l.purchase_price_cents or 0) > 0), rows[0])
+        group = ListingGroup(
+            purchase_price_cents=cost_seed.purchase_price_cents or 0,
+            parts_cost_cents=cost_seed.parts_cost_cents or 0,
+            parts_json=cost_seed.parts_json or [],
+            available_quantity=cost_seed.available_quantity or 1,
+        )
+        db.add(group)
+        db.flush()
+        group_id = group.id
+
+    for l in rows:
+        l.group_id = group_id
+        l.updated_at = datetime.utcnow()
+    db.commit()
+
+    return {"ok": True, "group": _serialise_group(db, group_id)}
+
+
+@api_router.post("/listings/{listing_id}/ungroup")
+async def ungroup_listing(listing_id: int, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
+    """Remove one listing from its group (the rest stay grouped)."""
+    listing = db.get(Listing, listing_id)
+    if not _check_listing_access(listing, _user, db):
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Listing not found"})
+
+    if not listing.group_id:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Listing is not grouped"})
+
+    old_group = listing.group_id
+    listing.group_id = None
+    listing.updated_at = datetime.utcnow()
+    db.commit()
+
+    # A one-member group is no longer a group; drop its shared row.
+    remaining = _group_members(db, old_group)
+    if len(remaining) < 2:
+        from src.models import ListingGroup
+        for l in remaining:
+            l.group_id = None
+        g = db.get(ListingGroup, old_group)
+        if g:
+            db.delete(g)
+        db.commit()
+
+    return {"ok": True}
+
+
+@api_router.put("/listings/group/{group_id}")
+async def update_group(group_id: int, body: dict, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
+    """Update a group's shared COGS and stock. The value applies to every member."""
+    from src.models import ListingGroup
+
+    group = db.get(ListingGroup, group_id)
+    if not group:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Group not found"})
+
+    # Ownership: the caller must own at least one member (and thereby the team).
+    members = _group_members(db, group_id)
+    user_team_ids = _user.get("team_ids") or []
+    if not any(m.team_id in user_team_ids for m in members):
+        return JSONResponse(status_code=403, content={"ok": False, "error": "You do not have access to this group"})
+
+    if "purchase_price_cents" in body or "purchase_price" in body:
+        if "purchase_price_cents" in body:
+            group.purchase_price_cents = max(0, int(body["purchase_price_cents"]))
+        else:
+            try:
+                group.purchase_price_cents = max(0, int(round(float(body["purchase_price"]) * 100)))
+            except (TypeError, ValueError):
+                return JSONResponse(status_code=400, content={"ok": False, "error": "Invalid purchase_price"})
+
+    if "parts" in body:
+        parts_raw = body.get("parts") or []
+        cleaned, parts_total = [], 0
+        if isinstance(parts_raw, list):
+            for p in parts_raw:
+                if not isinstance(p, dict):
+                    continue
+                desc = (p.get("description") or p.get("name") or "").strip()
+                if not desc:
+                    continue
+                c = p.get("cost_cents")
+                if c is None:
+                    try:
+                        c = int(round(float(p.get("cost") or 0) * 100))
+                    except (TypeError, ValueError):
+                        c = 0
+                c = int(c)
+                cleaned.append({"description": desc, "cost_cents": c, "cost": round(c / 100, 2)})
+                parts_total += c
+        group.parts_json = cleaned
+        group.parts_cost_cents = parts_total
+
+    if "available_quantity" in body:
+        group.available_quantity = max(0, int(body["available_quantity"]))
+
+    group.updated_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True, "group": _serialise_group(db, group_id)}
 
 
 @api_router.put("/listings/{listing_id}")
