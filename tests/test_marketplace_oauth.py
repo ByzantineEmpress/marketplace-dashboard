@@ -109,6 +109,34 @@ class EtsyAuthorizationUrlTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.adapter.get_authorization_url(state="x", credentials={"api_key": "k"})
 
+    def test_a_rejected_exchange_reports_the_providers_reason(self):
+        """A live Etsy reconnect failed with a bare "400 Bad Request", which gave
+        the user nothing to act on. The body names the actual problem."""
+        from src.adapters.base import _oauth_error
+
+        class Resp:
+            status_code = 400
+            def json(self):
+                return {"error": "invalid_grant",
+                        "error_description": "code_verifier is invalid"}
+
+        message = _oauth_error(Resp(), "Etsy")
+        self.assertIn("400", message)
+        self.assertIn("code_verifier is invalid", message)
+
+    def test_a_non_json_error_body_is_still_reported(self):
+        from src.adapters.base import _oauth_error
+
+        class Resp:
+            status_code = 500
+            text = "<html>upstream exploded</html>"
+            def json(self):
+                raise ValueError("not json")
+
+        message = _oauth_error(Resp(), "eBay")
+        self.assertIn("500", message)
+        self.assertIn("upstream exploded", message)
+
     def test_redirect_uri_is_url_encoded(self):
         """An unencoded redirect_uri contains :// and would break the query."""
         challenge = oauth_pkce.challenge_for(oauth_pkce.new_verifier())

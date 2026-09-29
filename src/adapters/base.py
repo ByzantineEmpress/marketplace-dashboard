@@ -20,6 +20,30 @@ from src.models import Listing, MarketplaceAccount
 from src.config import config
 
 
+def _oauth_error(resp, platform: str) -> str:
+    """A usable message from a failed token request.
+
+    Providers put the reason in the body: Etsy answers "invalid_grant" or
+    "code_verifier is invalid", eBay names the offending parameter. Reporting only
+    the HTTP status left the user staring at "400 Bad Request" with nothing to act
+    on, which is exactly what happened on a live Etsy reconnect.
+    """
+    detail = ""
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            detail = (body.get("error_description") or body.get("error")
+                      or body.get("message") or "")
+            errors = body.get("errors")
+            if not detail and isinstance(errors, list) and errors and isinstance(errors[0], dict):
+                detail = errors[0].get("longMessage") or errors[0].get("message") or ""
+    except Exception:
+        detail = (resp.text or "").strip()[:200]
+
+    message = f"{platform} rejected the token exchange (HTTP {resp.status_code})"
+    return f"{message}: {detail}" if detail else message
+
+
 def _cred(credentials, key, default=None):
     """Pull one credential out of a per-user credentials mapping.
 

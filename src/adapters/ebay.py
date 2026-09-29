@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from src.adapters.base import MarketplaceAdapter, _cred
+from src.adapters.base import MarketplaceAdapter, _cred, _oauth_error
 from src.database import SessionLocal
 from src.models import Listing
 from src.config import config
@@ -252,6 +252,8 @@ class eBayAdapter(MarketplaceAdapter):
                 },
                 timeout=30,
             )
+            if resp.status_code >= 400:
+                return {"success": False, "error": _oauth_error(resp, "eBay")}
             resp.raise_for_status()
             token_data = resp.json()
 

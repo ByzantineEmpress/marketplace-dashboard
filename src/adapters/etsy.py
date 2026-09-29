@@ -21,7 +21,7 @@ from urllib.parse import quote
 
 import httpx
 
-from src.adapters.base import MarketplaceAdapter, _cred
+from src.adapters.base import MarketplaceAdapter, _cred, _oauth_error
 from src.database import SessionLocal
 from src.config import config
 
@@ -137,6 +137,11 @@ class EtsyAdapter(MarketplaceAdapter):
                 headers={"x-api-key": f"{api_key}:{api_secret}"} if api_key and api_secret else {},
                 timeout=30,
             )
+            if resp.status_code >= 400:
+                # Etsy explains the rejection in the body ("invalid_grant",
+                # "code_verifier is invalid", a scope problem). Surfacing only
+                # "400 Bad Request" made this impossible to diagnose from the UI.
+                return {"success": False, "error": _oauth_error(resp, "Etsy")}
             resp.raise_for_status()
             token_data = resp.json()
 
@@ -197,6 +202,8 @@ class EtsyAdapter(MarketplaceAdapter):
                 headers={"x-api-key": f"{api_key}:{api_secret}"} if api_key and api_secret else {},
                 timeout=30,
             )
+            if resp.status_code >= 400:
+                return {"success": False, "error": _oauth_error(resp, "Etsy")}
             resp.raise_for_status()
             token_data = resp.json()
 
