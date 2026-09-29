@@ -328,7 +328,7 @@ class eBayAdapter(MarketplaceAdapter):
             marketplace = (token.get("registration_marketplace_id") or "").strip() or "EBAY_US"
             listings = self._fetch_active_inventory_report(headers, max_results, marketplace)
             if listings:
-                return listings
+                return self._enrich_listings(listings, headers, marketplace, max_results)
 
             inventory_items = self._fetch_inventory_items(headers, max_results)
             if not inventory_items:
@@ -479,6 +479,72 @@ class eBayAdapter(MarketplaceAdapter):
             })
 
         return items
+
+    def _fetch_browse_item(self, item_id: str, headers: dict) -> dict:
+        """Fetch one item's title, image(s), category and description.
+
+        The Active Inventory Report has only ItemID/price/quantity, so this uses
+        the Browse API's item endpoint with the ``v1|<legacy item id>|0`` id form
+        (the legacy ItemID alone 404s). It accepts the same user token — no buy.*
+        scope is required for the item resource, unlike item_summary/search.
+        """
+        try:
+            resp = httpx.get(
+                f"https://api.ebay.com/buy/browse/v1/item/v1|{item_id}|0",
+                headers=headers,
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                return {}
+            data = resp.json()
+            image = data.get("image") or {}
+            images = [image.get("imageUrl")] if image.get("imageUrl") else []
+            for extra in data.get("additionalImages") or []:
+                url = (extra or {}).get("imageUrl") if isinstance(extra, dict) else None
+                if url:
+                    images.append(url)
+            return {
+                "title": data.get("title", ""),
+                "image_url": image.get("imageUrl", ""),
+                "images": images,
+                "category": data.get("categoryPath", ""),
+                "description": data.get("description") or "",
+            }
+        except Exception:
+            return {}
+
+    def _enrich_listings(self, rows: List[dict], headers: dict, marketplace: str,
+                         limit: int) -> List[dict]:
+        """Fill in title, image and category for each report row.
+
+        The report alone yields generated titles and no photos; the Browse API
+        supplies the real values per item. A row whose item cannot be fetched is
+        left as-is, so a transient Browse failure never drops a listing.
+        """
+        import time
+
+        browse_headers = dict(headers)
+        browse_headers["X-EBAY-C-MARKETPLACE-ID"] = marketplace
+
+        enriched = []
+        for row in rows[:limit]:
+            detail = self._fetch_browse_item(row["platform_listing_id"], browse_headers)
+            if detail.get("title"):
+                row["title"] = detail["title"]
+            if detail.get("image_url"):
+                row["image_url"] = detail["image_url"]
+            if detail.get("images"):
+                row["images_json"] = detail["images"]
+            if detail.get("category"):
+                row["category"] = detail["category"]
+            if detail.get("description"):
+                row["description"] = detail["description"]
+            enriched.append(row)
+            # A short pause between calls keeps the burst well under the Browse
+            # API's per-call rate limit even for a large inventory.
+            time.sleep(0.1)
+
+        return enriched
 
     def _fetch_inventory_items(self, headers: dict, limit: int) -> List[tuple]:
         """Fetch inventory items from eBay's Inventory API.

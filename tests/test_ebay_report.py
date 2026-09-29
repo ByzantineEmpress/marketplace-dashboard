@@ -149,5 +149,74 @@ class EbayReportFetchTest(unittest.TestCase):
         self.adapter.last_error = None
 
 
+class EbayBrowseEnrichmentTest(unittest.TestCase):
+    def setUp(self):
+        self.adapter = get_adapter("ebay")
+
+    def test_fetch_browse_item_parses_title_image_and_category(self):
+        import src.adapters.ebay as ebay_mod
+
+        class FakeResp:
+            status_code = 200
+            def json(self):
+                return {
+                    "title": "Vintage Projector",
+                    "image": {"imageUrl": "https://i.ebayimg.com/a.jpg"},
+                    "additionalImages": [{"imageUrl": "https://i.ebayimg.com/b.jpg"}],
+                    "categoryPath": "Cameras|Vintage",
+                    "description": "Works.",
+                }
+
+        requested = []
+
+        def fake_get(url, **kw):
+            requested.append(url)
+            return FakeResp()
+
+        real = ebay_mod.httpx.get
+        ebay_mod.httpx.get = fake_get
+        try:
+            detail = self.adapter._fetch_browse_item("800657056078",
+                                                     {"Authorization": "Bearer t"})
+        finally:
+            ebay_mod.httpx.get = real
+
+        self.assertEqual(detail["title"], "Vintage Projector")
+        self.assertEqual(detail["image_url"], "https://i.ebayimg.com/a.jpg")
+        self.assertEqual(detail["images"],
+                         ["https://i.ebayimg.com/a.jpg", "https://i.ebayimg.com/b.jpg"])
+        self.assertEqual(detail["category"], "Cameras|Vintage")
+        # The Browse item id uses the v1|ItemID|0 form.
+        self.assertIn("v1|800657056078|0", requested[0])
+
+    def test_enrich_listings_fills_title_and_image(self):
+        import src.adapters.ebay as ebay_mod
+
+        class FakeResp:
+            status_code = 200
+            def json(self):
+                return {"title": "Real Title", "image": {"imageUrl": "https://x/img.jpg"},
+                        "additionalImages": [], "categoryPath": "Cat", "description": ""}
+
+        def fake_get(url, **kw):
+            return FakeResp()
+
+        real = ebay_mod.httpx.get
+        ebay_mod.httpx.get = fake_get
+        try:
+            rows = self.adapter._enrich_listings(
+                [{"platform_listing_id": "123", "title": "eBay listing 123",
+                  "price_cents": 100, "currency": "CAD", "image_url": "",
+                  "images_json": [], "category": "", "description": "",
+                  "platform": "ebay"}],
+                {"Authorization": "Bearer t"}, "EBAY_CA", 10)
+        finally:
+            ebay_mod.httpx.get = real
+
+        self.assertEqual(rows[0]["title"], "Real Title")
+        self.assertEqual(rows[0]["image_url"], "https://x/img.jpg")
+        self.assertEqual(rows[0]["images_json"], ["https://x/img.jpg"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
