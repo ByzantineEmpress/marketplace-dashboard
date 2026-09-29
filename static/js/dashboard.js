@@ -775,7 +775,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     if (!res.ok || !data.ok) {
                         throw new Error(data.error || "Ungroup failed");
                     }
-                    closeListingModal();
+                    closeModal();
                     loadListings();
                     loadStats();
                 } catch (err) {
