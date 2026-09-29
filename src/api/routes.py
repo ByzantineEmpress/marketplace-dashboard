@@ -259,6 +259,26 @@ def _safe_relative_url(url: str, default: str = "/dashboard") -> str:
 
 page_router = APIRouter()
 
+@page_router.get("/privacy")
+async def privacy_page(request: Request):
+    """Public privacy policy.
+
+    eBay requires a privacy policy URL for any application using User tokens,
+    and the app stores account details, marketplace tokens and synced inventory,
+    so it should be readable without signing in.
+    """
+    return templates.TemplateResponse(
+        request=request,
+        name="privacy.html",
+        context={
+            "active": "",
+            # Only shown when actually configured, so no address is invented.
+            "contact_email": (config.MAIL_FROM or "").strip(),
+            "last_updated": "2026-09-29",
+        },
+    )
+
+
 @page_router.get("/login")
 async def login_page(request: Request):
     """Login page — POSTs to /api/auth/login."""
