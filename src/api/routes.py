@@ -294,6 +294,7 @@ async def login_page(request: Request):
             "invited_to": invited_to,
             "verified": request.query_params.get("verified") == "1",
             "verified_email": request.query_params.get("email", ""),
+            "deleted": request.query_params.get("deleted") == "1",
             "google_enabled": bool(config.GOOGLE_CLIENT_ID or config.GOOGLE_DEV_MODE),
             "csrf_token": csrf_token,
         },
@@ -1506,6 +1507,32 @@ async def logout(request: Request):
         finally:
             db.close()
     response = JSONResponse(content={"ok": True})
+    response.delete_cookie(key="auth_token", httponly=True)
+    return response
+
+@api_router.delete("/account")
+async def delete_own_account(request: Request, db: Session = Depends(get_db),
+                             _user: dict = Depends(check_auth)):
+    """Delete the caller's account and every piece of their data.
+
+    This is the right-to-erasure path the privacy policy describes. It removes
+    sessions, marketplace connections and tokens, marketplace API keys, team
+    memberships, solely-owned teams and their listings, and join requests, then
+    the account itself. The response clears the auth cookie.
+
+    The bootstrap local administrator cannot be deleted (it anchors the default
+    team and migrations).
+    """
+    from src.data_deletion import delete_user_data
+
+    summary = delete_user_data(db, _user["id"])
+    if not summary.get("deleted"):
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": summary.get("error", "Deletion failed")},
+        )
+
+    response = JSONResponse(content={"ok": True, "deleted": summary})
     response.delete_cookie(key="auth_token", httponly=True)
     return response
 

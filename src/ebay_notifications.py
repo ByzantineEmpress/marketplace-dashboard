@@ -101,18 +101,22 @@ def parse_notification(payload: Any) -> Dict[str, Any]:
 
 
 def disconnect_matching_ebay_accounts(db, username: str, user_id: str) -> int:
-    """Best-effort: drop stored eBay connections naming this eBay user.
+    """Erase the stored data for an eBay user who deleted their account.
 
-    This app stores an eBay connection per user (their OAuth tokens and shop
-    details). If the notification names a shop we hold, that connection is
-    disconnected and its tokens cleared, because the eBay account behind it no
-    longer exists.
+    Returns how many eBay connections were erased.
 
-    Matching is best-effort by design: eBay identifies the user by username or
-    immutable userId, and we only hold what the OAuth handshake returned. When
-    nothing matches we return 0 and the notification is still recorded, so it can
+    Matching is by whatever eBay identity we hold on the connection: ``shop_name``
+    or ``shop_id``, plus ``username``/``user_id``/``userId`` fields inside the
+    raw ``token_data`` JSON (the token response may carry them). When nothing
+    matches we return 0 and the caller still records the notification, so it can
     be actioned later rather than being silently dropped.
+
+    For each match the full connection is erased via
+    ``data_deletion.delete_ebay_connection_data``: the OAuth tokens, the owning
+    user's eBay API keys, and their eBay listings in solely-owned teams. A flag
+    flip would not be deletion, and eBay requires actual erasure.
     """
+    from src.data_deletion import delete_ebay_connection_data
     from src.models import MarketplaceAccount
 
     if not username and not user_id:
@@ -122,17 +126,18 @@ def disconnect_matching_ebay_accounts(db, username: str, user_id: str) -> int:
     matches = []
     for account in query.all():
         candidates = {str(account.shop_name or ""), str(account.shop_id or "")}
+        token_data = account.token_data or {}
+        if isinstance(token_data, dict):
+            for key in ("username", "user_id", "userId", "userID"):
+                if token_data.get(key):
+                    candidates.add(str(token_data[key]))
+
         if (username and username in candidates) or (user_id and user_id in candidates):
             matches.append(account)
 
+    total = 0
     for account in matches:
-        # Clear the credentials outright rather than only flipping the flag: the
-        # tokens are what could still act on a deleted account's behalf.
-        account.access_token = None
-        account.refresh_token = None
-        account.token_data = None
-        account.is_connected = False
+        delete_ebay_connection_data(db, account)
+        total += 1
 
-    if matches:
-        db.commit()
-    return len(matches)
+    return total

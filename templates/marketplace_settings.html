@@ -43,6 +43,26 @@
                 field, type a single space, and save.
             </p>
         </div>
+
+        <div class="team-card" style="margin-top: 22px; border-color: var(--danger);">
+            <div class="team-header" style="color: var(--danger);"><strong>Delete my data</strong></div>
+            <p class="section-desc" style="margin: 6px 0 12px;">
+                Permanently deletes your account, marketplace connections and their
+                tokens, your API keys, your sessions, and the listings in teams where
+                you are the only member. This cannot be undone.
+            </p>
+            <button type="button" class="btn btn--danger" id="delete-account-btn">Delete my account &amp; data</button>
+            <div id="delete-account-confirm" style="display:none; margin-top: 12px;">
+                <p class="section-desc" style="margin: 0 0 8px;">Type <strong>DELETE</strong> to confirm:</p>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <input type="text" id="delete-account-input" placeholder="DELETE"
+                           autocomplete="off" spellcheck="false"
+                           style="flex: 1; min-width: 160px;">
+                    <button type="button" class="btn btn--danger" id="delete-account-confirm-btn" disabled>Permanently delete</button>
+                </div>
+                <span id="delete-account-status" style="font-size: 12px; display: block; margin-top: 8px;"></span>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}

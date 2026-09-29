@@ -23,6 +23,12 @@
         </div>
         {% endif %}
 
+        {% if deleted %}
+        <div class="flash flash--success" style="margin-bottom: 16px;">
+            ✓ Your account and data have been deleted.
+        </div>
+        {% endif %}
+
         {% if error %}
         <div class="flash flash--error">{{ error }}</div>
         {% endif %}

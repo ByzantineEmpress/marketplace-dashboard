@@ -304,5 +304,39 @@
             });
     }
 
+    // -- Delete account & data (right to erasure) --
+    const deleteBtn = document.getElementById("delete-account-btn");
+    const deleteConfirm = document.getElementById("delete-account-confirm");
+    const deleteInput = document.getElementById("delete-account-input");
+    const deleteConfirmBtn = document.getElementById("delete-account-confirm-btn");
+    const deleteStatus = document.getElementById("delete-account-status");
+
+    if (deleteBtn && deleteConfirm && deleteInput && deleteConfirmBtn && deleteStatus) {
+        deleteBtn.addEventListener("click", function () {
+            deleteBtn.style.display = "none";
+            deleteConfirm.style.display = "block";
+            deleteInput.focus();
+        });
+        deleteInput.addEventListener("input", function () {
+            deleteConfirmBtn.disabled = deleteInput.value.trim() !== "DELETE";
+        });
+        deleteConfirmBtn.addEventListener("click", async function () {
+            if (deleteInput.value.trim() !== "DELETE") return;
+            deleteConfirmBtn.disabled = true;
+            deleteStatus.textContent = "Deleting\u2026";
+            try {
+                const res = await fetch("/api/account", { method: "DELETE" });
+                const data = await res.json();
+                if (!res.ok || !data.ok) {
+                    throw new Error(data.error || "Deletion failed");
+                }
+                window.location.href = "/login?deleted=1";
+            } catch (err) {
+                deleteStatus.textContent = "Could not delete: " + err.message;
+                deleteConfirmBtn.disabled = false;
+            }
+        });
+    }
+
     load();
 })();

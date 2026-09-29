@@ -173,12 +173,11 @@ class DeletionEndpointTest(unittest.TestCase):
 
         db = SessionLocal()
         try:
+            # Deletion now ERASES the connection, not just clears its flag.
             acct = db.query(MarketplaceAccount).filter(
                 MarketplaceAccount.user_id == uid,
                 MarketplaceAccount.platform == "ebay").first()
-            self.assertFalse(acct.is_connected)
-            self.assertIsNone(acct.access_token)
-            self.assertIsNone(acct.refresh_token)
+            self.assertIsNone(acct)
         finally:
             from src.models import EbayAccountDeletion
             db.query(EbayAccountDeletion).filter_by(
