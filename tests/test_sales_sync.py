@@ -404,8 +404,15 @@ class RecordSalesTest(unittest.TestCase):
         self.assertEqual(row.image_url, "https://first.jpg")
 
     def test_attach_images_only_fetches_what_is_missing(self):
+        """A row that already has both a picture and a category costs no call.
+
+        It is deliberately re-fetched when the category is unknown: the category
+        decides the fee, and the fee estimate for unsold listings is built from the
+        rates observed on sold ones. Once learned, the lookup stops.
+        """
         row = self._listing("800570000010", title="Already photographed")
         row.image_url = "https://i.ebayimg.com/existing.jpg"
+        row.category = "Consumer Electronics|Vintage Electronics|VCRs"
         self.db.commit()
 
         calls = []
@@ -413,7 +420,8 @@ class RecordSalesTest(unittest.TestCase):
         def fake_browse(item_id, headers):
             calls.append(item_id)
             return {"image_url": "https://i.ebayimg.com/new.jpg",
-                    "images": ["https://i.ebayimg.com/new.jpg"]}
+                    "images": ["https://i.ebayimg.com/new.jpg"],
+                    "category": "Consumer Electronics|Vintage Electronics|VCRs"}
 
         self.adapter._fetch_browse_item = fake_browse
         sales = [{"platform_listing_id": "800570000010"},
@@ -421,9 +429,30 @@ class RecordSalesTest(unittest.TestCase):
         attached = self.adapter._attach_sale_images(self.db, sales, {}, "tok", "EBAY_CA")
 
         self.assertEqual(attached, 1)
-        # The row that already had a picture must not be looked up again.
+        # The row that already had a picture AND a category must not be re-fetched.
         self.assertEqual(calls, ["800570000011"])
         self.assertEqual(sales[1]["image_url"], "https://i.ebayimg.com/new.jpg")
+
+    def test_a_missing_category_is_learned_even_when_the_photo_is_known(self):
+        """Without this, every sold row feeds only the platform fee average and
+        the category dimension of the estimate stays empty."""
+        row = self._listing("800570000020", title="Photographed, no category")
+        row.image_url = "https://i.ebayimg.com/existing.jpg"
+        row.category = None
+        self.db.commit()
+
+        def fake_browse(item_id, headers):
+            return {"image_url": "https://i.ebayimg.com/other.jpg",
+                    "images": ["https://i.ebayimg.com/other.jpg"],
+                    "category": "Cameras & Photo|Vintage Movie|Projectors"}
+
+        self.adapter._fetch_browse_item = fake_browse
+        sales = [{"platform_listing_id": "800570000020"}]
+        attached = self.adapter._attach_sale_images(self.db, sales, {}, "tok", "EBAY_CA")
+
+        # No new picture was needed, and the stored one stands.
+        self.assertEqual(attached, 0)
+        self.assertEqual(sales[0]["category"], "Cameras & Photo|Vintage Movie|Projectors")
 
     def test_attach_images_falls_back_to_getitem(self):
         calls = []

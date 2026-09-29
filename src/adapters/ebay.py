@@ -799,14 +799,21 @@ class eBayAdapter(MarketplaceAdapter):
 
     def _attach_sale_images(self, db, sales: List[dict], browse_headers: dict,
                             access_token: str, marketplace: str) -> int:
-        """Give each sale a photo, so a sold card is not a blank tile.
+        """Give each sale a photo, and its category.
 
-        Orders carry no images, so each item has to be looked up. Browse answers
-        for these ended listings and returns the clean s-l1600 URL; the Trading
-        API GetItem is the fallback because Browse 404s for some items.
+        Orders carry neither, so each item has to be looked up. Browse answers for
+        these ended listings and returns the clean s-l1600 URL; the Trading API
+        GetItem is the fallback because Browse 404s for some items.
+
+        The category comes along because the fee depends on it, and the fee
+        estimate for unsold listings is built from the rates this account has
+        actually been charged. A sold row with no category contributes only to the
+        platform average, so capturing it here is what makes category-level
+        estimates possible at all.
 
         Items whose picture is already stored are skipped, so a repeated sync does
-        not re-fetch every sale.
+        not re-fetch every sale — but a category is still filled in if that is the
+        only thing missing.
         """
         import time
 
@@ -814,25 +821,43 @@ class eBayAdapter(MarketplaceAdapter):
             return 0
 
         ids = [s["platform_listing_id"] for s in sales if s.get("platform_listing_id")]
-        already = set()
+        known = {}
         if ids:
-            already = {
-                row[0]
-                for row in db.query(Listing.platform_listing_id).filter(
+            known = {
+                row[0]: (row[1] or "", row[2] or "")
+                for row in db.query(Listing.platform_listing_id, Listing.image_url,
+                                    Listing.category).filter(
                     Listing.platform == self.PLATFORM,
                     Listing.platform_listing_id.in_(ids),
-                    Listing.image_url.isnot(None),
-                    Listing.image_url != "",
                 ).all()
             }
 
         attached = 0
         for sale in sales:
             item_id = sale.get("platform_listing_id")
-            if not item_id or item_id in already or sale.get("image_url"):
+            if not item_id:
+                continue
+            stored_image, stored_category = known.get(item_id, ("", ""))
+            if stored_image:
+                sale["image_url"] = sale.get("image_url") or stored_image
+            if stored_category:
+                sale["category"] = sale.get("category") or stored_category
                 continue
 
             detail = self._fetch_browse_item(item_id, browse_headers)
+            if detail.get("category") and not sale.get("category"):
+                sale["category"] = detail["category"]
+
+            if sale.get("image_url") or stored_image:
+                # Nothing left to fetch, but the category lookup above may still
+                # have been worth the call.
+                if detail.get("image_url") and not stored_image:
+                    sale["image_url"] = detail["image_url"]
+                    sale["images"] = detail.get("images") or [detail["image_url"]]
+                    attached += 1
+                time.sleep(0.1)
+                continue
+
             if detail.get("image_url"):
                 sale["image_url"] = detail["image_url"]
                 sale["images"] = detail.get("images") or [detail["image_url"]]

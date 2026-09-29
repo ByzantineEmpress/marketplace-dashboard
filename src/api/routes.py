@@ -1848,11 +1848,24 @@ def _observed_fee_rates(db, team_ids) -> dict:
 
     totals = defaultdict(lambda: [0, 0])
     for platform, category, price, fees in query.all():
-        for key in {(platform, None), (platform, _leaf_category(category))}:
+        keys = {(platform, None)}
+        leaf = _leaf_category(category)
+        # A row with no category must not create a "" category key: it would look
+        # like a category match and be reported as one, while being nothing of the
+        # sort. Only a real leaf earns its own bucket.
+        if leaf:
+            keys.add((platform, leaf))
+        for key in keys:
             totals[key][0] += fees or 0
             totals[key][1] += price or 0
 
     return {key: value[0] / value[1] for key, value in totals.items() if value[1] > 0}
+
+
+def _fee_basis(listing, rates: dict) -> str:
+    """Whether an estimate came from the listing's category or the platform."""
+    leaf = _leaf_category(listing.category)
+    return "category" if leaf and (listing.platform, leaf) in rates else "platform"
 
 
 def _estimated_fees(listing, rates: dict):
@@ -1863,7 +1876,8 @@ def _estimated_fees(listing, rates: dict):
     """
     if not listing.price_cents or listing.is_sold:
         return None
-    rate = rates.get((listing.platform, _leaf_category(listing.category)))
+    leaf = _leaf_category(listing.category)
+    rate = rates.get((listing.platform, leaf)) if leaf else None
     if not rate:
         rate = rates.get((listing.platform, None))
     if not rate:
@@ -1985,15 +1999,13 @@ async def get_listings(
         item["group_summary"] = group_summaries.get(l.group_id)
         estimated = _estimated_fees(l, fee_rates)
         if estimated is not None:
+            leaf = _leaf_category(l.category)
             item["est_fees_cents"] = estimated
             item["est_fee_rate"] = round(
-                fee_rates.get((l.platform, _leaf_category(l.category)))
+                (fee_rates.get((l.platform, leaf)) if leaf else None)
                 or fee_rates.get((l.platform, None)) or 0, 4
             )
-            item["est_fee_basis"] = (
-                "category" if (l.platform, _leaf_category(l.category)) in fee_rates
-                else "platform"
-            )
+            item["est_fee_basis"] = _fee_basis(l, fee_rates)
         items.append(item)
 
     return {

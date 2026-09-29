@@ -522,6 +522,10 @@ class MarketplaceAdapter(ABC):
                 shipping_charged_cents = int(sale.get("shipping_charged_cents") or 0)
                 net_payout_cents = int(sale.get("net_payout_cents") or 0)
                 shipping_cost_cents = int(sale.get("shipping_cost_cents") or 0)
+                # The category decides the fee, and the fee estimate for unsold
+                # listings is built from rates observed on sold ones. A sold row
+                # with no category can only ever feed the platform average.
+                category = sale.get("category") or ""
 
                 if existing:
                     existing.is_sold = True
@@ -552,6 +556,10 @@ class MarketplaceAdapter(ABC):
                         existing.net_payout_cents = net_payout_cents
                     if shipping_cost_cents:
                         existing.shipping_cost_cents = shipping_cost_cents
+                    # Only fill a missing category, same reasoning as the picture:
+                    # never overwrite what is already known.
+                    if category and not existing.category:
+                        existing.category = category
                     existing.updated_at = datetime.utcnow()
                     recorded += 1
                 else:
@@ -562,6 +570,7 @@ class MarketplaceAdapter(ABC):
                         price_cents=price_cents,
                         price_raw=f"{currency} {price_cents / 100:.2f}",
                         currency=currency,
+                        category=category or None,
                         image_url=image_url or None,
                         images_json=images or None,
                         fees_cents=fees_cents,
