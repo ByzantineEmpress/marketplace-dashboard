@@ -20,6 +20,25 @@ from src.models import Listing, MarketplaceAccount
 from src.config import config
 
 
+def _cred(credentials, key, default=None):
+    """Pull one credential out of a per-user credentials mapping.
+
+    ``credentials`` is what :meth:`MarketplaceAdapter.credentials_for` returns:
+    a plain dict of the current user's keys, or ``None`` when nothing was
+    resolved. Every adapter read is written as
+
+        _cred(credentials, "client_id") or config.EBAY_CLIENT_ID or ...
+
+    so the user's own value wins and the instance-wide setting stays the
+    fallback. That ordering is what stops one user's sync from using another
+    user's account, while leaving an existing .env deployment working.
+    """
+    if not credentials:
+        return default
+    value = credentials.get(key)
+    return value if value else default
+
+
 class MarketplaceAdapter(ABC):
     """Abstract base for all marketplace API adapters.
 
@@ -78,6 +97,24 @@ class MarketplaceAdapter(ABC):
         """Return a CSS class or SVG path for the platform logo."""
         ...
 
+    # Instance-wide config attribute backing each (platform, credential_key).
+    #
+    # Needed because the names do not line up mechanically: the eBay credential
+    # is "client_id" but the config attribute is EBAY_CLIENT_ID. Guessing at
+    # prefixes produced a silent None, so the mapping is explicit.
+    CONFIG_FALLBACK = {
+        ("ebay", "client_id"): "EBAY_CLIENT_ID",
+        ("ebay", "client_secret"): "EBAY_CLIENT_SECRET",
+        ("etsy", "api_key"): "ETSY_API_KEY",
+        ("etsy", "api_secret"): "ETSY_API_SECRET",
+        ("poshmark", "username"): "POSHMARK_USERNAME",
+        ("poshmark", "api_key"): "POSHMARK_API_KEY",
+        ("amazon", "seller_id"): "AMAZON_SELLER_ID",
+        ("amazon", "client_id"): "AMAZON_CLIENT_ID",
+        ("amazon", "client_secret"): "AMAZON_CLIENT_SECRET",
+        ("amazon", "refresh_token"): "AMAZON_REFRESH_TOKEN",
+    }
+
     def credentials_for(self, db, user_id, keys, platform=None):
         """Resolve this adapter's API credentials for one user.
 
@@ -113,14 +150,17 @@ class MarketplaceAdapter(ABC):
             if rows.get(key):
                 resolved[key] = rows[key]
                 continue
-            # Fall back to the instance-wide setting of the same name.
-            resolved[key] = getattr(config, key.upper(), "") or None
+            # Fall back to the instance-wide setting. The names do not line up
+            # mechanically (credential "client_id" vs config EBAY_CLIENT_ID), so
+            # an explicit mapping is used rather than guessing at prefixes.
+            config_name = self.CONFIG_FALLBACK.get((platform_name, key))
+            resolved[key] = (getattr(config, config_name, None) or None) if config_name else None
 
         return resolved
 
     # ---------- Token management ----------
 
-    def get_token(self, db: SessionLocal, user_id=None) -> Optional[Dict[str, Any]]:
+    def get_token(self, db: SessionLocal, user_id=None, credentials: dict = None) -> Optional[Dict[str, Any]]:
         """Get the stored OAuth token data for this platform and user.
 
         Returns ``None`` if this user has not connected the platform.
@@ -129,6 +169,9 @@ class MarketplaceAdapter(ABC):
         callers keep working during the transition. Passing ``None`` looks at
         rows with no owner, which will not match anything the application
         creates.
+
+        ``credentials`` is forwarded to :meth:`refresh_token`, because a refresh
+        needs the same per-user API key the original authorisation used.
         """
         account = self._find_account(db, user_id)
         if not account or not account.is_connected:
@@ -136,8 +179,15 @@ class MarketplaceAdapter(ABC):
 
         # Check if the token is expired
         if account.token_expires_at and datetime.utcnow() >= account.token_expires_at:
-            # Token expired — try to refresh
-            refresh_result = self.refresh_token(db, account)
+            # Token expired — try to refresh.
+            #
+            # The user's credentials go with the refresh: the call needs the
+            # same API key the original authorisation used (Etsy signs it with
+            # the user's own keystring). The base signature accepts the keyword
+            # so subclasses can opt in by declaring it.
+            refresh_result = self.refresh_token(
+                db, account, credentials=credentials, user_id=user_id
+            )
             if not refresh_result.get("success"):
                 return None
             # Reload account after refresh
@@ -161,10 +211,13 @@ class MarketplaceAdapter(ABC):
             query = query.filter(MarketplaceAccount.user_id == user_id)
         return query.first()
 
-    def refresh_token(self, db: SessionLocal, account: MarketplaceAccount) -> Dict[str, Any]:
+    def refresh_token(self, db: SessionLocal, account: MarketplaceAccount,
+                      credentials: dict = None, user_id=None) -> Dict[str, Any]:
         """Refresh an expired access token using the stored refresh token.
 
         Sub-classes MAY override this; the default is to return failure.
+        ``credentials`` carries the owning user's settings, since a refresh is
+        signed with the same key as the original authorisation.
         """
         return {"success": False, "error": "Refresh not implemented for this platform"}
 
@@ -308,10 +361,14 @@ class MarketplaceAdapter(ABC):
 
     # ---------- Sync orchestration ----------
 
-    def sync_all(self, db: SessionLocal) -> Dict[str, Any]:
+    def sync_all(self, db: SessionLocal, user_id=None, credentials: dict = None) -> Dict[str, Any]:
         """Full sync: fetch listings, store them, return a summary.
 
         This is the main entry-point called from the API routes.
+
+        ``user_id`` scopes the whole operation: the stored token belongs to that
+        user, and ``credentials`` are their own marketplace API keys. Without it
+        a sync would read whichever account happened to be in the table first.
         """
         result = {
             "success": False,
@@ -323,8 +380,8 @@ class MarketplaceAdapter(ABC):
         }
 
         try:
-            # Check we have a valid token
-            token = self.get_token(db)
+            # Check we have a valid token for this user
+            token = self.get_token(db, user_id=user_id, credentials=credentials)
             if not token:
                 result["errors"].append("No valid access token — connect the account first")
                 return result
@@ -340,7 +397,7 @@ class MarketplaceAdapter(ABC):
             self._record_request()
 
             # Fetch listings
-            listings = self.list_listings(db=db)
+            listings = self.list_listings(db=db, user_id=user_id, credentials=credentials)
             result["listings_fetched"] = len(listings)
 
             if not listings:

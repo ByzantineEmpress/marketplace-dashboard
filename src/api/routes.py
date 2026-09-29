@@ -356,6 +356,23 @@ async def dashboard_page(request: Request):
         context={"identity": user["name"], "is_admin": is_admin, "active": "dashboard"},
     )
 
+@page_router.get("/marketplace-settings")
+async def marketplace_settings_page(request: Request):
+    """Per-user page for linking the caller's own marketplace accounts.
+
+    Deliberately NOT behind check_admin. Every signed-in user links their own
+    accounts; sending them to the admin page was the original bug.
+    """
+    user = require_auth(request)
+    if not user:
+        return RedirectResponse(url="/login?error=auth_required")
+    return templates.TemplateResponse(
+        request=request,
+        name="marketplace_settings.html",
+        context={"identity": user["name"], "is_admin": bool(user.get("is_admin")), "active": "marketplace"},
+    )
+
+
 @page_router.get("/admin")
 async def admin_page(request: Request):
     """Admin settings page — manage API keys, refresh listings."""
@@ -1314,7 +1331,25 @@ async def oauth_callback(platform: str, request: Request):
     if error:
         result = {"success": False, "error": f"Marketplace returned an error: {error}"}
     elif code:
-        result = adapter.handle_callback(code, state)
+        # The callback belongs to whoever started the flow, so the tokens are
+        # stored against *their* account using *their* API keys. Without this
+        # the row would be created ownerless and invisible to every user.
+        owner = get_current_user(request)
+        if not owner:
+            result = {
+                "success": False,
+                "error": "Your session expired during authorisation. "
+                         "Sign in again and reconnect the account.",
+            }
+        else:
+            db = SessionLocal()
+            try:
+                credentials = _user_credentials(db, owner["id"], platform)
+                result = adapter.handle_callback(
+                    code, state, credentials=credentials, user_id=owner["id"]
+                )
+            finally:
+                db.close()
     else:
         result = {"success": False, "error": "No authorization code received."}
 
@@ -1919,13 +1954,75 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
     }
 
 # -- Marketplace accounts (credentials) --
+#
+# These are PER USER. Every signed-in user links their own marketplace
+# accounts; nobody needs the admin page to do it. Ownership is taken from the
+# session, never from the request body, so a caller cannot read or write another
+# user's connection by passing an id.
+
+# Which credential keys each platform needs, and what they are called in the UI.
+# Kept server-side so the client cannot invent keys.
+PLATFORM_CREDENTIALS = {
+    "ebay": [
+        ("client_id", "Client ID (App ID)"),
+        ("client_secret", "Client Secret (Cert ID)"),
+    ],
+    "etsy": [
+        ("api_key", "Keystring"),
+        ("api_secret", "Shared Secret"),
+    ],
+    "poshmark": [
+        ("username", "Closet Username"),
+        ("api_key", "API Key"),
+    ],
+    "amazon": [
+        ("seller_id", "Seller ID"),
+        ("client_id", "LWA Client ID"),
+        ("client_secret", "LWA Client Secret"),
+        ("refresh_token", "Refresh Token"),
+    ],
+}
+
+# Credential keys that are secrets: never returned, only a masked hint.
+SECRET_CREDENTIAL_KEYS = {
+    "client_secret", "api_secret", "refresh_token", "api_key",
+}
+
+
+def _user_credentials(db: Session, user_id: int, platform: str) -> dict:
+    """The caller's decrypted credentials for one platform.
+
+    Returns a dict suitable for the first argument of the adapters'
+    ``_cred()`` helper. Values are decrypted here and live only in memory.
+    """
+    from src.models import UserMarketplaceCredential
+
+    return {
+        row.credential_key: row.value
+        for row in db.query(UserMarketplaceCredential)
+        .filter(
+            UserMarketplaceCredential.user_id == user_id,
+            UserMarketplaceCredential.platform == platform,
+        )
+        .all()
+        if row.value
+    }
+
 
 @api_router.get("/accounts")
-async def get_accounts(db: Session = Depends(get_db), _admin: dict = Depends(check_admin)):
-    """Return the list of configured marketplace accounts."""
+async def get_accounts(db: Session = Depends(get_db), user: dict = Depends(check_auth)):
+    """The signed-in user's marketplace connections.
+
+    Scoped to the caller. The admin-only version of this endpoint returned
+    every row in the table.
+    """
     from src.models import MarketplaceAccount
 
-    accounts = db.query(MarketplaceAccount).all()
+    accounts = (
+        db.query(MarketplaceAccount)
+        .filter(MarketplaceAccount.user_id == user["id"])
+        .all()
+    )
     return [
         {
             "platform": a.platform,
@@ -1936,42 +2033,140 @@ async def get_accounts(db: Session = Depends(get_db), _admin: dict = Depends(che
         for a in accounts
     ]
 
-@api_router.post("/accounts/connect")
-async def connect_account(body: dict, _admin: dict = Depends(check_admin)):
-    """Start an OAuth flow.  Returns the authorisation URL to redirect to.
 
-    Body should contain: ``platform`` (e.g. "ebay", "etsy").
+@api_router.get("/accounts/credentials")
+async def get_credential_status(db: Session = Depends(get_db), user: dict = Depends(check_auth)):
+    """Which credentials the caller has set, and masked hints for secrets.
+
+    Secrets are never sent to the browser — only whether a value is present and
+    its last few characters, which is enough for a settings page to show state.
+    """
+    from src import secrets_crypto
+
+    result = {}
+    for platform, keys in PLATFORM_CREDENTIALS.items():
+        creds = _user_credentials(db, user["id"], platform)
+        fields = []
+        for key, label in keys:
+            value = creds.get(key) or ""
+            fields.append({
+                "key": key,
+                "label": label,
+                "is_set": bool(value),
+                "is_secret": key in SECRET_CREDENTIAL_KEYS,
+                "hint": secrets_crypto.mask(value) if value and key in SECRET_CREDENTIAL_KEYS else "",
+            })
+        result[platform] = {
+            "label": platform.capitalize(),
+            "fields": fields,
+            "is_configured": all(creds.get(k) for k, _ in keys),
+        }
+    return result
+
+
+@api_router.post("/accounts/credentials")
+async def save_credentials(body: dict, db: Session = Depends(get_db), user: dict = Depends(check_auth)):
+    """Save the caller's own credentials for one platform.
+
+    Body: ``{"platform": "ebay", "values": {"client_id": "...", ...}}``
+
+    Ownership comes from the session. Values are encrypted by the column type on
+    write. An empty string clears a value; omitting a key leaves it untouched,
+    so a form that does not resend a secret does not erase it.
+    """
+    from src.models import UserMarketplaceCredential
+
+    platform = (body.get("platform") or "").strip().lower()
+    if platform not in PLATFORM_CREDENTIALS:
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"Unknown platform '{platform}'"})
+
+    values = body.get("values") or {}
+    if not isinstance(values, dict):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "'values' must be an object"})
+
+    allowed = {key for key, _ in PLATFORM_CREDENTIALS[platform]}
+    saved, cleared, ignored = [], [], []
+
+    for key, raw in values.items():
+        if key not in allowed:
+            ignored.append(key)
+            continue
+        value = "" if raw is None else str(raw).strip()
+        # A masked placeholder means "unchanged" — the browser never had the
+        # real value, so writing it back would replace the secret with dots.
+        if "••" in value or "****" in value:
+            ignored.append(key)
+            continue
+
+        row = (
+            db.query(UserMarketplaceCredential)
+            .filter(
+                UserMarketplaceCredential.user_id == user["id"],
+                UserMarketplaceCredential.platform == platform,
+                UserMarketplaceCredential.credential_key == key,
+            )
+            .first()
+        )
+        if value == "":
+            if row:
+                db.delete(row)
+                cleared.append(key)
+            continue
+        if row is None:
+            row = UserMarketplaceCredential(
+                user_id=user["id"], platform=platform, credential_key=key
+            )
+            db.add(row)
+        row.value = value
+        saved.append(key)
+
+    db.commit()
+    return {"ok": True, "platform": platform, "saved": saved, "cleared": cleared, "ignored": ignored}
+
+
+@api_router.post("/accounts/connect")
+async def connect_account(body: dict, db: Session = Depends(get_db), user: dict = Depends(check_auth)):
+    """Start an OAuth flow for the caller. Returns the authorisation URL.
+
+    Body should contain ``platform`` (e.g. "ebay", "etsy"). The caller's own
+    credentials are used, so the marketplace app is theirs, not the instance's.
     """
     from src.adapters import get_adapter
 
-    platform = body.get("platform", "")
+    platform = (body.get("platform") or "").strip().lower()
     try:
         adapter = get_adapter(platform)
-        auth_url = adapter.get_authorization_url()
-        return {"auth_url": auth_url}
     except KeyError:
-        return JSONResponse(status_code=400, content={"error": f"Platform '{platform}' not supported yet"})
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"Platform '{platform}' not supported yet"})
+
+    credentials = _user_credentials(db, user["id"], platform)
+    auth_url = adapter.get_authorization_url(credentials=credentials)
+    return {"auth_url": auth_url}
 
 @api_router.post("/accounts/sync")
-async def sync_account(body: dict, db: Session = Depends(get_db), _admin: dict = Depends(check_admin)):
-    """Manually trigger a sync for a given marketplace.
+async def sync_account(body: dict, db: Session = Depends(get_db), user: dict = Depends(check_auth)):
+    """Manually trigger a sync for the caller's own marketplace connection.
 
     Fetches new listings and stores them in the database.
-    Body: { "platform": "ebay" } or { "platform": "etsy" }
+    Body: ``{ "platform": "ebay" }`` or ``{ "platform": "etsy" }``
+
+    Runs with the caller's credentials and their own stored tokens, so a sync
+    can never pull from another user's shop.
     """
     from src.adapters import get_adapter
 
-    platform = body.get("platform", "")
+    platform = (body.get("platform") or "").strip().lower()
     try:
         adapter = get_adapter(platform)
     except KeyError:
-        return JSONResponse(status_code=400, content={"error": f"Platform '{platform}' not supported yet"})
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"Platform '{platform}' not supported yet"})
 
+    credentials = _user_credentials(db, user["id"], platform)
     try:
-        result = adapter.sync_all(db)
+        result = adapter.sync_all(db, user_id=user["id"], credentials=credentials)
         return {"ok": True, "platform": platform, "result": result}
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
 # -- Teams (shared inventory) --
 

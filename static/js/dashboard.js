@@ -128,8 +128,8 @@ document.addEventListener("DOMContentLoaded", () => {
                         <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
                     </div>
                     <h3 class="empty-state-title">No listings synced yet</h3>
-                    <p class="empty-state-text">Connect your eBay or Etsy seller account in Admin settings to automatically sync all your active listings.</p>
-                    <a href="/admin" class="btn btn--primary">Go to Admin Settings</a>
+                    <p class="empty-state-text">Connect your own eBay or Etsy seller account to automatically sync your active listings.</p>
+                    <a href="/marketplace-settings" class="btn btn--primary">Connect Your Accounts</a>
                 </div>
             `;
         }

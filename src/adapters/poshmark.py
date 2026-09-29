@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from src.adapters.base import MarketplaceAdapter
+from src.adapters.base import MarketplaceAdapter, _cred
 from src.database import SessionLocal
 from src.config import config
 from src.models import MarketplaceAccount
@@ -34,17 +34,18 @@ class PoshmarkAdapter(MarketplaceAdapter):
             '</svg>'
         )
 
-    def get_authorization_url(self, state: str = "") -> str:
+    def get_authorization_url(self, state: str = "", credentials: dict = None) -> str:
         """Return the Poshmark connection URL."""
-        username = config.POSHMARK_USERNAME or "closet"
+        username = _cred(credentials, "username") or config.POSHMARK_USERNAME or "closet"
         return f"https://poshmark.com/closet/{username}"
 
-    def handle_callback(self, code: str, state: str = "") -> Dict[str, Any]:
+    def handle_callback(self, code: str, state: str = "", credentials: dict = None,
+                        user_id=None) -> Dict[str, Any]:
         """Handle Poshmark connection confirmation."""
-        username = config.POSHMARK_USERNAME or "my_posh_closet"
+        username = _cred(credentials, "username") or config.POSHMARK_USERNAME or "my_posh_closet"
         db = SessionLocal()
         try:
-            account = db.query(MarketplaceAccount).filter_by(platform=self.PLATFORM).first()
+            account = self._find_account(db, user_id)
             if not account:
                 account = MarketplaceAccount(
                     platform=self.PLATFORM,
@@ -65,7 +66,8 @@ class PoshmarkAdapter(MarketplaceAdapter):
         finally:
             db.close()
 
-    def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None) -> List[Dict[str, Any]]:
+    def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None,
+                      user_id=None, credentials: dict = None) -> List[Dict[str, Any]]:
         """Fetch active listings from Poshmark closet."""
         should_close = False
         if db is None:
@@ -73,8 +75,8 @@ class PoshmarkAdapter(MarketplaceAdapter):
             should_close = True
 
         try:
-            account = db.query(MarketplaceAccount).filter_by(platform=self.PLATFORM).first()
-            username = config.POSHMARK_USERNAME or (account.shop_name if account else "")
+            account = self._find_account(db, user_id)
+            username = _cred(credentials, "username") or config.POSHMARK_USERNAME or (account.shop_name if account else "")
 
             # If username is configured, attempt public closet fetch or fall back to cached/demo items
             results = []
@@ -115,7 +117,7 @@ class PoshmarkAdapter(MarketplaceAdapter):
                     pass
 
             # Provide default/sample items if closet is empty or connecting for the first time
-            if not results and (account and account.is_connected or config.POSHMARK_USERNAME):
+            if not results and (account and account.is_connected or _cred(credentials, "username") or config.POSHMARK_USERNAME):
                 results = [
                     {
                         "platform": self.PLATFORM,

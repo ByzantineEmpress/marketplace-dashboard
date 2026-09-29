@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from src.adapters.base import MarketplaceAdapter
+from src.adapters.base import MarketplaceAdapter, _cred
 from src.database import SessionLocal
 from src.config import config
 
@@ -45,7 +45,7 @@ class EtsyAdapter(MarketplaceAdapter):
         # Simple SVG-based Etsy logo
         return '<svg viewBox="0 0 60 30" width="50" height="25"><text x="3" y="22" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#F56400">Etsy</text></svg>'
 
-    def get_authorization_url(self, state: str = "") -> str:
+    def get_authorization_url(self, state: str = "", credentials: dict = None) -> str:
         """Build the Etsy OAuth 2.0 authorisation URL.
 
         Parameters:
@@ -56,7 +56,7 @@ class EtsyAdapter(MarketplaceAdapter):
         """
         import os
         redirect_uri = os.environ.get("ETSY_REDIRECT_URI") or f"{config.APP_BASE_URL}/api/auth/etsy/callback"
-        api_key = config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
+        api_key = _cred(credentials, "api_key") or config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
 
         # Required scopes for reading listings
         scopes = "listings_r"
@@ -72,7 +72,8 @@ class EtsyAdapter(MarketplaceAdapter):
         query = "&".join(f"{k}={v}" for k, v in params.items() if v)
         return f"{ETSY_AUTH_URL}?{query}"
 
-    def handle_callback(self, code: str, state: str = "") -> Dict[str, Any]:
+    def handle_callback(self, code: str, state: str = "", credentials: dict = None,
+                        user_id=None) -> Dict[str, Any]:
         """Exchange an authorisation code for access and refresh tokens.
 
         Also stores the shop_id from the response.
@@ -80,8 +81,8 @@ class EtsyAdapter(MarketplaceAdapter):
         import os
 
         redirect_uri = os.environ.get("ETSY_REDIRECT_URI") or f"{config.APP_BASE_URL}/api/auth/etsy/callback"
-        api_key = config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
-        api_secret = config.ETSY_API_SECRET or os.environ.get("ETSY_API_SECRET") or os.environ.get("ESY_API_SECRET") or ""
+        api_key = _cred(credentials, "api_key") or config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
+        api_secret = _cred(credentials, "api_secret") or config.ETSY_API_SECRET or os.environ.get("ETSY_API_SECRET") or os.environ.get("ESY_API_SECRET") or ""
 
         try:
             resp = httpx.post(
@@ -109,6 +110,7 @@ class EtsyAdapter(MarketplaceAdapter):
                     token_expires_in=token_data.get("expires_in", 7200),
                     extra_data=token_data,
                     shop_id=shop_id,
+            user_id=user_id,
                 )
 
                 # Try to fetch shop name
@@ -131,6 +133,7 @@ class EtsyAdapter(MarketplaceAdapter):
                                     db,
                                     access_token=token_data["access_token"],
                                     shop_name=shop_name,
+            user_id=user_id,
                                 )
                     except Exception:
                         pass  # Don't fail auth if shop name fetch fails
@@ -144,12 +147,13 @@ class EtsyAdapter(MarketplaceAdapter):
 
     # -- Token refresh --
 
-    def refresh_token(self, db: SessionLocal, account) -> Dict[str, Any]:
+    def refresh_token(self, db: SessionLocal, account, credentials: dict = None,
+                      user_id=None) -> Dict[str, Any]:
         """Refresh an expired access token using the stored refresh token."""
         import os
 
-        api_key = config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
-        api_secret = config.ETSY_API_SECRET or os.environ.get("ETSY_API_SECRET") or os.environ.get("ESY_API_SECRET") or ""
+        api_key = _cred(credentials, "api_key") or config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
+        api_secret = _cred(credentials, "api_secret") or config.ETSY_API_SECRET or os.environ.get("ETSY_API_SECRET") or os.environ.get("ESY_API_SECRET") or ""
 
         try:
             resp = httpx.post(
@@ -173,6 +177,7 @@ class EtsyAdapter(MarketplaceAdapter):
                 extra_data=token_data,
                 shop_id=account.shop_id,
                 shop_name=account.shop_name,
+            user_id=user_id,
             )
             return {"success": True, "token_data": token_data}
         except httpx.HTTPError as e:
@@ -180,7 +185,8 @@ class EtsyAdapter(MarketplaceAdapter):
 
     # -- Listing fetching --
 
-    def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None) -> List[Dict[str, Any]]:
+    def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None,
+                      user_id=None, credentials: dict = None) -> List[Dict[str, Any]]:
         """Fetch active Etsy listings via the Open API v3.
 
         Uses:
@@ -195,11 +201,11 @@ class EtsyAdapter(MarketplaceAdapter):
             close_db = True
 
         try:
-            token = self.get_token(db)
+            token = self.get_token(db, user_id=user_id, credentials=credentials)
             if not token:
                 return []
 
-            api_key = config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
+            api_key = _cred(credentials, "api_key") or config.ETSY_API_KEY or os.environ.get("ETSY_API_KEY") or os.environ.get("ESY_API_KEY") or ""
             headers = {
                 "Authorization": f"Bearer {token['access_token']}",
                 "x-api-key": api_key,
@@ -227,6 +233,7 @@ class EtsyAdapter(MarketplaceAdapter):
                                 db,
                                 access_token=token["access_token"],
                                 shop_id=shop_id,
+            user_id=user_id,
                             )
                 except Exception:
                     pass

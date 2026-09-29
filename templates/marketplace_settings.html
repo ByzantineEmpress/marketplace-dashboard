@@ -1,0 +1,52 @@
+{# Per-user marketplace accounts.
+
+   Every signed-in user links their OWN marketplace accounts here. This exists
+   because the dashboard used to point people at /admin, which only an
+   administrator can open. Credentials are the user's own API keys, stored
+   encrypted; secret values are never sent to the browser, only a masked hint
+   that one is set.
+
+   Platform forms are rendered by marketplace-settings.js from the field list
+   the API returns, so adding a platform is a server-side change only.
+
+   Uses the same classes as the onboarding chooser rather than bespoke ones, so
+   this page inherits the existing theme in both light and dark mode. #}
+{% extends "base.html" %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="login-card" style="max-width: 720px; margin: 0 auto;">
+        <h1>My Marketplace Accounts</h1>
+        <p class="section-desc" style="margin-bottom: 14px;">
+            Connect the marketplaces <strong>you</strong> sell on. These credentials
+            belong to your account only &mdash; nobody else on this instance can see
+            them or sync with them.
+        </p>
+
+        <div id="marketplace-status" class="settings-status" role="status" aria-live="polite"></div>
+
+        <div id="marketplace-platforms">
+            <p class="section-desc">Loading your accounts&hellip;</p>
+        </div>
+
+        <div class="team-card" style="margin-top: 22px;">
+            <div class="team-header"><strong>What do these credentials do?</strong></div>
+            <p class="section-desc" style="margin: 6px 0 10px;">
+                Each marketplace issues these when you register an application in your
+                own seller developer account. The app uses them to read your active
+                listings so they can be tracked here.
+            </p>
+            <p class="section-desc" style="margin: 0;">
+                They are stored encrypted, and a saved secret is never sent back to the
+                browser &mdash; you will see only that a value is set. Leaving a field
+                blank keeps what is already saved; to remove a saved value, open the
+                field, type a single space, and save.
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/marketplace-settings.js"></script>
+{% endblock %}

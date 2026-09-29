@@ -105,13 +105,24 @@ class SecurityAuditTest(unittest.TestCase):
         res = self.client.post("/api/settings", json={"APP_NAME": "Hacked"})
         self.assertEqual(res.status_code, 403)
 
-        # POST /api/accounts/connect should be forbidden
+        # /api/accounts/* is deliberately NOT admin-only any more.
+        #
+        # Every user links their OWN marketplace accounts; making them ask an
+        # administrator was the bug. What matters for security is that these
+        # endpoints act only on the caller's own rows, which is asserted in
+        # tests/test_marketplace_accounts.py. Here we only check they do not
+        # reject a legitimate signed-in user, and that an unauthenticated caller
+        # still cannot reach them.
         res = self.client.post("/api/accounts/connect", json={"platform": "ebay"})
-        self.assertEqual(res.status_code, 403)
+        self.assertNotIn(res.status_code, (401, 403))
 
-        # POST /api/accounts/sync should be forbidden
         res = self.client.post("/api/accounts/sync", json={"platform": "ebay"})
-        self.assertEqual(res.status_code, 403)
+        self.assertNotIn(res.status_code, (401, 403))
+
+        # An anonymous caller must still be refused.
+        self.client.cookies.clear()
+        res = self.client.get("/api/accounts")
+        self.assertEqual(res.status_code, 401)
 
         # Now test with admin user
         admin_token = self._login_as(self.admin_user)

@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from src.adapters.base import MarketplaceAdapter
+from src.adapters.base import MarketplaceAdapter, _cred
 from src.database import SessionLocal
 from src.config import config
 
@@ -56,15 +56,19 @@ class eBayAdapter(MarketplaceAdapter):
         # Simple SVG-based eBay logo
         return '<svg viewBox="0 0 60 30" width="50" height="25"><text x="5" y="22" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#E53238">ebay</text></svg>'
 
-    def get_authorization_url(self, state: str = "") -> str:
+    def get_authorization_url(self, state: str = "", credentials: dict = None) -> str:
         """Build the eBay OAuth 2.0 authorisation URL.
 
         The user visits this URL, logs in, and grants permissions.
         After authorisation, eBay redirects to your callback with a code.
+
+        ``credentials`` carries this user's own client ID. It takes precedence
+        over the instance-wide settings, which remain the fallback so a
+        deployment configured through .env keeps working.
         """
         import os
         redirect_uri = os.environ.get("EBAY_REDIRECT_URI") or f"{config.APP_BASE_URL}/api/auth/ebay/callback"
-        client_id = config.EBAY_CLIENT_ID or os.environ.get("EBAY_CLIENT_ID") or os.environ.get("EBUY_CLIENT_ID") or ""
+        client_id = _cred(credentials, "client_id") or config.EBAY_CLIENT_ID or os.environ.get("EBAY_CLIENT_ID") or os.environ.get("EBUY_CLIENT_ID") or ""
 
         # Required scopes for the Selling API v2
         scopes = [
@@ -85,7 +89,8 @@ class eBayAdapter(MarketplaceAdapter):
         query = "&".join(f"{k}={v}" for k, v in params.items() if v)
         return f"{EBAY_AUTH_URL}?{query}"
 
-    def handle_callback(self, code: str, state: str = "") -> Dict[str, Any]:
+    def handle_callback(self, code: str, state: str = "", credentials: dict = None,
+                        user_id=None) -> Dict[str, Any]:
         """Exchange an authorisation code for access and refresh tokens.
 
         POSTs to eBay's OAuth token endpoint and stores the tokens.
@@ -94,12 +99,14 @@ class eBayAdapter(MarketplaceAdapter):
         import os
 
         redirect_uri = os.environ.get("EBAY_REDIRECT_URI") or f"{config.APP_BASE_URL}/api/auth/ebay/callback"
-        client_id = config.EBAY_CLIENT_ID or os.environ.get("EBAY_CLIENT_ID") or os.environ.get("EBUY_CLIENT_ID") or ""
-        client_secret = config.EBAY_CLIENT_SECRET or os.environ.get("EBAY_CLIENT_SECRET") or os.environ.get("EBUY_CLIENT_SECRET") or ""
+        client_id = _cred(credentials, "client_id") or config.EBAY_CLIENT_ID or os.environ.get("EBAY_CLIENT_ID") or os.environ.get("EBUY_CLIENT_ID") or ""
+        client_secret = _cred(credentials, "client_secret") or config.EBAY_CLIENT_SECRET or os.environ.get("EBAY_CLIENT_SECRET") or os.environ.get("EBUY_CLIENT_SECRET") or ""
 
-        # eBay expects Basic Auth with client_id:client_secret
-        credentials = f"{client_id}:{client_secret}"
-        auth_header = base64.b64encode(credentials.encode()).decode()
+        # eBay expects Basic Auth with client_id:client_secret.
+        # Named basic_auth, not "credentials": that name is the parameter, and
+        # reusing it here would shadow the caller's per-user values.
+        basic_auth = f"{client_id}:{client_secret}"
+        auth_header = base64.b64encode(basic_auth.encode()).decode()
 
         try:
             resp = httpx.post(
@@ -127,6 +134,7 @@ class eBayAdapter(MarketplaceAdapter):
                     refresh_token=token_data.get("refresh_token", ""),
                     token_expires_in=token_data.get("expires_in", 7200),
                     extra_data=token_data,
+            user_id=user_id,
                 )
                 return {"success": True, "token_data": token_data}
             finally:
@@ -137,15 +145,22 @@ class eBayAdapter(MarketplaceAdapter):
 
     # -- Token refresh --
 
-    def refresh_token(self, db: SessionLocal, account) -> Dict[str, Any]:
-        """Refresh an expired access token using the stored refresh token."""
+    def refresh_token(self, db: SessionLocal, account, credentials: dict = None,
+                      user_id=None) -> Dict[str, Any]:
+        """Refresh an expired access token using the stored refresh token.
+
+        ``credentials`` holds the owning user's own eBay keys, so one user's
+        refresh never signs with another user's application.
+        """
         import base64
         import os
 
-        client_id = config.EBAY_CLIENT_ID or os.environ.get("EBAY_CLIENT_ID") or os.environ.get("EBUY_CLIENT_ID") or ""
-        client_secret = config.EBAY_CLIENT_SECRET or os.environ.get("EBAY_CLIENT_SECRET") or os.environ.get("EBUY_CLIENT_SECRET") or ""
-        credentials = f"{client_id}:{client_secret}"
-        auth_header = base64.b64encode(credentials.encode()).decode()
+        client_id = _cred(credentials, "client_id") or config.EBAY_CLIENT_ID or os.environ.get("EBAY_CLIENT_ID") or os.environ.get("EBUY_CLIENT_ID") or ""
+        client_secret = _cred(credentials, "client_secret") or config.EBAY_CLIENT_SECRET or os.environ.get("EBAY_CLIENT_SECRET") or os.environ.get("EBUY_CLIENT_SECRET") or ""
+        # Named basic_auth, not "credentials": that name is the parameter, and
+        # reusing it here would shadow the caller's per-user values.
+        basic_auth = f"{client_id}:{client_secret}"
+        auth_header = base64.b64encode(basic_auth.encode()).decode()
 
         try:
             resp = httpx.post(
@@ -172,6 +187,7 @@ class eBayAdapter(MarketplaceAdapter):
                 extra_data=token_data,
                 shop_id=account.shop_id,
                 shop_name=account.shop_name,
+            user_id=user_id,
             )
             return {"success": True, "token_data": token_data}
         except httpx.HTTPError as e:
@@ -179,7 +195,8 @@ class eBayAdapter(MarketplaceAdapter):
 
     # -- Listing fetching (Selling API v2) --
 
-    def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None) -> List[Dict[str, Any]]:
+    def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None,
+                      user_id=None, credentials: dict = None) -> List[Dict[str, Any]]:
         """Fetch active eBay listings via the Selling API v2.
 
         Uses:
@@ -192,7 +209,7 @@ class eBayAdapter(MarketplaceAdapter):
             close_db = True
 
         try:
-            token = self.get_token(db)
+            token = self.get_token(db, user_id=user_id, credentials=credentials)
             if not token:
                 return []
 

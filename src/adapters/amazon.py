@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from src.adapters.base import MarketplaceAdapter
+from src.adapters.base import MarketplaceAdapter, _cred
 from src.database import SessionLocal
 from src.config import config
 from src.models import MarketplaceAccount
@@ -39,9 +39,9 @@ class AmazonAdapter(MarketplaceAdapter):
             '</svg>'
         )
 
-    def get_authorization_url(self, state: str = "") -> str:
+    def get_authorization_url(self, state: str = "", credentials: dict = None) -> str:
         """Build the Amazon Seller Central authorization URL."""
-        client_id = config.AMAZON_CLIENT_ID or ""
+        client_id = _cred(credentials, "client_id") or config.AMAZON_CLIENT_ID or ""
         redirect_uri = f"{config.APP_BASE_URL}/api/auth/amazon/callback"
         if not client_id:
             return f"https://sellercentral.amazon.com/apps/authorize/consent?redirect_uri={redirect_uri}&state={state}"
@@ -50,12 +50,13 @@ class AmazonAdapter(MarketplaceAdapter):
             f"application_id={client_id}&state={state}&version=beta"
         )
 
-    def handle_callback(self, code: str, state: str = "") -> Dict[str, Any]:
+    def handle_callback(self, code: str, state: str = "", credentials: dict = None,
+                        user_id=None) -> Dict[str, Any]:
         """Exchange authorization code / refresh token and save account."""
-        seller_id = config.AMAZON_SELLER_ID or "Amazon Seller"
+        seller_id = _cred(credentials, "seller_id") or config.AMAZON_SELLER_ID or "Amazon Seller"
         db = SessionLocal()
         try:
-            account = db.query(MarketplaceAccount).filter_by(platform=self.PLATFORM).first()
+            account = self._find_account(db, user_id)
             if not account:
                 account = MarketplaceAccount(
                     platform=self.PLATFORM,
@@ -77,7 +78,8 @@ class AmazonAdapter(MarketplaceAdapter):
         finally:
             db.close()
 
-    def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None) -> List[Dict[str, Any]]:
+    def list_listings(self, max_results: int = 500, db: Optional[SessionLocal] = None,
+                      user_id=None, credentials: dict = None) -> List[Dict[str, Any]]:
         """Fetch active listings from Amazon Seller Central."""
         should_close = False
         if db is None:
@@ -85,11 +87,11 @@ class AmazonAdapter(MarketplaceAdapter):
             should_close = True
 
         try:
-            account = db.query(MarketplaceAccount).filter_by(platform=self.PLATFORM).first()
+            account = self._find_account(db, user_id)
             results = []
 
             # If LWA credentials are present, attempt live SP-API fetch
-            if config.AMAZON_CLIENT_ID and config.AMAZON_REFRESH_TOKEN:
+            if (_cred(credentials, "client_id") or config.AMAZON_CLIENT_ID) and (_cred(credentials, "refresh_token") or config.AMAZON_REFRESH_TOKEN):
                 try:
                     # 1. Exchange refresh token for LWA access token
                     with httpx.Client(timeout=10) as client:
@@ -97,9 +99,9 @@ class AmazonAdapter(MarketplaceAdapter):
                             self.LWA_TOKEN_URL,
                             data={
                                 "grant_type": "refresh_token",
-                                "refresh_token": config.AMAZON_REFRESH_TOKEN,
-                                "client_id": config.AMAZON_CLIENT_ID,
-                                "client_secret": config.AMAZON_CLIENT_SECRET,
+                                "refresh_token": _cred(credentials, "refresh_token") or config.AMAZON_REFRESH_TOKEN,
+                                "client_id": _cred(credentials, "client_id") or config.AMAZON_CLIENT_ID,
+                                "client_secret": _cred(credentials, "client_secret") or config.AMAZON_CLIENT_SECRET,
                             },
                         )
                         if token_resp.status_code == 200:
@@ -143,7 +145,7 @@ class AmazonAdapter(MarketplaceAdapter):
                     pass
 
             # Provide default/sample items if connected or configured
-            if not results and (account and account.is_connected or config.AMAZON_SELLER_ID):
+            if not results and (account and account.is_connected or _cred(credentials, "seller_id") or config.AMAZON_SELLER_ID):
                 results = [
                     {
                         "platform": self.PLATFORM,
