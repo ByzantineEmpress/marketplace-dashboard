@@ -23,6 +23,7 @@ import httpx
 
 from src.adapters.base import MarketplaceAdapter, _cred, _oauth_error
 from src.database import SessionLocal
+from src.models import Listing
 from src.config import config
 
 # Etsy API base URL
@@ -436,9 +437,72 @@ class EtsyAdapter(MarketplaceAdapter):
         for receipt in receipts:
             sales.extend(self._sales_from_receipt(receipt, fees_by_receipt))
 
+        # Receipts carry no photos, and a sold item is not in the active-listing
+        # sync, so its picture has to be fetched here or the sold card is blank.
+        try:
+            self._attach_sale_images(db, sales, headers)
+        except Exception as exc:
+            self.last_error = f"Etsy sale images failed: {exc}"
+
         applied = self.record_sales(db, sales, owner_user_id=user_id)
         return {"supported": True, "success": True, "fetched": len(sales),
                 "recorded": applied["recorded"], "created": applied["created"]}
+
+    def _attach_sale_images(self, db, sales: List[dict], headers: dict) -> int:
+        """Give each Etsy sale a picture.
+
+        Etsy serves a sold listing's images long after it sells: the state is
+        ``sold_out`` and ``/listings/{id}/images`` still returns them, which the
+        ``include=Images`` parameter on the listing itself does not.
+
+        Items whose picture is already stored are skipped, so a repeat sync does
+        not re-fetch every sale.
+        """
+        import time
+
+        ids = [s["platform_listing_id"] for s in sales if s.get("platform_listing_id")]
+        if not ids:
+            return 0
+
+        already = {
+            row[0]
+            for row in db.query(Listing.platform_listing_id).filter(
+                Listing.platform == self.PLATFORM,
+                Listing.platform_listing_id.in_(ids),
+                Listing.image_url.isnot(None),
+                Listing.image_url != "",
+            ).all()
+        }
+
+        attached = 0
+        for sale in sales:
+            item_id = sale.get("platform_listing_id")
+            if not item_id or item_id in already or sale.get("image_url"):
+                continue
+            try:
+                resp = httpx.get(
+                    f"{ETSY_API_BASE}/application/listings/{item_id}/images",
+                    headers=headers, timeout=30,
+                )
+                if resp.status_code != 200:
+                    continue
+                raw = (resp.json() or {}).get("results") or []
+                raw = [i for i in raw if isinstance(i, dict)]
+                raw.sort(key=lambda i: i.get("rank", 0) or 0)
+                urls = []
+                for img in raw[:10]:
+                    url = (img.get("url_570xN") or img.get("url_fullxfull")
+                           or img.get("url_170x135") or img.get("url_75x75"))
+                    if url:
+                        urls.append(url)
+                if urls:
+                    sale["image_url"] = urls[0]
+                    sale["images"] = urls
+                    attached += 1
+            except Exception:
+                continue
+            time.sleep(0.1)
+        return attached
 
     def _fetch_receipts(self, headers: dict, shop_id, cutoff: int) -> list:
         """Completed receipts newer than the cutoff.
