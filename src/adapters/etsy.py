@@ -397,6 +397,12 @@ class EtsyAdapter(MarketplaceAdapter):
                         # Only this shop's live listings; sold and expired ones
                         # are not inventory.
                         "state": "active",
+                        # Etsy includes an "images" KEY that is null unless it is
+                        # asked for. Without this the key is present but empty,
+                        # which reads as "this listing has no photos" and left
+                        # every imported listing with a blank image. The images
+                        # then arrive inline, so this costs no extra requests.
+                        "includes": "Images",
                     },
                     timeout=30,
                 )

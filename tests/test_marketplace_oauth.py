@@ -663,6 +663,52 @@ class EtsyOnlyFetchesOwnShopTest(unittest.TestCase):
         self.assertTrue(params_seen)
         self.assertEqual(params_seen[0].get("state"), "active")
 
+    def test_images_are_explicitly_included(self):
+        """Etsy returns an "images" key that is null unless includes=Images.
+
+        A key-existence check therefore passes while the value is None, which is
+        exactly how every listing ended up with a blank photo even though the
+        response looked like it contained images.
+        """
+        import src.adapters.etsy as etsy_mod
+
+        params_seen = []
+
+        class FakeResp:
+            status_code = 200
+            def json(self):
+                return {"count": 0, "results": []}
+
+        def fake_get(url, **kwargs):
+            params_seen.append(kwargs.get("params", {}))
+            return FakeResp()
+
+        real = etsy_mod.httpx.get
+        etsy_mod.httpx.get = fake_get
+        try:
+            self.adapter._fetch_shop_listings({"x-api-key": "k:s"}, "64488261", 25)
+        finally:
+            etsy_mod.httpx.get = real
+
+        self.assertTrue(params_seen)
+        self.assertEqual(
+            params_seen[0].get("includes"), "Images",
+            "images must be requested explicitly or they arrive as null",
+        )
+
+    def test_a_null_images_value_is_handled(self):
+        """The real shape from Etsy when includes is omitted: key present, null."""
+        raw = {
+            "listing_id": 1,
+            "title": "No images requested",
+            "state": "active",
+            "price": {"amount": 100, "divisor": 100, "currency_code": "CAD"},
+            "images": None,
+        }
+        row = self.adapter._normalise_listing(raw)
+        self.assertEqual(row["image_url"], "")
+        self.assertEqual(row["images_json"], [])
+
 
 class EtsyImageImportTest(unittest.TestCase):
     """Images must actually come through.
