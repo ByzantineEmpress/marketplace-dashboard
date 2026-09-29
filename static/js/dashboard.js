@@ -1915,20 +1915,18 @@ function renderEngagementMetrics(listing) {
         </div>`;
 }
 
-// Compact engagement chip for a card. Hidden when the platform has no relevant
-// metric or the value is zero, so cards are not cluttered with empty numbers.
+// Compact engagement chip for a card. Always shown for Etsy and eBay so the
+// metric is visible on the overview even while it is still zero.
 function renderEngagementChip(listing) {
     const p = (listing.platform || '').toLowerCase();
     if (p === 'etsy') {
         const views = listing.views_count ?? 0;
         const favs = listing.favorites_count ?? 0;
-        if (!views && !favs) return '';
-        return `<span class="card-engagement" title="Views · Favorites">👁 ${views} · ♥ ${favs}</span>`;
+        return `<span class="card-engagement" title="Views · Favorites">👁 ${views} views · ♥ ${favs} favs</span>`;
     }
     if (p === 'ebay') {
         const watchers = listing.watchers_count ?? 0;
-        if (!watchers) return '';
-        return `<span class="card-engagement" title="Watchers">👀 ${watchers} watching</span>`;
+        return `<span class="card-engagement" title="Watchers">👀 ${watchers} watchers</span>`;
     }
     return '';
 }
