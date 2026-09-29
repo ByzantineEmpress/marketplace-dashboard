@@ -102,16 +102,34 @@ class eBayAdapter(MarketplaceAdapter):
                 "app's User Tokens page). Save it, then press Connect."
             )
 
-        # eBay scope URNs. The previous values
-        # (".../auth/oauth/sell_inventory_readonly") were not real scopes and
-        # eBay rejected the whole request. Correct form is
+        # eBay scope URNs. The form is
         # "https://api.ebay.com/oauth/api_scope/<name>".
         #
-        # Only what this adapter actually calls is requested: the Inventory API
-        # and the Marketplace Listing API, both covered by sell.inventory.readonly.
+        # Each one earns its place:
+        #   api_scope                  — the base scope every Sell call needs
+        #   sell.inventory.readonly    — Inventory API (inventory-managed items)
+        #   sell.listing.read          — "View eBay listings". This is the scope
+        #                                behind the Marketplace Listing API, which
+        #                                is the only REST endpoint that returns a
+        #                                seller's ACTIVE listings regardless of how
+        #                                they were created. Without it that endpoint
+        #                                answers 404 rather than 403, which is why
+        #                                a sync returned nothing while the account
+        #                                plainly had listings.
+        #   commerce.identity.readonly — "View a user's basic information, such as
+        #                                username". Used to record WHICH eBay user a
+        #                                connection belongs to, so an eBay
+        #                                account-deletion notification can be matched
+        #                                to our stored data.
+        #
+        # Deliberately NOT requested: anything under /buy/. The Buy API (Browse)
+        # would carry titles and photos too, but eBay has not granted this app any
+        # buy.* scope, so it is not an option here.
         scopes = [
             "https://api.ebay.com/oauth/api_scope",
             "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
+            "https://api.ebay.com/oauth/api_scope/sell.listing.read",
+            "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
         ]
 
         params = {

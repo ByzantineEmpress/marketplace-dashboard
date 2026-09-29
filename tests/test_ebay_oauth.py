@@ -51,6 +51,28 @@ class EbayAuthorizeUrlTest(unittest.TestCase):
         self.assertIn(
             "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly", scope)
 
+    def test_the_listings_scope_is_requested(self):
+        """sell.listing.read gates the Marketplace Listing API, the only REST
+        endpoint that returns a seller's active listings regardless of how they
+        were created. Without it that endpoint answers 404, not 403, so a sync
+        silently returned nothing."""
+        scope = self._query()["scope"][0]
+        self.assertIn("https://api.ebay.com/oauth/api_scope/sell.listing.read", scope)
+
+    def test_the_identity_scope_is_requested(self):
+        """commerce.identity.readonly lets us record which eBay user a connection
+        belongs to, so an eBay account-deletion notification can be matched."""
+        scope = self._query()["scope"][0]
+        self.assertIn(
+            "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly", scope)
+
+    def test_no_buy_scope_is_requested(self):
+        """The app has been granted no buy.* scope, so requesting one would make
+        eBay reject the whole authorize request."""
+        scope = self._query()["scope"][0]
+        for part in scope.split(" "):
+            self.assertNotIn("/buy.", part, f"ungranted buy scope requested: {part}")
+
     def test_scopes_are_space_separated_then_encoded(self):
         """eBay wants a space-separated list, URL-encoded. parse_qs decodes it
         back to spaces, so the split is the check."""
