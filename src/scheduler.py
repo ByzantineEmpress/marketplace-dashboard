@@ -10,6 +10,13 @@ Deliberately a plain asyncio task rather than a scheduling dependency. The work 
 would add a dependency, a second place for the schedule to live, and a way for two
 copies of the job to overlap if the container is ever scaled beyond one.
 
+That last point is a real constraint, not a hypothetical: the timer lives in the
+web process, so if uvicorn is ever started with `--workers N` (or the service is
+scaled to several replicas) each copy would run its own pass and hit the
+marketplaces N times per interval. The Dockerfile starts a single worker with no
+`--workers` flag, which is what makes this safe. Scale the web tier and this needs
+a lock or a separate worker process first.
+
 Off unless SCHEDULED_SYNC_ENABLED is set. A background job that reaches out to
 live marketplaces must never start by accident in a test run or on a developer's
 machine, where it would spend API quota and write to the database unattended.
@@ -22,7 +29,9 @@ from typing import Optional
 
 from src.config import config
 
-# Populated while the loop is running, for tests and for the health endpoint.
+# Written by each completed pass, readable only from inside this process. It is
+# here so a running container can be inspected (and so tests can assert a pass
+# happened) without a log scrape; it is not persisted and not exposed over HTTP.
 LAST_RUN: dict = {"at": None, "results": [], "error": None}
 
 
