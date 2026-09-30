@@ -2263,9 +2263,39 @@ function renderCard(listing) {
     // absorb, and it changes what a sale is worth before anything else is
     // deducted. Only a definite true earns the badge — a platform that never
     // stated the terms must not be shown as either answer.
-    const freeShippingChip = listing.free_shipping === true
-        ? `<span class="card-chip card-chip--freeship" title="This listing advertises free shipping: you absorb the postage">Free shipping</span>`
-        : "";
+    //
+    // On a grouped card this is asked of EVERY member, not just the one the card
+    // happens to be built from. Postage terms are set per channel, so an item that
+    // ships free on one channel and not another showed no badge at all when the
+    // charged member was the card's subject — the free listing's own terms were
+    // simply invisible.
+    const freeOn = [];
+    const chargedOn = [];
+    const unknownOn = [];
+    const considerShipping = (item) => {
+        if (!item || !item.platform) return;
+        if (item.free_shipping === true) freeOn.push(item.platform);
+        else if (item.free_shipping === false) chargedOn.push(item.platform);
+        else unknownOn.push(item.platform);
+    };
+    if (isGroup) {
+        groupMembers.forEach(considerShipping);
+    }
+    considerShipping(listing);
+
+    const freePlatforms = [...new Set(freeOn)];
+    const chargedPlatforms = [...new Set(chargedOn)];
+    let freeShippingChip = "";
+    if (freePlatforms.length) {
+        // Say which channel, because it is rarely all of them.
+        const scope = isGroup && chargedPlatforms.length
+            ? `Free shipping on ${freePlatforms.join(", ")} — ${chargedPlatforms.join(", ")} charges postage`
+            : "This listing advertises free shipping: you absorb the postage";
+        freeShippingChip =
+            `<span class="card-chip card-chip--freeship" title="${escapeHtml(scope)}">Free shipping${
+                isGroup && chargedPlatforms.length ? ` · ${escapeHtml(freePlatforms.join(", "))}` : ""
+            }</span>`;
+    }
 
     const costLine = missingCost
         ? `<div class="card-cost-missing" title="No purchase price recorded for this listing">No COGS recorded — profit unknown</div>`

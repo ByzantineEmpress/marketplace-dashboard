@@ -319,7 +319,15 @@ class MarketplaceAdapter(ABC):
             account.token_expires_at = datetime.utcnow() + timedelta(hours=1)  # default 1 hour
 
         if extra_data:
-            account.token_data = extra_data
+            # Merge, never replace. A refresh response carries only the token
+            # fields, so assigning it wholesale dropped everything learned
+            # separately — registration_marketplace_id among them. Losing that
+            # made the eBay sync fall back to EBAY_US, and shipping is quoted per
+            # marketplace: a listing that ships free within Canada came back with
+            # a US shipping charge and was recorded as paid postage.
+            merged = dict(account.token_data or {})
+            merged.update(extra_data)
+            account.token_data = merged
 
         if shop_id:
             account.shop_id = shop_id

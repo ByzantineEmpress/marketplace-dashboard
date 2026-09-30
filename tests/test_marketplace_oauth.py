@@ -35,7 +35,8 @@ from starlette.testclient import TestClient
 from src import oauth_pkce
 from src.api.main import app
 from src.database import init_db, SessionLocal
-from src.models import AuthSession, User, UserMarketplaceCredential
+from src.models import (AuthSession, MarketplaceAccount, User,
+                        UserMarketplaceCredential)
 
 
 class PkceTest(unittest.TestCase):
@@ -999,6 +1000,73 @@ class EtsyImageImportTest(unittest.TestCase):
         row = self.adapter._normalise_listing(self._raw([self._image(1, "a")]))
         columns = {c.name for c in Listing.__table__.columns}
         self.assertEqual([k for k in row if k not in columns], [])
+
+
+class StoreTokensMergeTest(unittest.TestCase):
+    """Storing tokens must not drop what was learned separately.
+
+    registration_marketplace_id is written at connect time from the Identity API.
+    A refresh response carries only the token fields, and store_tokens used to
+    assign it wholesale — so every refresh erased the marketplace. The eBay sync
+    then fell back to EBAY_US, and shipping is quoted per marketplace, so a
+    listing that ships free within Canada came back with a US charge and was
+    recorded as paid postage. 49 live listings were wrong this way.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        init_db()
+
+    def setUp(self):
+        from src.adapters import get_adapter
+
+        self.adapter = get_adapter("ebay")
+        self.db = SessionLocal()
+        self.user = User(email=f"tokens.{secrets.token_hex(4)}@example.com",
+                         name="Token Tester", provider="google", is_admin=False)
+        self.db.add(self.user)
+        self.db.flush()
+        self.db.commit()
+
+    def tearDown(self):
+        uid = self.user.id
+        self.db.rollback()
+        self.db.query(MarketplaceAccount).filter(
+            MarketplaceAccount.user_id == uid).delete(synchronize_session=False)
+        self.db.query(User).filter(User.id == uid).delete(synchronize_session=False)
+        self.db.commit()
+        self.db.close()
+
+    def test_a_refresh_keeps_the_registration_marketplace(self):
+        self.adapter.store_tokens(
+            self.db, access_token="a", refresh_token="r", token_expires_in=3600,
+            extra_data={"access_token": "a", "expires_in": 3600,
+                        "registration_marketplace_id": "EBAY_CA"},
+            user_id=self.user.id)
+
+        # A refresh response, which knows nothing about the marketplace.
+        self.adapter.store_tokens(
+            self.db, access_token="b", token_expires_in=3600,
+            extra_data={"access_token": "b", "expires_in": 3600,
+                        "token_type": "Application Access Token"},
+            user_id=self.user.id)
+
+        account = (self.db.query(MarketplaceAccount)
+                   .filter(MarketplaceAccount.user_id == self.user.id).first())
+        self.assertEqual((account.token_data or {}).get("registration_marketplace_id"),
+                         "EBAY_CA")
+
+    def test_new_token_fields_still_win(self):
+        self.adapter.store_tokens(
+            self.db, access_token="a", token_expires_in=3600,
+            extra_data={"access_token": "a", "note": "old"}, user_id=self.user.id)
+        self.adapter.store_tokens(
+            self.db, access_token="b", token_expires_in=3600,
+            extra_data={"access_token": "b", "note": "new"}, user_id=self.user.id)
+
+        account = (self.db.query(MarketplaceAccount)
+                   .filter(MarketplaceAccount.user_id == self.user.id).first())
+        self.assertEqual((account.token_data or {})["note"], "new")
 
 
 if __name__ == "__main__":

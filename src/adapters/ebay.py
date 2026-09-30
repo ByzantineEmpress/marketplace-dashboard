@@ -188,6 +188,49 @@ class eBayAdapter(MarketplaceAdapter):
 
         return f"{EBAY_AUTH_URL}?{urlencode(params)}"
 
+    def _resolve_marketplace(self, db, token: dict, user_id=None) -> str:
+        """The marketplace this seller is registered on.
+
+        Anything marketplace-dependent needs this, and the default is not
+        harmless. Asking eBay as EBAY_US when the seller is on EBAY_CA quotes
+        shipping for a US buyer, so a listing that ships free within Canada comes
+        back with a charge on it and is recorded as charging postage.
+
+        The value was stored at connect time but a token refresh used to wipe it,
+        so it is re-learned here and kept. Returns "" when it cannot be
+        determined — callers decide what that means rather than being handed a
+        guess dressed up as an answer.
+        """
+        marketplace = (token.get("registration_marketplace_id") or "").strip()
+        if marketplace:
+            return marketplace
+
+        try:
+            identity = self._fetch_identity(token.get("access_token") or "")
+        except Exception:
+            identity = {}
+
+        marketplace = (identity.get("registrationMarketplaceId") or "").strip()
+        if not marketplace:
+            return ""
+
+        # Keep it, so this costs one call for an old connection and none after.
+        try:
+            account = self._find_account(db, user_id)
+            if account:
+                merged = dict(account.token_data or {})
+                merged["registration_marketplace_id"] = marketplace
+                account.token_data = merged
+                if not account.shop_id:
+                    account.shop_id = identity.get("userId")
+                if not account.shop_name:
+                    account.shop_name = identity.get("username")
+                db.commit()
+        except Exception:
+            db.rollback()
+
+        return marketplace
+
     def _fetch_identity(self, access_token: str) -> dict:
         """The eBay user behind a token: username, immutable userId, and the
         marketplace they are registered on.
@@ -370,7 +413,12 @@ class eBayAdapter(MarketplaceAdapter):
             # The report is the one source that sees every listing. The inventory
             # path is retained as a fallback for accounts managed via the
             # Inventory API, but it is empty for typical Seller Hub sellers.
-            marketplace = (token.get("registration_marketplace_id") or "").strip() or "EBAY_US"
+            #
+            # The seller's own marketplace, re-learned if an old token refresh
+            # dropped it. EBAY_US is a last resort: it quotes shipping for a US
+            # buyer, which misreads a Canadian listing's free domestic postage as
+            # a charge.
+            marketplace = self._resolve_marketplace(db, token, user_id) or "EBAY_US"
             listings = self._fetch_active_inventory_report(headers, max_results, marketplace)
             if listings:
                 return self._enrich_listings(
@@ -677,7 +725,9 @@ class eBayAdapter(MarketplaceAdapter):
                     "recorded": 0, "created": 0,
                     "error": "No valid access token — connect the account first"}
 
-        marketplace = (token.get("registration_marketplace_id") or "").strip() or "EBAY_US"
+        # Same reasoning as the listing sync: the seller's own marketplace, not a
+        # US default that would quote everything for the wrong buyer.
+        marketplace = self._resolve_marketplace(db, token, user_id) or "EBAY_US"
         headers = {
             "Authorization": f"Bearer {token['access_token']}",
             "X-EBAY-C-MARKETPLACE-ID": marketplace,
