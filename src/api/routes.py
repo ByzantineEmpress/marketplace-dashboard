@@ -9,6 +9,7 @@ structured JSON so the client can handle errors gracefully.
 """
 
 from datetime import datetime, timedelta
+import asyncio
 import secrets
 import time
 from urllib.parse import quote
@@ -2523,6 +2524,35 @@ async def connect_account(body: dict, db: Session = Depends(get_db), user: dict 
     )
     return response
 
+@api_router.post("/accounts/sync-all")
+async def sync_all_accounts(db: Session = Depends(get_db),
+                            user: dict = Depends(check_auth)):
+    """Sync every marketplace the caller has connected, in one action.
+
+    One platform failing must not stop the others, so each result is reported
+    separately: a partial sync that says which part failed is far more useful than
+    a single "failed" that hides three successes.
+
+    The same routine the background timer runs, so a manual sync and a scheduled
+    one can never diverge in what they do.
+    """
+    from src.marketplace_sync import sync_all_threadsafe
+
+    # Off the event loop: a sync is blocking HTTP that can run for tens of
+    # seconds, and on the loop it would freeze the whole server for that long.
+    summary = await asyncio.to_thread(sync_all_threadsafe, user["id"])
+    if not summary["platforms"]:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False,
+                     "error": "No marketplaces connected yet. Connect one on the "
+                              "My Accounts page first."},
+        )
+    failed = [p for p, r in summary["results"].items() if not r.get("success", True)]
+    return {"ok": not failed, "synced": summary["platforms"],
+            "failed": failed, "results": summary["results"]}
+
+
 @api_router.post("/accounts/sync")
 async def sync_account(body: dict, db: Session = Depends(get_db), user: dict = Depends(check_auth)):
     """Manually trigger a sync for the caller's own marketplace connection.
@@ -2534,31 +2564,19 @@ async def sync_account(body: dict, db: Session = Depends(get_db), user: dict = D
     can never pull from another user's shop.
     """
     from src.adapters import get_adapter
+    from src.marketplace_sync import sync_one_for_user
 
     platform = (body.get("platform") or "").strip().lower()
     try:
-        adapter = get_adapter(platform)
+        get_adapter(platform)
     except KeyError:
         return JSONResponse(status_code=400, content={"ok": False, "error": f"Platform '{platform}' not supported yet"})
 
-    credentials = _user_credentials(db, user["id"], platform)
     try:
-        result = adapter.sync_all(db, user_id=user["id"], credentials=credentials)
-
-        # Sales are a separate, additive pass. It has to run even when the
-        # listing sync found nothing: an account whose items have all sold has no
-        # active listings but plenty of sales, and every listing endpoint drops an
-        # item the moment it sells. A platform with no sales API reports
-        # supported: False rather than failing.
-        try:
-            result["sales"] = adapter.sync_sales(
-                db, user_id=user["id"], credentials=credentials)
-        except Exception as e:
-            result["sales"] = {"supported": True, "success": False,
-                               "fetched": 0, "recorded": 0, "created": 0,
-                               "error": str(e)}
-
-        return {"ok": True, "platform": platform, "result": result}
+        # Same reasoning as sync-all: this blocks for as long as the marketplace
+        # takes to answer, so it must not hold the event loop.
+        result = await asyncio.to_thread(sync_one_for_user, user["id"], platform)
+        return {"ok": not result.get("errors"), "platform": platform, "result": result}
     except Exception as e:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 

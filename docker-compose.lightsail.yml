@@ -44,6 +44,18 @@ services:
       # Must be true in production: makes the auth cookie Secure and enables HSTS.
       - REQUIRE_HTTPS=1
       #
+      # Scheduled marketplace syncing. Switched on here rather than defaulting on,
+      # so a test run or a local dev server never starts calling live marketplaces
+      # on its own. Listings and sales only change when the marketplaces say they
+      # do, so without this the dashboard is as stale as the last manual sync.
+      - SCHEDULED_SYNC_ENABLED=1
+      # Every connected marketplace, hourly.
+      - SCHEDULED_SYNC_INTERVAL_MINUTES=60
+      # Wait two minutes after boot before the first pass: a deploy should not be
+      # followed immediately by a burst of API calls, and a restart loop must not
+      # become a request loop.
+      - SCHEDULED_SYNC_STARTUP_DELAY_SECONDS=120
+      #
       # NOTE ON TLS VERSION: minimum TLS version cannot be set here. Cloudflare
       # terminates TLS and forwards this request as plain HTTP, and uvicorn's
       # ASGI scope exposes no TLS information at all. Set it at the edge:

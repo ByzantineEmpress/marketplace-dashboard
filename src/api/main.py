@@ -154,9 +154,15 @@ async def lifespan(app: FastAPI):
             print(f"  ! {item}")
         print("=" * 68 + "\n")
 
+    # 4. Periodic marketplace syncing. Off unless explicitly enabled, so a test
+    #    run or a dev server never starts talking to live marketplaces on its own.
+    from src import scheduler
+    scheduler.start(app)
+
     yield  # application runs while we're in the "with" block
 
-    # Shutdown cleanup can go here if needed.
+    # Shutdown: let a sync pass finish rather than tearing it off mid-request.
+    await scheduler.shutdown(app)
 
 
 app = FastAPI(

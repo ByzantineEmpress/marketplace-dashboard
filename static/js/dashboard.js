@@ -1941,6 +1941,77 @@ document.addEventListener("DOMContentLoaded", () => {
         loadStats();
     });
 
+    // Event: sync every connected marketplace at once.
+    //
+    // The server does the work; this only reports it. The button borrows its own
+    // label as the progress indicator because a sync of two marketplaces can run
+    // for tens of seconds, and a button that looks idle while the request is in
+    // flight invites a second click that starts a second sync.
+    const syncAllBtn = document.getElementById("sync-all-btn");
+    if (syncAllBtn) {
+        const idleLabel = syncAllBtn.textContent;
+        let restoreTimer = null;
+
+        const setLabel = (text, ms) => {
+            syncAllBtn.textContent = text;
+            if (restoreTimer) {
+                clearTimeout(restoreTimer);
+            }
+            if (ms) {
+                restoreTimer = setTimeout(() => {
+                    syncAllBtn.textContent = idleLabel;
+                }, ms);
+            }
+        };
+
+        syncAllBtn.addEventListener("click", async () => {
+            if (syncAllBtn.disabled) {
+                return; // One run at a time.
+            }
+            syncAllBtn.disabled = true;
+            setLabel("Syncing…");
+
+            try {
+                const res = await fetch("/api/accounts/sync-all", { method: "POST" });
+                const data = await res.json().catch(() => ({}));
+
+                if (!res.ok) {
+                    setLabel("Sync failed", 6000);
+                    console.warn("Sync all failed:", data.error || res.status);
+                } else {
+                    const results = data.results || {};
+                    const added = Object.values(results).reduce(
+                        (sum, r) => sum + (r.listings_added || 0), 0);
+                    const sales = Object.values(results).reduce(
+                        (sum, r) => sum + ((r.sales || {}).created || 0), 0);
+                    const failed = (data.failed || []).length;
+
+                    if (failed) {
+                        // Name the failures rather than reporting a bare success:
+                        // a partial sync that hides which part broke is worse than
+                        // no report at all.
+                        setLabel(`${failed} of ${data.synced.length} failed`, 8000);
+                        console.warn("Sync all partial:", data.results);
+                    } else {
+                        const parts = [];
+                        if (added) parts.push(`${added} new`);
+                        if (sales) parts.push(`${sales} sold`);
+                        setLabel(parts.length ? `Synced: ${parts.join(", ")}` : "Up to date", 5000);
+                    }
+                }
+
+                // Whatever happened, show what is actually stored now.
+                loadListings();
+                loadStats();
+            } catch (e) {
+                setLabel("Sync failed", 6000);
+                console.warn("Sync all errored:", e);
+            } finally {
+                syncAllBtn.disabled = false;
+            }
+        });
+    }
+
     // Event: pagination
     if (prevBtn) {
         prevBtn.addEventListener("click", () => {

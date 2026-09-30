@@ -150,6 +150,17 @@ class Config:
     PLUGIN_DIR: str = "plugins"
     ENABLED_PLUGINS: list = field(default_factory=lambda: [])  # empty = auto-discover
 
+    # -- Scheduled syncing --
+    # Off unless switched on explicitly. A background job that reaches out to live
+    # marketplaces must never start by accident in a test run or on a developer's
+    # machine, where it would spend API quota and write to the database unattended.
+    SCHEDULED_SYNC_ENABLED: bool = False
+    # How often every connected marketplace is synced, in minutes.
+    SCHEDULED_SYNC_INTERVAL_MINUTES: int = 60
+    # Delay before the first pass, so a deploy is not immediately followed by a
+    # burst of API calls, and a restart loop cannot become a request loop.
+    SCHEDULED_SYNC_STARTUP_DELAY_SECONDS: int = 120
+
     def load_from_env(self):
         """Override defaults with environment variables (from .env file)."""
         for key, value in os.environ.items():

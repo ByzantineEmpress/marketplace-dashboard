@@ -108,6 +108,7 @@ jobs:
             tests/test_security_audit.py
             tests/test_static_analysis.py
             tests/test_storage.py
+            tests/test_sync_all.py
             tests/test_transport_security.py
           "
 
