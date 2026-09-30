@@ -1966,8 +1966,15 @@ async def get_listings(
         like_pattern = f"%{search}%"
         query = query.filter(Listing.title.ilike(like_pattern))
 
-    # Sort
-    sort_col = getattr(Listing, sort, Listing.created_at)
+    # Sort. Restricted to something that is actually a sortable column: the
+    # previous version passed any attribute name straight to .asc(), so
+    # ?sort=metadata — which is a real attribute of a mapped class — raised inside
+    # SQLAlchemy and answered a 500 for nothing worse than a bad query parameter.
+    # The table view sends the column name, so an unknown one must fall back
+    # rather than break the page.
+    sort_col = getattr(Listing, sort, None) if sort else None
+    if sort_col is None or not hasattr(sort_col, "asc"):
+        sort_col = Listing.created_at
     if order == "asc":
         query = query.order_by(sort_col.asc())
     else:

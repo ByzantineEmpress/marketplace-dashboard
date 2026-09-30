@@ -132,34 +132,15 @@ document.addEventListener("DOMContentLoaded", () => {
             loadedListings = {};
             raw.forEach(item => { loadedListings[item.id] = item; });
 
+            // Both views are painted from these, so switching view re-renders
+            // what is already loaded instead of going back to the server.
+            currentRows = raw;
+            currentDisplay = displayListings;
+
             if (!displayListings || displayListings.length === 0) {
                 renderEmptyState();
             } else {
-                grid.innerHTML = displayListings.map(listing => renderCard(listing)).join("");
-                // Wire click events on cards
-                grid.querySelectorAll(".listing-card").forEach(card => {
-                    card.classList.add("listing-card--selectable");
-                    if (state.groupingMode) {
-                        card.classList.add("listing-card--grouping-mode");
-                    }
-                    const id = Number(card.dataset.id);
-                    if (state.selectedIds.has(id)) {
-                        card.classList.add("listing-card--selected");
-                    }
-                    card.addEventListener("click", () => {
-                        if (suppressCardClick) {
-                            suppressCardClick = false;
-                            return;
-                        }
-                        if (state.groupingMode) {
-                            toggleGroupSelection(id, card);
-                            return;
-                        }
-                        if (loadedListings[id]) {
-                            openListingModal(loadedListings[id]);
-                        }
-                    });
-                });
+                paintListings();
             }
 
             // Update pagination UI
@@ -169,11 +150,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
         } catch (e) {
             grid.style.opacity = "1";
+            showGridMessage();
             grid.innerHTML = `<div class="empty-state"><p class="empty-state-text">Could not load listings: ${escapeHtml(e.message)}</p></div>`;
         }
     }
 
     function renderEmptyState() {
+        showGridMessage();
         const isFiltering = state.search || state.platform || state.status || state.team || state.missingCost;
         if (isFiltering) {
             grid.innerHTML = `
@@ -2198,6 +2181,338 @@ function renderGroupSection(listing) {
         </div>`;
 }
 
+// ---------------------------------------------------------------------------
+// Table view.
+//
+// The same listings the cards show, but one row per listing rather than one per
+// group, with every figure in its own column so the set can be read down a
+// column and sorted on it. Sorting is done by the server: the page holds only 50
+// rows, so sorting in the browser would order the visible page and call it the
+// answer, which is wrong the moment there is a second page.
+// ---------------------------------------------------------------------------
+
+// `sort` names the Listing column the server orders by. Anything without one is
+// derived here and cannot be sorted server-side.
+const TABLE_COLUMNS = [
+    { key: "thumb", label: "", sortable: false, locked: true },
+    { key: "title", label: "Item", sort: "title", sortable: true, locked: true,
+      title: true },
+    { key: "platform", label: "Channel", sort: "platform", sortable: true },
+    { key: "status", label: "Status", sort: "status", sortable: true },
+    { key: "price_cents", label: "Price", sort: "price_cents", sortable: true, money: true },
+    { key: "total_cost_cents", label: "Cost", sort: "purchase_price_cents", sortable: true, money: true,
+      hint: "Purchase price plus parts" },
+    { key: "shipping_cost_cents", label: "Postage", sort: "shipping_cost_cents", sortable: true, money: true,
+      hint: "What you paid to ship it" },
+    { key: "shipping_charged_cents", label: "Ship+", sort: "shipping_charged_cents", sortable: true, money: true,
+      hint: "What the buyer paid for shipping" },
+    { key: "fees_cents", label: "Fees", sort: "fees_cents", sortable: true, money: true },
+    { key: "net_payout_cents", label: "Payout", sort: "net_payout_cents", sortable: true, money: true },
+    { key: "profit", label: "Profit / Loss", sortable: false, money: true, signed: true,
+      hint: "Payout less costs and postage once sold; estimated net before that" },
+    { key: "views_count", label: "Views", sort: "views_count", sortable: true, numeric: true },
+    { key: "watchers_count", label: "Watchers", sort: "watchers_count", sortable: true, numeric: true },
+    { key: "favorites_count", label: "Favourites", sort: "favorites_count", sortable: true, numeric: true },
+    { key: "category", label: "Category", sort: "category", sortable: true },
+    { key: "sku", label: "SKU", sort: "sku", sortable: true },
+    { key: "available_quantity", label: "Qty", sort: "available_quantity", sortable: true, numeric: true },
+    { key: "sold_at", label: "Sold", sort: "sold_at", sortable: true, date: true },
+    { key: "created_at", label: "Listed", sort: "created_at", sortable: true, date: true },
+];
+
+// Enough to be useful without a horizontal scroll on a laptop. The rest are one
+// click away in the chooser, and the choice is remembered.
+const TABLE_DEFAULT_COLUMNS = [
+    "thumb", "title", "platform", "status", "price_cents", "total_cost_cents",
+    "profit", "created_at",
+];
+
+const TABLE_STORAGE_KEY = "marketplace.tableColumns";
+
+function loadTableColumns() {
+    try {
+        const raw = window.localStorage.getItem(TABLE_STORAGE_KEY);
+        if (!raw) {
+            return TABLE_DEFAULT_COLUMNS.slice();
+        }
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) {
+            return TABLE_DEFAULT_COLUMNS.slice();
+        }
+        // Keep only columns that still exist, then force the locked ones back in:
+        // a stored set from an older build must not be able to hide the item name
+        // and leave a table of anonymous numbers.
+        const known = new Set(TABLE_COLUMNS.map(c => c.key));
+        const kept = parsed.filter(k => known.has(k));
+        TABLE_COLUMNS.filter(c => c.locked).forEach(c => {
+            if (kept.indexOf(c.key) === -1) kept.push(c.key);
+        });
+        return kept.length ? kept : TABLE_DEFAULT_COLUMNS.slice();
+    } catch (e) {
+        return TABLE_DEFAULT_COLUMNS.slice();
+    }
+}
+
+function saveTableColumns(keys) {
+    try {
+        window.localStorage.setItem(TABLE_STORAGE_KEY, JSON.stringify(keys));
+    } catch (e) {
+        // Private mode: the choice applies to this view only.
+    }
+}
+
+function visibleTableColumns() {
+    const keys = loadTableColumns();
+    // Ordered by the registry, not by the stored list, so columns cannot be
+    // reordered into nonsense by a stale value.
+    return TABLE_COLUMNS.filter(c => keys.indexOf(c.key) !== -1);
+}
+
+function tableCellValue(listing, column) {
+    if (column.key === "profit") {
+        // Once sold, the payout is the only honest basis; before that the listed
+        // price less costs, which is what the card already shows as an estimate.
+        const payout = listing.net_payout_cents || 0;
+        if (payout > 0) {
+            return listing.actual_profit !== undefined
+                ? Number(listing.actual_profit)
+                : (payout - (listing.total_cost_cents || 0)
+                   - (listing.shipping_cost_cents || 0)) / 100;
+        }
+        return (listing.price_cents || 0) / 100
+             - (listing.total_cost_cents || 0) / 100
+             - (listing.est_fees_cents || 0) / 100;
+    }
+    if (column.money) {
+        return (listing[column.key] || 0) / 100;
+    }
+    return listing[column.key];
+}
+
+function formatTableDate(value) {
+    if (!value) return "—";
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return "—";
+    return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+// ---------------------------------------------------------------------------
+
+// Render the table: header from the visible columns, one row per listing.
+// Sort state lives in `state`, so the header arrows and the loaded order can
+// never disagree.
+function renderTable(listings) {
+    const headEl = document.getElementById("listing-table-head");
+    const bodyEl = document.getElementById("listing-table-body");
+    const noteEl = document.getElementById("listing-table-note");
+    if (!headEl || !bodyEl) return;
+
+    const columns = visibleTableColumns();
+    const sortKey = state.sort;
+    const sortOrder = state.order;
+
+    const head = columns.map(column => {
+        if (!column.sortable) {
+            return `<th class="${column.key === "thumb" ? "col-thumb" : ""}">${
+                escapeHtml(column.label)}</th>`;
+        }
+        const active = column.sort === sortKey;
+        // aria-sort is what a screen reader reads; the arrow is for everyone else.
+        const aria = active ? (sortOrder === "asc" ? "ascending" : "descending") : "none";
+        const arrow = active ? (sortOrder === "asc" ? " ↑" : " ↓") : "";
+        return `<th class="sortable${active ? " sorted" : ""}" data-sort="${column.sort}"
+                    aria-sort="${aria}" tabindex="0" role="button"
+                    title="Sort by ${escapeHtml(column.label)}">
+                    ${escapeHtml(column.label)}<span class="sort-arrow">${arrow}</span>
+                </th>`;
+    }).join("");
+
+    const rows = listings.map(listing => {
+        const cells = columns.map(column => {
+            if (column.key === "thumb") {
+                const src = listing.image_url || "/static/img/placeholder.svg";
+                return `<td class="col-thumb"><img src="${escapeHtml(src)}" alt=""
+                            loading="lazy" draggable="false"
+                            onerror="this.src='/static/img/placeholder.svg'"></td>`;
+            }
+            const raw = tableCellValue(listing, column);
+            if (column.date) {
+                return `<td class="num">${formatTableDate(raw)}</td>`;
+            }
+            if (column.money || column.numeric) {
+                const n = Number(raw) || 0;
+                if (column.money) {
+                    const sign = column.signed && n > 0 ? "+" : (n < 0 ? "−" : "");
+                    const color = column.signed
+                        ? ` style="color: ${n >= 0 ? "var(--success)" : "var(--danger)"}; font-weight: 600;"`
+                        : "";
+                    return `<td class="num"${color}>${sign}$${Math.abs(n).toFixed(2)}</td>`;
+                }
+                return `<td class="num">${n.toLocaleString()}</td>`;
+            }
+            if (column.key === "title") {
+                const group = listing.group_summary
+                    ? `<span class="table-group-mark" title="Part of a group — same item on several channels">⧉</span>`
+                    : "";
+                return `<td class="col-title">${group}${escapeHtml(listing.title || "Untitled")}</td>`;
+            }
+            if (column.key === "status") {
+                const status = listing.status || "unknown";
+                return `<td><span class="card-status card-status--${status}">${
+                    status === "written_off" ? "Written Off" : status}</span></td>`;
+            }
+            if (column.key === "platform") {
+                return `<td>${renderPlatformBadges([listing.platform], listing.platform)}</td>`;
+            }
+            const value = raw === null || raw === undefined || raw === "" ? "—" : raw;
+            return `<td>${escapeHtml(String(value))}</td>`;
+        }).join("");
+        return `<tr data-id="${listing.id}" tabindex="0">${cells}</tr>`;
+    }).join("");
+
+    headEl.innerHTML = `<tr>${head}</tr>`;
+    bodyEl.innerHTML = rows;
+
+    if (noteEl) {
+        const shown = columns.length;
+        const total = TABLE_COLUMNS.length;
+        noteEl.textContent =
+            `${listings.length} row${listings.length === 1 ? "" : "s"} · ` +
+            `${shown} of ${total} columns · click a column heading to sort`;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// View painting.
+//
+// One place decides which view is on screen, so the toggle, the initial load and
+// a re-render after an edit can never disagree about it.
+//
+// These run outside the DOMContentLoaded closure, so each looks up the elements
+// it needs rather than closing over that handler's consts.
+// ---------------------------------------------------------------------------
+
+let currentView = "comfortable";
+let currentRows = [];      // every listing on this page, group members included
+let currentDisplay = [];   // one entry per group, for the cards
+
+function isTableView() {
+    return currentView === "table";
+}
+
+function applyViewVisibility() {
+    const table = isTableView();
+    const gridEl = document.getElementById("listing-grid");
+    const wrapEl = document.getElementById("listing-table-wrap");
+    const colsEl = document.getElementById("columns-control");
+    if (gridEl) gridEl.hidden = table;
+    if (wrapEl) wrapEl.hidden = !table;
+    if (colsEl) colsEl.hidden = !table;
+}
+
+// Empty states and error messages are rendered into the grid, so in table view
+// they would land on a hidden element and the page would look blank. Put the grid
+// back on screen for them; the next successful load restores the chosen view.
+function showGridMessage() {
+    const gridEl = document.getElementById("listing-grid");
+    const wrapEl = document.getElementById("listing-table-wrap");
+    const colsEl = document.getElementById("columns-control");
+    if (gridEl) gridEl.hidden = false;
+    if (wrapEl) wrapEl.hidden = true;
+    if (colsEl) colsEl.hidden = true;
+}
+
+function paintListings() {
+    applyViewVisibility();
+    if (isTableView()) {
+        // Every member gets a row: reading down the Channel or Fees column is the
+        // whole point of the table, and collapsing groups would hide exactly the
+        // per-channel figures being compared.
+        renderTable(currentRows);
+        wireTableRows();
+        return;
+    }
+    const gridEl = document.getElementById("listing-grid");
+    if (!gridEl) return;
+    gridEl.innerHTML = currentDisplay.map(listing => renderCard(listing)).join("");
+    wireCards(gridEl);
+}
+
+function wireCards(gridEl) {
+    (gridEl || document.getElementById("listing-grid")).querySelectorAll(".listing-card").forEach(card => {
+        card.classList.add("listing-card--selectable");
+        if (state.groupingMode) {
+            card.classList.add("listing-card--grouping-mode");
+        }
+        const id = Number(card.dataset.id);
+        if (state.selectedIds.has(id)) {
+            card.classList.add("listing-card--selected");
+        }
+        card.addEventListener("click", () => {
+            if (suppressCardClick) {
+                suppressCardClick = false;
+                return;
+            }
+            if (state.groupingMode) {
+                toggleGroupSelection(id, card);
+                return;
+            }
+            if (loadedListings[id]) {
+                openListingModal(loadedListings[id]);
+            }
+        });
+    });
+}
+
+function wireTableRows() {
+    const headEl = document.getElementById("listing-table-head");
+    const bodyEl = document.getElementById("listing-table-body");
+    if (!headEl || !bodyEl) return;
+
+    // Sorting. The listener is attached after each render, so it always matches
+    // the headings currently on screen.
+    headEl.querySelectorAll("th.sortable").forEach(th => {
+        const sort = th.dataset.sort;
+        const go = () => {
+            if (state.sort === sort) {
+                state.order = state.order === "asc" ? "desc" : "asc";
+            } else {
+                state.sort = sort;
+                // Money and counts are most useful biggest-first; names read
+                // better A-Z. Guessing wrong costs one extra click.
+                state.order = sort === "title" || sort === "category" || sort === "sku"
+                    ? "asc" : "desc";
+            }
+            state.page = 1;
+            loadListings();
+        };
+        th.addEventListener("click", go);
+        th.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                go();
+            }
+        });
+    });
+
+    bodyEl.querySelectorAll("tr").forEach(row => {
+        const open = () => {
+            const id = Number(row.dataset.id);
+            if (loadedListings[id]) {
+                openListingModal(loadedListings[id]);
+            }
+        };
+        row.addEventListener("click", open);
+        row.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                open();
+            }
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
+
 // Render a single listing card
 function renderCard(listing) {
     const groupMembers = (listing.group_member_list || []);
@@ -2381,7 +2696,7 @@ function getPlatformIcon(platform) {
 // ---------------------------------------------------------------------------
 (function initViewControls() {
     const STORAGE_KEY = "marketplace.cardView";
-    const VIEWS = ["comfortable", "compact"];
+    const VIEWS = ["comfortable", "compact", "table"];
     const toggleButtons = Array.prototype.slice.call(
         document.querySelectorAll(".view-toggle-btn")
     );
@@ -2389,12 +2704,22 @@ function getPlatformIcon(platform) {
     function applyView(view) {
         const chosen = VIEWS.indexOf(view) >= 0 ? view : "comfortable";
         document.body.dataset.cardView = chosen;
+        // One source of truth for which view is on screen: the same value keeps
+        // the CSS, the toggle's pressed state and the painting in step.
+        currentView = chosen;
         toggleButtons.forEach(function (btn) {
             // aria-pressed rather than a class alone: it is the state the
             // assistive tech reads, and the styling hangs off the same attribute
             // so the two can never disagree.
             btn.setAttribute("aria-pressed", String(btn.dataset.view === chosen));
         });
+        // Repaint from what is already loaded rather than refetching: the two
+        // views show the same page of listings.
+        if (typeof paintListings === "function" && currentDisplay.length) {
+            paintListings();
+        } else if (typeof applyViewVisibility === "function") {
+            applyViewVisibility();
+        }
         return chosen;
     }
 
@@ -2422,6 +2747,99 @@ function getPlatformIcon(platform) {
             remember(applyView(btn.dataset.view));
         });
     });
+
+    // -- Column chooser -----------------------------------------------------
+    //
+    // Built from the registry so a new column appears here automatically, and the
+    // locked ones are disabled rather than merely absent — a chooser that silently
+    // refuses to hide something is more confusing than one that shows why.
+    (function initColumnChooser() {
+        const button = document.getElementById("columns-btn");
+        const popover = document.getElementById("columns-popover");
+        const list = document.getElementById("columns-list");
+        const reset = document.getElementById("columns-reset");
+        if (!button || !popover || !list) {
+            return;
+        }
+
+        function renderList() {
+            const chosen = loadTableColumns();
+            list.innerHTML = TABLE_COLUMNS.filter(c => c.label).map(column => {
+                const on = chosen.indexOf(column.key) !== -1;
+                const hint = column.hint ? ` title="${escapeHtml(column.hint)}"` : "";
+                return `<label class="columns-item"${hint}>
+                    <input type="checkbox" data-column="${column.key}"
+                           ${on ? "checked" : ""}
+                           ${column.locked ? "disabled" : ""}>
+                    <span>${escapeHtml(column.label)}</span>
+                    ${column.locked ? '<span class="columns-locked">always</span>' : ""}
+                </label>`;
+            }).join("");
+        }
+
+        function close() {
+            popover.hidden = true;
+            button.setAttribute("aria-expanded", "false");
+        }
+
+        function open() {
+            renderList();
+            popover.hidden = false;
+            button.setAttribute("aria-expanded", "true");
+        }
+
+        button.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (popover.hidden) {
+                open();
+            } else {
+                close();
+            }
+        });
+
+        // Stop clicks inside the panel from closing it.
+        popover.addEventListener("click", (e) => e.stopPropagation());
+
+        list.addEventListener("change", (e) => {
+            const box = e.target;
+            if (!box || box.type !== "checkbox") return;
+            const key = box.dataset.column;
+            const chosen = loadTableColumns();
+            const at = chosen.indexOf(key);
+            if (box.checked && at === -1) {
+                chosen.push(key);
+            } else if (!box.checked && at !== -1) {
+                chosen.splice(at, 1);
+            }
+            saveTableColumns(chosen);
+            if (isTableView()) {
+                renderTable(currentRows);
+                wireTableRows();
+            }
+        });
+
+        if (reset) {
+            reset.addEventListener("click", () => {
+                saveTableColumns(TABLE_DEFAULT_COLUMNS.slice());
+                renderList();
+                if (isTableView()) {
+                    renderTable(currentRows);
+                    wireTableRows();
+                }
+            });
+        }
+
+        // Clicking away, or pressing Escape, closes it.
+        document.addEventListener("click", () => {
+            if (!popover.hidden) close();
+        });
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape" && !popover.hidden) {
+                close();
+                button.focus();
+            }
+        });
+    })();
 
     // -- Back to top --------------------------------------------------------
     const backToTop = document.getElementById("back-to-top");

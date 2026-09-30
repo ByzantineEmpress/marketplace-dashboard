@@ -871,5 +871,83 @@ class EbayFreeShippingTest(unittest.TestCase):
         self.assertIsNone(self.adapter._free_shipping_from(data))
 
 
+class ListingsSortTest(unittest.TestCase):
+    """The table sorts server-side, so `sort` is reachable from the browser and
+    has to behave for whatever it is handed."""
+
+    @classmethod
+    def setUpClass(cls):
+        init_db()
+        cls._cm = TestClient(app)
+        cls.client = cls._cm.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._cm.__exit__(None, None, None)
+
+    def setUp(self):
+        self.db = SessionLocal()
+        self.user = User(email=f"sort.{secrets.token_hex(4)}@example.com",
+                         name="Sort Tester", provider="google", is_admin=False)
+        self.db.add(self.user)
+        self.db.flush()
+        self.team = Team(name=f"Sort {secrets.token_hex(4)}",
+                         invite_code=secrets.token_urlsafe(16))
+        self.db.add(self.team)
+        self.db.flush()
+        self.db.add(TeamMembership(team_id=self.team.id, user_id=self.user.id,
+                                   role="owner"))
+        self.db.commit()
+
+        token = secrets.token_urlsafe(48)
+        self.db.add(AuthSession(token=token, user_id=self.user.id,
+                                expires_at=datetime.utcnow() + timedelta(hours=1)))
+        self.db.commit()
+        self.client.cookies.clear()
+        self.client.cookies.set("auth_token", token)
+
+    def tearDown(self):
+        uid, tid = self.user.id, self.team.id
+        self.db.rollback()
+        self.db.query(Listing).filter(Listing.team_id == tid).delete(synchronize_session=False)
+        self.db.query(TeamMembership).filter(TeamMembership.user_id == uid).delete(synchronize_session=False)
+        self.db.query(Team).filter(Team.id == tid).delete(synchronize_session=False)
+        self.db.query(AuthSession).filter(AuthSession.user_id == uid).delete(synchronize_session=False)
+        self.db.query(User).filter(User.id == uid).delete(synchronize_session=False)
+        self.db.commit()
+        self.db.close()
+
+    def _priced(self, item_id, price):
+        self.db.add(Listing(platform="ebay", platform_listing_id=item_id,
+                            title=f"Item {item_id}", currency="CAD",
+                            status="active", price_cents=price,
+                            team_id=self.team.id))
+        self.db.commit()
+
+    def _ids(self, query):
+        res = self.client.get(f"/api/listings?{query}")
+        self.assertEqual(res.status_code, 200, res.text[:200])
+        return [row["platform_listing_id"] for row in res.json()["listings"]]
+
+    def test_a_real_column_sorts(self):
+        self._priced("a", 1000)
+        self._priced("b", 3000)
+        self._priced("c", 2000)
+        self.assertEqual(self._ids("sort=price_cents&order=asc"), ["a", "c", "b"])
+        self.assertEqual(self._ids("sort=price_cents&order=desc"), ["b", "c", "a"])
+
+    def test_an_attribute_that_is_not_a_column_falls_back(self):
+        """?sort=metadata is a genuine attribute of a mapped class but not a
+        sortable column. It used to raise inside SQLAlchemy and answer a 500."""
+        self._priced("a", 1000)
+        for bogus in ("metadata", "registry", "__table__", "not_a_field"):
+            res = self.client.get(f"/api/listings?sort={bogus}")
+            self.assertEqual(res.status_code, 200, f"{bogus} -> {res.status_code}")
+
+    def test_an_empty_sort_parameter_is_accepted(self):
+        self._priced("a", 1000)
+        self.assertEqual(self.client.get("/api/listings?sort=").status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -103,10 +103,9 @@
         </div>
         <div class="toolbar-right">
             <button class="btn btn--sm btn--outline" id="sync-all-btn" title="Pull new listings and sales from every connected marketplace">Sync All Marketplaces</button>
-            <!-- Card density. Two buttons rather than a switch: each state is
-                 named by its own icon, so neither has to be inferred from the
-                 other's position. -->
-            <div class="view-toggle" role="group" aria-label="Card size">
+            <!-- Card density and the table. Each state is named by its own icon,
+                 so none has to be inferred from another's position. -->
+            <div class="view-toggle" role="group" aria-label="View">
                 <button type="button" class="view-toggle-btn" id="view-comfortable"
                         data-view="comfortable" aria-pressed="true"
                         title="Comfortable cards">
@@ -134,6 +133,33 @@
                     </svg>
                     <span class="sr-only">Compact grid</span>
                 </button>
+                <button type="button" class="view-toggle-btn" id="view-table"
+                        data-view="table" aria-pressed="false"
+                        title="Table — sortable columns, one row per listing">
+                    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                        <rect x="1" y="2" width="14" height="2.4" rx="0.8"></rect>
+                        <rect x="1" y="6.2" width="14" height="1.6" rx="0.6"></rect>
+                        <rect x="1" y="9.2" width="14" height="1.6" rx="0.6"></rect>
+                        <rect x="1" y="12.2" width="14" height="1.6" rx="0.6"></rect>
+                    </svg>
+                    <span class="sr-only">Table</span>
+                </button>
+            </div>
+            <!-- Column chooser. Only meaningful in table view, so CSS hides it
+                 unless the table is showing. -->
+            <div class="columns-control" id="columns-control">
+                <button type="button" class="btn btn--sm btn--outline" id="columns-btn"
+                        aria-expanded="false" aria-haspopup="true"
+                        title="Choose which columns the table shows">
+                    Columns
+                </button>
+                <div class="columns-popover" id="columns-popover" hidden>
+                    <div class="columns-popover-head">
+                        <span>Show columns</span>
+                        <button type="button" class="columns-reset" id="columns-reset">Reset</button>
+                    </div>
+                    <div class="columns-list" id="columns-list"></div>
+                </div>
             </div>
             <button class="btn btn--sm btn--outline" id="group-mode-btn" title="Select listings to group, or drag one card onto another to group them">🔗 Group Listings</button>
             <button class="btn btn--sm btn--outline" id="open-teams-modal-btn">👥 Teams &amp; Invites</button>
@@ -151,6 +177,17 @@
     <!-- Listing grid -->
     <div class="listing-grid" id="listing-grid">
         <!-- Cards are injected by JS -->
+    </div>
+
+    <!-- Listing table. Same data as the cards, one row per listing rather than
+         one per group, with sortable headers and selectable columns. Hidden
+         unless the table view is active, so both can share the same load. -->
+    <div class="listing-table-wrap" id="listing-table-wrap" hidden>
+        <table class="listing-table" id="listing-table">
+            <thead id="listing-table-head"></thead>
+            <tbody id="listing-table-body"></tbody>
+        </table>
+        <p class="listing-table-note" id="listing-table-note"></p>
     </div>
 
     <!-- Pagination -->
