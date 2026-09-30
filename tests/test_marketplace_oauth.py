@@ -1069,5 +1069,39 @@ class StoreTokensMergeTest(unittest.TestCase):
         self.assertEqual((account.token_data or {})["note"], "new")
 
 
+class EbayShippingRefreshTest(unittest.TestCase):
+    """A listing whose shipping eBay no longer states must stop claiming a charge.
+
+    Several live listings kept a "charges postage" verdict learned while the sync
+    was asking as the wrong marketplace, long after eBay stopped quoting anything
+    for them. The stored answer was stale and nothing could reveal it, because the
+    badge only ever appears for a definite yes.
+    """
+
+    def setUp(self):
+        from src.adapters import get_adapter
+
+        self.adapter = get_adapter("ebay")
+
+    def _enrich(self, detail):
+        self.adapter._fetch_browse_item = lambda *a, **k: detail
+        return self.adapter._enrich_listings(
+            [{"platform_listing_id": "800570000099", "free_shipping": False}],
+            {}, "EBAY_CA", 5, None)
+
+    def test_a_fetch_that_states_nothing_overwrites_a_stale_answer(self):
+        rows = self._enrich({"title": "x", "free_shipping": None})
+        self.assertIsNone(rows[0].get("free_shipping"))
+
+    def test_a_failed_fetch_leaves_the_stored_answer_alone(self):
+        """The adapter returns {} when the call fails, which is not an answer."""
+        rows = self._enrich({})
+        self.assertIs(rows[0].get("free_shipping"), False)
+
+    def test_a_definite_answer_is_applied(self):
+        rows = self._enrich({"title": "x", "free_shipping": True})
+        self.assertIs(rows[0].get("free_shipping"), True)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

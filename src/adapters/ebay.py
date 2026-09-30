@@ -1118,9 +1118,14 @@ class eBayAdapter(MarketplaceAdapter):
                 row["category"] = detail["category"]
             if detail.get("description"):
                 row["description"] = detail["description"]
-            # True, False, or absent when eBay quoted no shipping option at all.
-            if detail.get("free_shipping") is not None:
-                row["free_shipping"] = detail["free_shipping"]
+            # Only a successful fetch may speak about shipping — `detail` is empty
+            # when the call failed, so a failure leaves the stored value alone.
+            # But a fetch that succeeded and stated no shipping option means
+            # exactly that, and must overwrite an older answer: several listings
+            # kept a "charges postage" verdict learned from the wrong marketplace
+            # long after eBay stopped quoting anything for them.
+            if detail:
+                row["free_shipping"] = detail.get("free_shipping")
 
             if views_by_item:
                 row["views_count"] = views_by_item.get(item_id, 0)
