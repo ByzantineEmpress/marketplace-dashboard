@@ -4,29 +4,48 @@
    and handles the interactive listing details modal.
    ================================================================ */
 
-document.addEventListener("DOMContentLoaded", () => {
-    const state = {
-        page: 1,
-        search: "",
-        platform: "",
-        status: "",
-        team: "",
-        missingCost: false,
-        sort: "created_at",
-        order: "desc",
-        total: 0,
-        pageSize: 50,
-        metricsDays: "all",
-        // Grouping selection mode (button-based; drag is a follow-up).
-        groupingMode: false,
-        selectedIds: new Set(),
-    };
+/* ================================================================
+   Shared state.
+   ================================================================
 
-    let loadedListings = {};
+   Declared out here, not inside the DOMContentLoaded handler, because the view
+   functions below (painting cards or the table, wiring their rows) run outside
+   that handler and need the same state. Keeping a private copy inside would give
+   two answers to "which view is showing" and "what is loaded".
+
+   The three closures that genuinely belong to the handler — loading listings,
+   opening the modal, toggling a group selection — are published on
+   `dashboardActions` once the handler has defined them. */
+const state = {
+    page: 1,
+    search: "",
+    platform: "",
+    status: "",
+    team: "",
+    missingCost: false,
+    sort: "created_at",
+    order: "desc",
+    total: 0,
+    pageSize: 50,
+    metricsDays: "all",
+    // Grouping selection mode (button-based; drag is a follow-up).
+    groupingMode: false,
+    selectedIds: new Set(),
+};
+
+let loadedListings = {};
+// Set true right after a drag-drop so the click that follows a mouse drag does
+// not also open the listing modal.
+let suppressCardClick = false;
+
+const dashboardActions = {
+    loadListings: null,
+    openListingModal: null,
+    toggleGroupSelection: null,
+};
+
+document.addEventListener("DOMContentLoaded", () => {
     let loadedTeams = [];
-    // Set true right after a drag-drop so the click that follows a mouse drag
-    // does not also open the listing modal.
-    let suppressCardClick = false;
 
     const grid = document.getElementById("listing-grid");
     const pageInfo = document.getElementById("page-info");
@@ -2014,6 +2033,12 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // Publish the closures the view code outside this handler needs. Done here,
+    // after the declarations, so the functions keep their names and hoisting.
+    dashboardActions.loadListings = loadListings;
+    dashboardActions.openListingModal = openListingModal;
+    dashboardActions.toggleGroupSelection = toggleGroupSelection;
+
     // Initial load
     loadStats();
     loadTeams();
@@ -2454,11 +2479,11 @@ function wireCards(gridEl) {
                 return;
             }
             if (state.groupingMode) {
-                toggleGroupSelection(id, card);
+                dashboardActions.toggleGroupSelection(id, card);
                 return;
             }
             if (loadedListings[id]) {
-                openListingModal(loadedListings[id]);
+                dashboardActions.openListingModal(loadedListings[id]);
             }
         });
     });
@@ -2484,7 +2509,7 @@ function wireTableRows() {
                     ? "asc" : "desc";
             }
             state.page = 1;
-            loadListings();
+            dashboardActions.loadListings();
         };
         th.addEventListener("click", go);
         th.addEventListener("keydown", (e) => {
@@ -2499,7 +2524,7 @@ function wireTableRows() {
         const open = () => {
             const id = Number(row.dataset.id);
             if (loadedListings[id]) {
-                openListingModal(loadedListings[id]);
+                dashboardActions.openListingModal(loadedListings[id]);
             }
         };
         row.addEventListener("click", open);
