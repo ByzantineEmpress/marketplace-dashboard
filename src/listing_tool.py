@@ -55,22 +55,26 @@ def _ebay_preflight(db, user_id: int) -> Dict[str, Any]:
     prereq = adapter.account_prerequisites(token, marketplace)
 
     problems: List[str] = []
-    if not prereq["fulfillment_policies"]:
+    # A refused read is not the same as an empty account. Reporting "no fulfilment
+    # policy" when the call was rejected sends the seller to create a policy they
+    # may already have, instead of reconnecting.
+    refused = any("403" in err or "401" in err for err in prereq["errors"])
+    if refused:
         problems.append(
-            "No eBay fulfilment policy. Create one under eBay → Account → "
-            "Business policies, or the offer cannot be created.")
-    if not prereq["payment_policies"]:
-        problems.append("No eBay payment policy on the account.")
-    if not prereq["return_policies"]:
-        problems.append("No eBay return policy on the account.")
-    # A location is created on demand, so its absence is not a blocker; a scope
-    # failure is, because it means the location cannot be created either.
-    for err in prereq["errors"]:
-        if "403" in err or "401" in err:
+            "eBay refused to read your account settings. Reconnect the eBay "
+            "account so the listing permissions are granted.")
+    else:
+        if not prereq["fulfillment_policies"]:
             problems.append(
-                "eBay refused to read your account settings. Reconnect the eBay "
-                "account so the listing permissions are granted.")
-            break
+                "No eBay fulfilment policy. Create one under eBay → Account → "
+                "Business policies, or the offer cannot be created.")
+        if not prereq["payment_policies"]:
+            problems.append("No eBay payment policy on the account.")
+        if not prereq["return_policies"]:
+            problems.append("No eBay return policy on the account.")
+        # A location is created on demand, so its absence is not a blocker.
+        for err in prereq["errors"]:
+            problems.append(f"Could not read eBay settings: {err}")
 
     return {
         "connected": True,
@@ -97,7 +101,14 @@ def _etsy_preflight(db, user_id: int) -> Dict[str, Any]:
                 "problems": ["Etsy is not connected, or its token has expired."],
                 "options": {}}
 
-    shop_id = token.get("shop_id") or (token.get("token_data", {}) or {}).get("shop_id")
+    # The shop id is a column on the connection, NOT part of the token payload —
+    # get_token() merges token_data only. Reading it from the token always came
+    # back empty and reported "could not determine your shop" for a shop that was
+    # connected and working.
+    account = adapter._find_account(db, user_id)
+    shop_id = (getattr(account, "shop_id", None)
+               or token.get("shop_id")
+               or (token.get("token_data", {}) or {}).get("shop_id"))
     if not shop_id:
         return {"connected": True, "ready": False,
                 "problems": ["Could not determine your Etsy shop. Reconnect the "
