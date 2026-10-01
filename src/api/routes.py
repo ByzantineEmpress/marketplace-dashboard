@@ -380,6 +380,26 @@ async def dashboard_page(request: Request):
         context={"identity": user["name"], "is_admin": is_admin, "active": "dashboard"},
     )
 
+@page_router.get("/beta/listing")
+async def beta_listing_page(request: Request):
+    """The multi-platform listing tool (beta).
+
+    Write an item once, publish it to several marketplaces. Marked beta in the URL
+    and on the page: it puts real listings on real accounts, and the platforms
+    disagree enough about what a listing needs that it should be used
+    deliberately rather than by accident.
+    """
+    user = require_auth(request)
+    if not user:
+        return RedirectResponse(url="/login?error=auth_required")
+    return templates.TemplateResponse(
+        request=request,
+        name="listing_tool.html",
+        context={"identity": user["name"], "active": "beta-listing",
+                 "title": "Multi-Platform Lister (Beta)"},
+    )
+
+
 @page_router.get("/marketplace-settings")
 async def marketplace_settings_page(request: Request):
     """Per-user page for linking the caller's own marketplace accounts.
@@ -2530,6 +2550,56 @@ async def connect_account(body: dict, db: Session = Depends(get_db), user: dict 
         httponly=True, samesite="lax", max_age=600, secure=config.REQUIRE_HTTPS,
     )
     return response
+
+@api_router.get("/beta/listing/preflight")
+async def listing_preflight(db: Session = Depends(get_db),
+                            user: dict = Depends(check_auth)):
+    """What each platform still needs before it will accept a listing.
+
+    Off the event loop: this reads eBay's account settings and Etsy's taxonomy,
+    which is several blocking HTTP calls.
+    """
+    from src import listing_tool
+
+    report = await asyncio.to_thread(listing_tool.preflight, db, user["id"])
+    return {"ok": True, **report}
+
+
+@api_router.post("/beta/listing/publish")
+async def listing_publish(body: dict, db: Session = Depends(get_db),
+                          user: dict = Depends(check_auth)):
+    """Publish one draft to the selected platforms.
+
+    This creates REAL, live listings on the seller's accounts, so it is
+    deliberately explicit: the caller must send ``confirm: true``, which the page
+    only sets once the user has seen what is about to be sent. A stray request
+    must not be able to put an item up for sale.
+    """
+    from src import listing_tool
+
+    draft = body.get("draft") or {}
+    platforms = body.get("platforms") or list(listing_tool.SUPPORTED)
+
+    if not body.get("confirm"):
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False,
+                     "error": "Not confirmed. Publishing creates live listings."},
+        )
+    if not (draft.get("title") or "").strip():
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "A title is required."})
+    try:
+        price = float(draft.get("price") or 0)
+    except (TypeError, ValueError):
+        price = 0
+    if price <= 0:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "A price above zero is required."})
+
+    result = await asyncio.to_thread(listing_tool.publish, db, user["id"], draft, platforms)
+    return {"ok": result["any_published"], **result}
+
 
 @api_router.post("/accounts/sync-all")
 async def sync_all_accounts(db: Session = Depends(get_db),

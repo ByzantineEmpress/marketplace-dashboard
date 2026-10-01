@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/listing-tool.css">
+{% endblock %}
+
+{% block content %}
+<div class="lister">
+
+    <div class="lister-head">
+        <div>
+            <h1 class="lister-title">
+                Multi-Platform Lister
+                <span class="lister-badge">Beta</span>
+            </h1>
+            <p class="lister-sub">
+                Write the item once, then publish it to every marketplace you
+                choose. A further platform refusing never stops the others.
+            </p>
+        </div>
+    </div>
+
+    {# Readiness. Every platform wants something different before it will accept a
+       listing, and reports a missing one as a generic validation error. This is
+       shown before the form so the blockers are seen first, not on submit. #}
+    <section class="lister-card" id="preflight-card">
+        <div class="lister-card-head">
+            <h2>Readiness</h2>
+            <button type="button" class="btn btn--sm btn--outline" id="recheck-btn">Re-check</button>
+        </div>
+        <div id="preflight-body" class="preflight-body">
+            <p class="lister-muted">Checking what each marketplace needs…</p>
+        </div>
+    </section>
+
+    <section class="lister-card">
+        <div class="lister-card-head">
+            <h2>Item</h2>
+        </div>
+
+        <div class="lister-grid">
+            <label class="field field--wide">
+                <span class="field-label">Title</span>
+                <input type="text" id="f-title" maxlength="80" placeholder="What you are selling">
+                <span class="field-hint"><span id="title-count">0</span>/80 — eBay truncates past 80</span>
+            </label>
+
+            <label class="field field--wide">
+                <span class="field-label">Description</span>
+                <textarea id="f-description" rows="6" placeholder="Condition notes, what is included, anything a buyer should know"></textarea>
+            </label>
+
+            <label class="field">
+                <span class="field-label">Price</span>
+                <input type="number" id="f-price" min="0" step="0.01" placeholder="0.00">
+            </label>
+
+            <label class="field">
+                <span class="field-label">Currency</span>
+                <input type="text" id="f-currency" value="CAD" maxlength="3">
+            </label>
+
+            <label class="field">
+                <span class="field-label">Quantity</span>
+                <input type="number" id="f-quantity" min="1" step="1" value="1">
+            </label>
+
+            <label class="field">
+                <span class="field-label">Condition</span>
+                <select id="f-condition">
+                    <option value="new">New</option>
+                    <option value="like_new">Like new</option>
+                    <option value="very_good">Very good — used</option>
+                    <option value="good" selected>Good — used</option>
+                    <option value="acceptable">Acceptable — used</option>
+                    <option value="refurbished">Seller refurbished</option>
+                    <option value="for_parts">For parts or not working</option>
+                </select>
+            </label>
+
+            <label class="field">
+                <span class="field-label">Your SKU <span class="field-optional">optional</span></span>
+                <input type="text" id="f-sku" maxlength="32" placeholder="Your own reference">
+            </label>
+
+            <label class="field field--wide">
+                <span class="field-label">Image URLs <span class="field-optional">one per line</span></span>
+                <textarea id="f-images" rows="3" placeholder="https://…"></textarea>
+                <span class="field-hint">Marketplaces fetch images from a public URL; uploading is not wired up yet.</span>
+            </label>
+
+            <label class="field field--wide">
+                <span class="field-label">Tags <span class="field-optional">comma separated</span></span>
+                <input type="text" id="f-tags" placeholder="xbox, modded, retro">
+            </label>
+
+            <label class="field field--wide">
+                <span class="field-label">Brand / model notes <span class="field-optional">becomes eBay item specifics</span></span>
+                <input type="text" id="f-brand" placeholder="e.g. Microsoft Xbox 360">
+            </label>
+        </div>
+    </section>
+
+    {# Per-platform specifics. Kept apart from the shared item because they are not
+       the same question: eBay wants a category and three policies, Etsy a
+       taxonomy and a shipping profile. #}
+    <section class="lister-card" id="platform-card">
+        <div class="lister-card-head">
+            <h2>Where to publish</h2>
+        </div>
+        <div class="platform-choice" id="platform-choice"></div>
+
+        <div class="platform-detail" id="ebay-detail" hidden>
+            <h3 class="platform-detail-title">eBay</h3>
+            <div class="lister-grid">
+                <label class="field">
+                    <span class="field-label">Category ID</span>
+                    <input type="text" id="f-ebay-category" placeholder="e.g. 139973">
+                    <span class="field-hint">eBay's numeric category id, not the name.</span>
+                </label>
+                <label class="field">
+                    <span class="field-label">Fulfilment policy</span>
+                    <select id="f-ebay-fulfillment"></select>
+                </label>
+                <label class="field">
+                    <span class="field-label">Payment policy</span>
+                    <select id="f-ebay-payment"></select>
+                </label>
+                <label class="field">
+                    <span class="field-label">Return policy</span>
+                    <select id="f-ebay-return"></select>
+                </label>
+            </div>
+        </div>
+
+        <div class="platform-detail" id="etsy-detail" hidden>
+            <h3 class="platform-detail-title">Etsy</h3>
+            <div class="lister-grid">
+                <label class="field">
+                    <span class="field-label">Category</span>
+                    <select id="f-etsy-taxonomy"></select>
+                    <span class="field-hint">Etsy calls this the taxonomy; a listing must point at a leaf.</span>
+                </label>
+                <label class="field">
+                    <span class="field-label">Shipping profile</span>
+                    <select id="f-etsy-shipping"></select>
+                </label>
+                <label class="field">
+                    <span class="field-label">Who made it</span>
+                    <select id="f-etsy-who">
+                        <option value="i_did">I did</option>
+                        <option value="someone_else">Someone else</option>
+                        <option value="collective">A collective</option>
+                    </select>
+                </label>
+                <label class="field">
+                    <span class="field-label">When</span>
+                    <select id="f-etsy-when">
+                        <option value="made_to_order">Made to order</option>
+                        <option value="2020_2026">2020–2026</option>
+                        <option value="2010_2019">2010–2019</option>
+                        <option value="2000_2009">2000–2009</option>
+                        <option value="before_2000">Before 2000</option>
+                    </select>
+                </label>
+            </div>
+        </div>
+    </section>
+
+    <section class="lister-publish">
+        <div class="publish-summary" id="publish-summary"></div>
+        <button type="button" class="btn btn--primary btn--lg" id="publish-btn" disabled>
+            Publish to selected marketplaces
+        </button>
+        <p class="lister-warning">
+            This creates live listings on your real accounts. Review the summary first.
+        </p>
+    </section>
+
+    <section class="lister-card" id="result-card" hidden>
+        <div class="lister-card-head">
+            <h2>Result</h2>
+        </div>
+        <div id="result-body"></div>
+    </section>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/listing-tool.js"></script>
+{% endblock %}

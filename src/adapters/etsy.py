@@ -88,7 +88,11 @@ class EtsyAdapter(MarketplaceAdapter):
         # order, and so the only way to learn that something SOLD and for how
         # much. Without it a sale never reaches the dashboard and has to be
         # marked by hand.
-        scopes = "listings_r shops_r transactions_r"
+        #
+        # listings_w is what CREATING a listing needs. Requesting only listings_r
+        # let the app read a shop but never publish to it, and that would only
+        # have surfaced as a 403 at publish time.
+        scopes = "listings_r listings_w shops_r transactions_r"
 
         params = {
             "response_type": "code",
@@ -737,6 +741,140 @@ class EtsyAdapter(MarketplaceAdapter):
                 "net_payout_cents": max(0, payout),
             })
         return sales
+
+    # -- Publishing a new listing (the beta listing tool) --
+
+    def listing_options(self, headers: dict, shop_id) -> Dict[str, Any]:
+        """What a new listing must choose from: shipping profiles and a taxonomy.
+
+        Etsy will not accept a listing without a taxonomy id and a shipping
+        profile, and both are ids the seller has never seen. Surfacing the real
+        choices turns "taxonomy_id is invalid" into a list to pick from.
+        """
+        options: Dict[str, Any] = {
+            "shipping_profiles": [], "taxonomy": [], "errors": [],
+        }
+
+        try:
+            profiles = self._fetch_shipping_profiles(headers, shop_id)
+            for profile_id in list(profiles)[:50]:
+                options["shipping_profiles"].append({
+                    "id": profile_id,
+                    "free": profiles[profile_id],
+                })
+        except Exception as exc:
+            options["errors"].append(f"shipping profiles: {exc}")
+
+        try:
+            resp = httpx.get(
+                f"{ETSY_API_BASE}/application/seller-taxonomy/nodes",
+                headers=headers, timeout=40,
+            )
+            if resp.status_code == 200:
+                # Etsy returns the taxonomy as a tree; the leaves are what a
+                # listing may point at, so only those are offered.
+                def walk(nodes, depth=0):
+                    for node in nodes or []:
+                        children = node.get("children") or []
+                        if not children and node.get("id"):
+                            options["taxonomy"].append({
+                                "id": node["id"],
+                                "name": node.get("name"),
+                                "path": node.get("full_path_taxonomy_ids") or [],
+                            })
+                        else:
+                            walk(children, depth + 1)
+                walk((resp.json() or {}).get("results"))
+            else:
+                options["errors"].append(
+                    f"taxonomy: HTTP {resp.status_code} {(resp.text or '')[:120]}")
+        except Exception as exc:
+            options["errors"].append(f"taxonomy: {exc}")
+
+        return options
+
+    def publish_listing(self, db, draft: dict, user_id=None,
+                        credentials: dict = None) -> Dict[str, Any]:
+        """Create one active Etsy listing.
+
+        Etsy requires several things at once — quantity, title, description,
+        price, who_made, when_made and a taxonomy id — and refuses the whole call
+        with a generic 400 if any is absent. They are checked here so the message
+        names the field rather than making the user guess.
+        """
+        import os as _os
+
+        if not credentials:
+            credentials = {}
+
+        token = self.get_token(db, user_id=user_id, credentials=credentials)
+        if not token:
+            raise RuntimeError("Etsy is not connected, or its token has expired.")
+
+        shop_id = token.get("shop_id") or (token.get("token_data", {}) or {}).get("shop_id")
+        if not shop_id:
+            resolved = self.resolve_shop(
+                {"Authorization": f"Bearer {token['access_token']}",
+                 "x-api-key": f"{_cred(credentials, 'api_key')}:{_cred(credentials, 'api_secret')}"},
+                token.get("token_data", {}) or {}, token.get("access_token", ""))
+            shop_id = resolved.get("shop_id")
+        if not shop_id:
+            raise RuntimeError("Could not determine your Etsy shop.")
+
+        api_key = _cred(credentials, "api_key") or config.ETSY_API_KEY or _os.environ.get("ETSY_API_KEY") or ""
+        api_secret = _cred(credentials, "api_secret") or config.ETSY_API_SECRET or _os.environ.get("ETSY_API_SECRET") or ""
+        headers = {
+            "Authorization": f"Bearer {token['access_token']}",
+            "x-api-key": f"{api_key}:{api_secret}",
+            "Content-Type": "application/json",
+        }
+
+        missing = [field for field in ("title", "description", "price", "taxonomy_id")
+                   if not draft.get(field)]
+        if missing:
+            raise RuntimeError(
+                "Etsy needs these before it will accept a listing: "
+                + ", ".join(missing))
+
+        quantity = max(1, int(draft.get("quantity") or 1))
+        body: Dict[str, Any] = {
+            "quantity": quantity,
+            "title": (draft.get("title") or "")[:140],
+            "description": draft.get("description") or "",
+            "price": float(draft.get("price") or 0),
+            "who_made": draft.get("who_made") or "i_did",
+            "when_made": draft.get("when_made") or "made_to_order",
+            "taxonomy_id": int(draft["taxonomy_id"]),
+            "type": "physical",
+        }
+        if draft.get("shipping_profile_id"):
+            body["shipping_profile_id"] = int(draft["shipping_profile_id"])
+        if draft.get("sku"):
+            body["sku"] = str(draft["sku"])[:32]
+        tags = [t for t in (draft.get("tags") or []) if t][:13]
+        if tags:
+            body["tags"] = ",".join(str(t)[:20] for t in tags)
+        materials = [m for m in (draft.get("materials") or []) if m][:13]
+        if materials:
+            body["materials"] = materials
+
+        resp = httpx.post(
+            f"{ETSY_API_BASE}/application/shops/{shop_id}/listings",
+            headers=headers, json=body, timeout=60,
+        )
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"Etsy rejected the listing (HTTP {resp.status_code}): "
+                f"{(resp.text or '')[:300]}")
+
+        data = resp.json() or {}
+        listing_id = data.get("listing_id")
+        return {
+            "ok": True, "platform": self.PLATFORM,
+            "listing_id": listing_id,
+            "state": data.get("state"),
+            "url": (f"https://www.etsy.com/listing/{listing_id}" if listing_id else None),
+        }
 
     def _normalise_results(self, results: list, limit: int = 0,
                            shipping_profiles: Dict[int, bool] = None) -> List[dict]:

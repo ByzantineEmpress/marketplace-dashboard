@@ -23,7 +23,9 @@ The old v1 Selling API is deprecated.
 """
 
 import os
+import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -167,12 +169,19 @@ class eBayAdapter(MarketplaceAdapter):
         # buy.* scope, so it is not an option here.
         scopes = [
             "https://api.ebay.com/oauth/api_scope",
+            # Read for syncing, write for the listing tool. `.readonly` alone makes
+            # every create call answer 403, so the write scope is requested from
+            # the start rather than discovered at publish time.
+            "https://api.ebay.com/oauth/api_scope/sell.inventory",
             "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
             "https://api.ebay.com/oauth/api_scope/sell.listing.read",
             "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
             "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly",
             "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
             "https://api.ebay.com/oauth/api_scope/sell.finances",
+            # Reading the seller's business policies and inventory locations,
+            # without which an offer cannot be created at all.
+            "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
         ]
 
         params = {
@@ -230,6 +239,229 @@ class eBayAdapter(MarketplaceAdapter):
             db.rollback()
 
         return marketplace
+
+    # -- Publishing a new listing (the beta listing tool) --
+
+    def _inventory_headers(self, token: dict, marketplace: str) -> dict:
+        return {
+            "Authorization": f"Bearer {token['access_token']}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-EBAY-C-MARKETPLACE-ID": marketplace,
+        }
+
+    def account_prerequisites(self, token: dict, marketplace: str) -> Dict[str, Any]:
+        """The seller's business policies and inventory locations.
+
+        An offer cannot be created without all three policies and a location, and
+        eBay reports a missing one as a validation error on the offer rather than
+        as anything that names the real problem. Asking first turns that into a
+        sentence the user can act on.
+        """
+        headers = self._inventory_headers(token, marketplace)
+        result: Dict[str, Any] = {
+            "fulfillment_policies": [], "payment_policies": [],
+            "return_policies": [], "locations": [], "errors": [],
+        }
+
+        for key, path in (
+            ("fulfillment_policies", "fulfillment_policy"),
+            ("payment_policies", "payment_policy"),
+            ("return_policies", "return_policy"),
+        ):
+            try:
+                resp = httpx.get(
+                    f"{EBAY_API_BASE}/sell/account/v1/{path}?marketplace_id={marketplace}",
+                    headers=headers, timeout=30,
+                )
+                if resp.status_code == 200:
+                    for policy in (resp.json() or {}).get(key) or []:
+                        result[key].append({
+                            "id": policy.get("fulfillmentPolicyId")
+                                  or policy.get("paymentPolicyId")
+                                  or policy.get("returnPolicyId"),
+                            "name": policy.get("name"),
+                        })
+                else:
+                    result["errors"].append(
+                        f"{path}: HTTP {resp.status_code} "
+                        f"{(resp.text or '')[:120]}")
+            except Exception as exc:
+                result["errors"].append(f"{path}: {exc}")
+
+        try:
+            resp = httpx.get(f"{EBAY_API_BASE}/sell/inventory/v1/location",
+                             headers=headers, timeout=30)
+            if resp.status_code == 200:
+                for loc in (resp.json() or {}).get("locations") or []:
+                    result["locations"].append({
+                        "key": (loc.get("merchantLocationKey")
+                                or (loc.get("location") or {}).get("merchantLocationKey")),
+                        "name": (loc.get("name") or ""),
+                    })
+            else:
+                result["errors"].append(
+                    f"location: HTTP {resp.status_code} {(resp.text or '')[:120]}")
+        except Exception as exc:
+            result["errors"].append(f"location: {exc}")
+
+        return result
+
+    def ensure_location(self, token: dict, marketplace: str,
+                        draft: dict) -> str:
+        """A merchant location key, creating one if the seller has none.
+
+        eBay will not accept an offer without one, and a seller who has only ever
+        listed through the web UI may have locations without realising it, so an
+        existing key is reused rather than a second one invented.
+        """
+        headers = self._inventory_headers(token, marketplace)
+        existing = self.account_prerequisites(token, marketplace)["locations"]
+        for loc in existing:
+            if loc.get("key"):
+                return loc["key"]
+
+        key = "dsh-default"
+        body = {
+            "location": {
+                "address": {
+                    "country": draft.get("country") or "CA",
+                    "postalCode": draft.get("postal_code") or "",
+                    "city": draft.get("city") or "",
+                    "stateOrProvince": draft.get("state") or "",
+                }
+            },
+            "name": "Default location",
+            "merchantLocationStatus": "ENABLED",
+            "locationTypes": ["WAREHOUSE"],
+        }
+        resp = httpx.post(
+            f"{EBAY_API_BASE}/sell/inventory/v1/location/{key}",
+            headers=headers, json=body, timeout=30,
+        )
+        if resp.status_code not in (200, 201, 204):
+            raise RuntimeError(
+                f"eBay would not create an inventory location: HTTP "
+                f"{resp.status_code} {(resp.text or '')[:200]}")
+        return key
+
+    # eBay's condition vocabulary, keyed by the plain words the form offers. The
+    # API rejects anything outside its own list, so this is a mapping rather than
+    # passing the user's words through.
+    CONDITION_MAP = {
+        "new": "NEW",
+        "like_new": "LIKE_NEW",
+        "very_good": "USED_VERY_GOOD",
+        "good": "USED_GOOD",
+        "acceptable": "USED_ACCEPTABLE",
+        "for_parts": "FOR_PARTS_OR_NOT_WORKING",
+        "refurbished": "SELLER_REFURBISHED",
+    }
+
+    def publish_listing(self, db, draft: dict, user_id=None,
+                        credentials: dict = None) -> Dict[str, Any]:
+        """Create and publish one fixed-price listing.
+
+        Three calls, in order, because eBay models these separately: the inventory
+        item is the product, the offer is the terms, and publishing turns the
+        offer into a live listing. Any one of them skipped means no listing.
+
+        Requires sell.inventory (write), sell.account.readonly, a merchant
+        location and three business policies. preflight() reports all of that up
+        front; this raises with eBay's own words when something is still missing,
+        because a paraphrase would be less useful than the API's message.
+        """
+        if not credentials:
+            credentials = {}
+
+        token = self.get_token(db, user_id=user_id, credentials=credentials)
+        if not token:
+            raise RuntimeError("eBay is not connected, or its token has expired.")
+
+        marketplace = self._resolve_marketplace(db, token, user_id) or "EBAY_US"
+        headers = self._inventory_headers(token, marketplace)
+
+        sku = (draft.get("sku") or "").strip() or f"DSH-{int(time.time())}"
+        quantity = max(1, int(draft.get("quantity") or 1))
+        price = f"{float(draft.get('price') or 0):.2f}"
+        currency = draft.get("currency") or "CAD"
+
+        product: Dict[str, Any] = {
+            "title": (draft.get("title") or "")[:80],
+            "description": draft.get("description") or "",
+        }
+        images = [u for u in (draft.get("images") or []) if u]
+        if images:
+            product["imageUrls"] = images[:24]
+        aspects = draft.get("aspects") or {}
+        if aspects:
+            # eBay wants every aspect value in a list.
+            product["aspects"] = {
+                str(k): (v if isinstance(v, list) else [str(v)])
+                for k, v in aspects.items() if v not in (None, "")
+            }
+
+        item_body = {
+            "availability": {"shipToLocationAvailability": {"quantity": quantity}},
+            "condition": self.CONDITION_MAP.get(
+                (draft.get("condition") or "").lower(), "USED_GOOD"),
+            "product": product,
+        }
+
+        item_resp = httpx.put(
+            f"{EBAY_API_BASE}/sell/inventory/v1/inventory_item/{quote(sku, safe='')}",
+            headers=headers, json=item_body, timeout=60,
+        )
+        if item_resp.status_code not in (200, 201, 204):
+            raise RuntimeError(
+                f"eBay rejected the item (HTTP {item_resp.status_code}): "
+                f"{(item_resp.text or '')[:300]}")
+
+        location_key = draft.get("merchant_location_key") or self.ensure_location(
+            token, marketplace, draft)
+
+        policies = draft.get("policies") or {}
+        offer_body: Dict[str, Any] = {
+            "sku": sku,
+            "marketplaceId": marketplace,
+            "format": "FIXED_PRICE",
+            "availableQuantity": quantity,
+            "categoryId": str(draft.get("ebay_category_id") or ""),
+            "listingDescription": draft.get("description") or "",
+            "pricingSummary": {"price": {"value": price, "currency": currency}},
+            "merchantLocationKey": location_key,
+            "listingPolicies": {
+                "fulfillmentPolicyId": policies.get("fulfillment_policy_id") or "",
+                "paymentPolicyId": policies.get("payment_policy_id") or "",
+                "returnPolicyId": policies.get("return_policy_id") or "",
+            },
+        }
+
+        offer_resp = httpx.post(f"{EBAY_API_BASE}/sell/inventory/v1/offer",
+                                headers=headers, json=offer_body, timeout=60)
+        if offer_resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"eBay rejected the offer (HTTP {offer_resp.status_code}): "
+                f"{(offer_resp.text or '')[:300]}")
+        offer_id = (offer_resp.json() or {}).get("offerId")
+        if not offer_id:
+            raise RuntimeError("eBay accepted the offer but returned no offer id.")
+
+        publish_resp = httpx.post(
+            f"{EBAY_API_BASE}/sell/inventory/v1/offer/{offer_id}/publish",
+            headers=headers, timeout=60,
+        )
+        if publish_resp.status_code not in (200, 201):
+            raise RuntimeError(
+                f"eBay could not publish the offer (HTTP {publish_resp.status_code}): "
+                f"{(publish_resp.text or '')[:300]}")
+
+        listing_id = (publish_resp.json() or {}).get("listingId")
+        return {
+            "ok": True, "platform": self.PLATFORM,
+            "listing_id": listing_id, "offer_id": offer_id, "sku": sku,
+            "url": (f"https://www.ebay.ca/itm/{listing_id}" if listing_id else None),
+        }
 
     def _fetch_identity(self, access_token: str) -> dict:
         """The eBay user behind a token: username, immutable userId, and the
