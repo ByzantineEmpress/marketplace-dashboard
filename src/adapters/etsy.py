@@ -869,12 +869,74 @@ class EtsyAdapter(MarketplaceAdapter):
 
         data = resp.json() or {}
         listing_id = data.get("listing_id")
+        images = [u for u in (draft.get("images") or []) if u]
+        uploaded = 0
+        image_errors = []
+        if listing_id and images:
+            # Etsy takes images only as an upload against an existing listing; it
+            # has no field for a URL. So the listing is created first (which is why
+            # a listing can exist with no pictures at all) and the files follow.
+            for url in images[:10]:
+                try:
+                    if self._upload_image(headers, shop_id, listing_id, url):
+                        uploaded += 1
+                    else:
+                        image_errors.append(url)
+                except Exception as exc:
+                    image_errors.append(f"{url}: {exc}")
+
         return {
             "ok": True, "platform": self.PLATFORM,
             "listing_id": listing_id,
             "state": data.get("state"),
+            "images_uploaded": uploaded,
+            "image_errors": image_errors,
             "url": (f"https://www.etsy.com/listing/{listing_id}" if listing_id else None),
         }
+
+    def _upload_image(self, headers: dict, shop_id, listing_id, url: str,
+                      rank: int = 1) -> bool:
+        """Send one image to an Etsy listing.
+
+        The bytes come from our own storage rather than from the URL: a local
+        upload is read from disk, and anything else is fetched. Etsy has no way to
+        be handed a link.
+        """
+        import os
+
+        from src import storage
+
+        # multipart, so the JSON content type must not be sent with it.
+        upload_headers = {k: v for k, v in headers.items()
+                          if k.lower() != "content-type"}
+
+        path = None
+        try:
+            if storage.is_local_url(url):
+                path = storage.local_path_for(url)
+        except Exception:
+            path = None
+
+        if path and os.path.exists(path):
+            with open(path, "rb") as handle:
+                files = {"image": (os.path.basename(path), handle, "image/jpeg")}
+                resp = httpx.post(
+                    f"{ETSY_API_BASE}/application/shops/{shop_id}/listings/{listing_id}/images",
+                    headers=upload_headers, files=files,
+                    data={"rank": rank, "alt_text": ""}, timeout=90,
+                )
+        else:
+            fetched = httpx.get(url, timeout=60, follow_redirects=True)
+            if fetched.status_code != 200 or not fetched.content:
+                return False
+            files = {"image": ("image.jpg", fetched.content, "image/jpeg")}
+            resp = httpx.post(
+                f"{ETSY_API_BASE}/application/shops/{shop_id}/listings/{listing_id}/images",
+                headers=upload_headers, files=files,
+                data={"rank": rank, "alt_text": ""}, timeout=90,
+            )
+
+        return resp.status_code in (200, 201)
 
     def _normalise_results(self, results: list, limit: int = 0,
                            shipping_profiles: Dict[int, bool] = None) -> List[dict]:

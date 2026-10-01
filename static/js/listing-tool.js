@@ -25,6 +25,218 @@
         return isNaN(n) ? fallback : n;
     }
 
+    // -- eBay category picker ---------------------------------------------
+
+    var chosenCategory = null;
+    var aspects = {};
+
+    function suggestCategories() {
+        var query = value("f-ebay-category-search") || value("f-title");
+        var box = $("category-results");
+        if (!query) {
+            box.innerHTML = '<p class="lister-muted">Type a title first, or describe the item.</p>';
+            return;
+        }
+        box.innerHTML = '<p class="lister-muted">Looking up categories…</p>';
+        fetch("/api/beta/listing/categories?q=" + encodeURIComponent(query))
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var list = data.suggestions || [];
+                if (!list.length) {
+                    box.innerHTML = '<p class="lister-muted">' +
+                        escapeHtml(data.error || "No category suggestions for that.") + "</p>";
+                    return;
+                }
+                box.innerHTML = list.map(function (c) {
+                    return '<button type="button" class="category-option" data-id="' +
+                        escapeHtml(String(c.id)) + '" data-name="' +
+                        escapeHtml(c.name || "") + '">' +
+                        escapeHtml(c.path || c.name || c.id) + "</button>";
+                }).join("");
+                box.querySelectorAll(".category-option").forEach(function (btn) {
+                    btn.addEventListener("click", function () {
+                        chooseCategory(btn.dataset.id, btn.dataset.name);
+                    });
+                });
+            })
+            .catch(function (err) {
+                box.innerHTML = '<p class="lister-muted">Could not look up categories: ' +
+                    escapeHtml(err.message) + "</p>";
+            });
+    }
+
+    function chooseCategory(id, name) {
+        chosenCategory = { id: id, name: name };
+        $("f-ebay-category").value = id;
+        $("category-chosen").textContent = "Chosen: " + name + " (" + id + ")";
+        $("category-results").innerHTML = "";
+        loadAspects(id);
+    }
+
+    function loadAspects(categoryId) {
+        var field = $("aspects-field");
+        var list = $("aspects-list");
+        list.innerHTML = '<p class="lister-muted">Checking what eBay requires…</p>';
+        field.hidden = false;
+        fetch("/api/beta/listing/aspects?category_id=" + encodeURIComponent(categoryId))
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                var required = data.required || [];
+                var recommended = data.recommended || [];
+                if (!required.length && !recommended.length) {
+                    list.innerHTML = '<p class="lister-muted">' +
+                        escapeHtml(data.error || "This category asks for nothing extra.") + "</p>";
+                    return;
+                }
+                var html = "";
+                required.forEach(function (a) { html += aspectField(a, true); });
+                // Only a couple of the optional ones: eBay returns dozens and the
+                // form stops being a form.
+                recommended.slice(0, 4).forEach(function (a) { html += aspectField(a, false); });
+                list.innerHTML = html;
+            })
+            .catch(function (err) {
+                list.innerHTML = '<p class="lister-muted">Could not read the category: ' +
+                    escapeHtml(err.message) + "</p>";
+            });
+    }
+
+    function aspectField(aspect, required) {
+        var id = "aspect-" + aspect.name.replace(/[^A-Za-z0-9]+/g, "-");
+        var prefilled = prefillFor(aspect.name);
+        return '<label class="aspect' + (required ? " aspect--required" : "") + '">' +
+            '<span class="aspect-name">' + escapeHtml(aspect.name) +
+            (required ? ' <span class="aspect-req">required</span>' : "") + "</span>" +
+            '<input type="text" id="' + id + '" data-aspect="' + escapeHtml(aspect.name) +
+            '" value="' + escapeHtml(prefilled) + '"' +
+            (aspect.values && aspect.values.length
+                ? ' list="' + id + '-list"><datalist id="' + id + '-list">' +
+                  aspect.values.map(function (v) {
+                      return '<option value="' + escapeHtml(v) + '"></option>';
+                  }).join("") + "</datalist>"
+                : ">") +
+            "</label>";
+    }
+
+    // The shared fields already answer some of what eBay asks. Filling those in
+    // is the whole point of entering the item once.
+    function prefillFor(name) {
+        var key = name.toLowerCase();
+        if (key.indexOf("brand") !== -1) return value("f-brand");
+        if (key === "type" || key.indexOf("product type") !== -1) return "";
+        if (key.indexOf("model") !== -1) return value("f-brand");
+        return "";
+    }
+
+    function collectAspects() {
+        var out = {};
+        document.querySelectorAll("#aspects-list input[data-aspect]").forEach(function (input) {
+            var v = input.value.trim();
+            if (v) out[input.dataset.aspect] = [v];
+        });
+        return out;
+    }
+
+    // -- tags --------------------------------------------------------------
+
+    // Etsy takes up to 13 tags, and buyers find things by them. The title is
+    // already the best description of the item, so words from it beat asking the
+    // seller to retype the same idea in a different box.
+    var TAG_STOPWORDS = {
+        the: 1, and: 1, with: 1, for: 1, from: 1, this: 1, that: 1, you: 1,
+        new: 1, used: 1, works: 1, working: 1, tested: 1, includes: 1, only: 1,
+        rare: 1, oem: 1, original: 1, authentic: 1, vintage: 0
+    };
+
+    function suggestTags() {
+        var title = value("f-title").toLowerCase();
+        var existing = {};
+        commas("f-tags").forEach(function (t) { existing[t.toLowerCase()] = 1; });
+
+        var words = title.replace(/[^a-z0-9\s]/g, " ").split(/\s+/)
+            .filter(function (w) { return w.length > 2 && !TAG_STOPWORDS[w]; });
+
+        var tags = [];
+        // Two-word phrases first: they are more specific than single words and
+        // are what a search actually matches on.
+        for (var i = 0; i < words.length - 1 && tags.length < 6; i++) {
+            var pair = words[i] + " " + words[i + 1];
+            if (!existing[pair] && tags.indexOf(pair) === -1) tags.push(pair);
+        }
+        words.forEach(function (w) {
+            if (tags.length < 13 && !existing[w] && tags.indexOf(w) === -1) tags.push(w);
+        });
+
+        var merged = commas("f-tags");
+        tags.forEach(function (t) {
+            if (merged.length < 13 && merged.indexOf(t) === -1) merged.push(t);
+        });
+        $("f-tags").value = merged.slice(0, 13).join(", ");
+        updateSummary();
+    }
+
+    // -- image upload ------------------------------------------------------
+
+    function renderThumbs() {
+        var urls = lines("f-images");
+        var box = $("upload-thumbs");
+        box.innerHTML = urls.map(function (url, index) {
+            return '<span class="thumb"><img src="' + escapeHtml(url) + '" alt=""' +
+                ' onerror="this.style.opacity=0.3">' +
+                '<button type="button" class="thumb-remove" data-index="' + index +
+                '" title="Remove">×</button></span>';
+        }).join("");
+        box.querySelectorAll(".thumb-remove").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var idx = Number(btn.dataset.index);
+                var current = lines("f-images");
+                current.splice(idx, 1);
+                $("f-images").value = current.join("\n");
+                renderThumbs();
+                updateSummary();
+            });
+        });
+    }
+
+    function uploadFiles(files) {
+        if (!files || !files.length) return;
+        var status = $("upload-status");
+        var total = files.length;
+        var done = 0;
+        status.textContent = "Uploading 0 of " + total + "…";
+
+        var chain = Promise.resolve();
+        Array.prototype.forEach.call(files, function (file) {
+            chain = chain.then(function () {
+                var body = new FormData();
+                body.append("file", file, file.name);
+                return fetch("/api/upload", { method: "POST", body: body })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        done += 1;
+                        status.textContent = "Uploading " + done + " of " + total + "…";
+                        if (data && (data.url || data.path)) {
+                            var current = lines("f-images");
+                            current.push(data.url || data.path);
+                            $("f-images").value = current.join("\n");
+                        } else {
+                            status.textContent = "Upload failed: " +
+                                ((data && data.error) || "unknown error");
+                        }
+                    })
+                    .catch(function (err) {
+                        done += 1;
+                        status.textContent = "Upload failed: " + err.message;
+                    });
+            });
+        });
+        chain.then(function () {
+            status.textContent = done + " photo" + (done === 1 ? "" : "s") + " ready.";
+            renderThumbs();
+            updateSummary();
+        });
+    }
+
     // -- shared draft ------------------------------------------------------
 
     function lines(id) {
@@ -49,7 +261,14 @@
             images: lines("f-images"),
             tags: commas("f-tags"),
             brand: value("f-brand"),
-            aspects: value("f-brand") ? { Brand: [value("f-brand")] } : {},
+            // Whatever the category asked for, plus Brand from the shared field,
+            // so eBay gets the specifics it requires without them being typed
+            // twice.
+            aspects: (function () {
+                var out = collectAspects();
+                if (value("f-brand") && !out.Brand) out.Brand = [value("f-brand")];
+                return out;
+            })(),
             ebay_category_id: value("f-ebay-category"),
             policies: {
                 fulfillment_policy_id: value("f-ebay-fulfillment"),
@@ -143,6 +362,14 @@
         el.innerHTML = html;
     }
 
+    function preselectOnly(id, options) {
+        var el = $(id);
+        if (!el) return;
+        if (!el.value && options && options.length === 1) {
+            el.value = String(options[0].id);
+        }
+    }
+
     function fillPlatforms() {
         var ebay = preflight.platforms.ebay || { options: {} };
         var etsy = preflight.platforms.etsy || { options: {} };
@@ -157,6 +384,12 @@
         fillSelect("f-ebay-return", o.return_policies, function (p) {
             return p.name || p.id;
         });
+
+        // A single policy on the account is almost always the intended one, so
+        // choosing it saves a click that carries no decision.
+        preselectOnly("f-ebay-fulfillment", o.fulfillment_policies);
+        preselectOnly("f-ebay-payment", o.payment_policies);
+        preselectOnly("f-ebay-return", o.return_policies);
 
         var e = etsy.options || {};
         fillSelect("f-etsy-shipping", e.shipping_profiles, function (p) {
@@ -282,7 +515,29 @@
 
         if ($("recheck-btn")) $("recheck-btn").addEventListener("click", loadPreflight);
         if ($("publish-btn")) $("publish-btn").addEventListener("click", publish);
+        if ($("category-search-btn")) {
+            $("category-search-btn").addEventListener("click", suggestCategories);
+        }
+        var categorySearch = $("f-ebay-category-search");
+        if (categorySearch) {
+            // Enter is what anyone types after describing the item; making them
+            // reach for the button instead would be a small daily annoyance.
+            categorySearch.addEventListener("keydown", function (e) {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    suggestCategories();
+                }
+            });
+        }
+        if ($("suggest-tags-btn")) {
+            $("suggest-tags-btn").addEventListener("click", suggestTags);
+        }
+        var files = $("f-files");
+        if (files) {
+            files.addEventListener("change", function () { uploadFiles(files.files); });
+        }
 
         loadPreflight();
+        renderThumbs();
     });
 })();

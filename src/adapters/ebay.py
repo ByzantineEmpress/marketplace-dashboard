@@ -40,6 +40,10 @@ EBAY_API_BASE = "https://api.ebay.com"
 # than "api". Calling Finances on the usual host returns an empty 404, which looks
 # like a missing endpoint rather than a wrong host.
 EBAY_APIZ_BASE = "https://apiz.ebay.com"
+
+# The default category tree per marketplace. Fetched once per process: it never
+# changes, and every category lookup would otherwise pay for it again.
+_TAXONOMY_TREES: Dict[str, str] = {}
 # eBay OAuth token endpoint
 EBAY_OAUTH_TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
 
@@ -239,6 +243,128 @@ class eBayAdapter(MarketplaceAdapter):
             db.rollback()
 
         return marketplace
+
+    # -- Taxonomy: categories and their required item specifics --
+
+    def _taxonomy_headers(self, token: dict) -> dict:
+        return {
+            "Authorization": f"Bearer {token['access_token']}",
+            "Accept": "application/json",
+            "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+        }
+
+    def taxonomy_tree_id(self, token: dict, marketplace: str) -> str:
+        """The default category tree for a marketplace.
+
+        Cached per process because it never changes and every category lookup
+        needs it; without that, choosing a category would cost two calls.
+        """
+        global _TAXONOMY_TREES
+        if marketplace in _TAXONOMY_TREES:
+            return _TAXONOMY_TREES[marketplace]
+        try:
+            resp = httpx.get(
+                f"{EBAY_API_BASE}/commerce/taxonomy/v1/get_default_category_tree_id",
+                headers=self._taxonomy_headers(token),
+                params={"marketplace_id": marketplace}, timeout=30,
+            )
+            if resp.status_code == 200:
+                tree = (resp.json() or {}).get("categoryTreeId") or ""
+                if tree:
+                    _TAXONOMY_TREES[marketplace] = tree
+                return tree
+            self.last_error = (f"eBay taxonomy tree HTTP {resp.status_code}: "
+                               f"{(resp.text or '')[:160]}")
+        except Exception as exc:
+            self.last_error = f"eBay taxonomy tree failed: {exc}"
+        return ""
+
+    def suggest_categories(self, token: dict, marketplace: str,
+                           query: str) -> List[dict]:
+        """Category suggestions for a phrase.
+
+        eBay has no browsable category list that is usable at this size, so the
+        seller's own words are the way in: suggestions come back with their full
+        path, which is what makes the right one identifiable.
+        """
+        tree = self.taxonomy_tree_id(token, marketplace)
+        if not tree or not (query or "").strip():
+            return []
+        try:
+            resp = httpx.get(
+                f"{EBAY_API_BASE}/commerce/taxonomy/v1/category_tree/{tree}"
+                f"/get_category_suggestions",
+                headers=self._taxonomy_headers(token),
+                params={"q": query[:350]}, timeout=30,
+            )
+            if resp.status_code != 200:
+                self.last_error = (f"eBay category suggestions HTTP "
+                                   f"{resp.status_code}: {(resp.text or '')[:160]}")
+                return []
+            out = []
+            for item in (resp.json() or {}).get("categorySuggestions") or []:
+                category = item.get("category") or {}
+                path = " > ".join(
+                    (a or {}).get("categoryName", "")
+                    for a in (item.get("categoryTreeNodeAncestors") or [])
+                )
+                out.append({
+                    "id": category.get("categoryId"),
+                    "name": category.get("categoryName"),
+                    "path": (path + " > " if path else "")
+                            + (category.get("categoryName") or ""),
+                })
+            return out
+        except Exception as exc:
+            self.last_error = f"eBay category suggestions failed: {exc}"
+            return []
+
+    def category_aspects(self, token: dict, marketplace: str,
+                         category_id: str) -> Dict[str, Any]:
+        """What a category requires, so the form can ask for it.
+
+        eBay refuses a listing whose required aspects are missing and names them
+        only in the rejection. Fetching them first turns that into fields on the
+        form, pre-filled where the shared fields already answer the question.
+        """
+        tree = self.taxonomy_tree_id(token, marketplace)
+        if not tree or not category_id:
+            return {"required": [], "recommended": []}
+        try:
+            resp = httpx.get(
+                f"{EBAY_API_BASE}/commerce/taxonomy/v1/category_tree/{tree}"
+                f"/get_item_aspects_for_category",
+                headers=self._taxonomy_headers(token),
+                params={"category_id": category_id}, timeout=30,
+            )
+            if resp.status_code != 200:
+                self.last_error = (f"eBay aspects HTTP {resp.status_code}: "
+                                   f"{(resp.text or '')[:160]}")
+                return {"required": [], "recommended": []}
+
+            required, recommended = [], []
+            for aspect in (resp.json() or {}).get("aspects") or []:
+                constraint = aspect.get("aspectConstraint") or {}
+                name = aspect.get("localizedAspectName")
+                if not name:
+                    continue
+                entry = {
+                    "name": name,
+                    "mode": constraint.get("aspectMode"),
+                    "values": [
+                        v.get("localizedValue")
+                        for v in (aspect.get("aspectValues") or [])[:60]
+                        if v.get("localizedValue")
+                    ],
+                }
+                if constraint.get("aspectRequired"):
+                    required.append(entry)
+                else:
+                    recommended.append(entry)
+            return {"required": required, "recommended": recommended[:20]}
+        except Exception as exc:
+            self.last_error = f"eBay aspects failed: {exc}"
+            return {"required": [], "recommended": []}
 
     # -- Publishing a new listing (the beta listing tool) --
 

@@ -2565,6 +2565,61 @@ async def listing_preflight(db: Session = Depends(get_db),
     return {"ok": True, **report}
 
 
+@api_router.get("/beta/listing/categories")
+async def listing_categories(q: str = "", db: Session = Depends(get_db),
+                             user: dict = Depends(check_auth)):
+    """eBay category suggestions for a phrase.
+
+    eBay publishes no category list small enough to browse, so the seller's own
+    words are the way in — the same text they already typed as the title.
+    """
+    from src.adapters import get_adapter
+    from src.marketplace_sync import user_credentials
+
+    if not (q or "").strip():
+        return {"ok": True, "suggestions": []}
+
+    def lookup():
+        adapter = get_adapter("ebay")
+        credentials = user_credentials(db, user["id"], "ebay")
+        token = adapter.get_token(db, user_id=user["id"], credentials=credentials)
+        if not token:
+            return {"ok": False, "error": "eBay is not connected.",
+                    "suggestions": []}
+        marketplace = adapter._resolve_marketplace(db, token, user["id"]) or "EBAY_US"
+        return {"ok": True,
+                "suggestions": adapter.suggest_categories(token, marketplace, q)}
+
+    return await asyncio.to_thread(lookup)
+
+
+@api_router.get("/beta/listing/aspects")
+async def listing_aspects(category_id: str = "", db: Session = Depends(get_db),
+                          user: dict = Depends(check_auth)):
+    """The item specifics a chosen eBay category requires.
+
+    Asked for as soon as a category is picked, so the form collects them instead
+    of the seller meeting them as a rejection.
+    """
+    from src.adapters import get_adapter
+    from src.marketplace_sync import user_credentials
+
+    if not category_id:
+        return {"ok": True, "required": [], "recommended": []}
+
+    def lookup():
+        adapter = get_adapter("ebay")
+        credentials = user_credentials(db, user["id"], "ebay")
+        token = adapter.get_token(db, user_id=user["id"], credentials=credentials)
+        if not token:
+            return {"ok": False, "error": "eBay is not connected.",
+                    "required": [], "recommended": []}
+        marketplace = adapter._resolve_marketplace(db, token, user["id"]) or "EBAY_US"
+        return {"ok": True, **adapter.category_aspects(token, marketplace, category_id)}
+
+    return await asyncio.to_thread(lookup)
+
+
 @api_router.post("/beta/listing/publish")
 async def listing_publish(body: dict, db: Session = Depends(get_db),
                           user: dict = Depends(check_auth)):

@@ -83,16 +83,31 @@
                 <input type="text" id="f-sku" maxlength="32" placeholder="Your own reference">
             </label>
 
-            <label class="field field--wide">
-                <span class="field-label">Image URLs <span class="field-optional">one per line</span></span>
-                <textarea id="f-images" rows="3" placeholder="https://…"></textarea>
-                <span class="field-hint">Marketplaces fetch images from a public URL; uploading is not wired up yet.</span>
-            </label>
+            <div class="field field--wide">
+                <span class="field-label">Photos</span>
+                <div class="upload-row">
+                    <label class="upload-drop" for="f-files">
+                        <input type="file" id="f-files" accept="image/*" multiple hidden>
+                        <span class="upload-cta">Choose photos</span>
+                        <span class="upload-hint">JPEG, PNG, GIF, WebP or BMP · up to 15 MB each</span>
+                    </label>
+                    <div class="upload-thumbs" id="upload-thumbs"></div>
+                </div>
+                <span class="field-hint" id="upload-status"></span>
+                <details class="upload-urls">
+                    <summary>Or paste image URLs</summary>
+                    <textarea id="f-images" rows="3" placeholder="https://…"></textarea>
+                    <span class="field-hint">Uploaded photos appear here too, so either route works.</span>
+                </details>
+            </div>
 
-            <label class="field field--wide">
-                <span class="field-label">Tags <span class="field-optional">comma separated</span></span>
+            <div class="field field--wide">
+                <div class="field-label-row">
+                    <span class="field-label">Tags <span class="field-optional">comma separated, Etsy uses the first 13</span></span>
+                    <button type="button" class="btn btn--sm btn--outline" id="suggest-tags-btn">Suggest from title</button>
+                </div>
                 <input type="text" id="f-tags" placeholder="xbox, modded, retro">
-            </label>
+            </div>
 
             <label class="field field--wide">
                 <span class="field-label">Brand / model notes <span class="field-optional">becomes eBay item specifics</span></span>
@@ -113,11 +128,28 @@
         <div class="platform-detail" id="ebay-detail" hidden>
             <h3 class="platform-detail-title">eBay</h3>
             <div class="lister-grid">
-                <label class="field">
-                    <span class="field-label">Category ID</span>
-                    <input type="text" id="f-ebay-category" placeholder="e.g. 139973">
-                    <span class="field-hint">eBay's numeric category id, not the name.</span>
-                </label>
+                <div class="field field--wide">
+                    <span class="field-label">Category</span>
+                    <div class="category-row">
+                        <input type="text" id="f-ebay-category-search"
+                               placeholder="Describe the item — suggestions come from eBay"
+                               autocomplete="off">
+                        <button type="button" class="btn btn--sm btn--outline" id="category-search-btn">Find</button>
+                    </div>
+                    <input type="hidden" id="f-ebay-category">
+                    <div class="category-results" id="category-results"></div>
+                    <span class="field-hint" id="category-chosen"></span>
+                </div>
+
+                {# Filled from eBay once a category is chosen. Required specifics
+                   are what eBay rejects a listing for, and it names them only in
+                   the rejection, so they are asked for here. #}
+                <div class="field field--wide" id="aspects-field" hidden>
+                    <span class="field-label">eBay item specifics</span>
+                    <div class="aspects" id="aspects-list"></div>
+                </div>
+            </div>
+            <div class="lister-grid">
                 <label class="field">
                     <span class="field-label">Fulfilment policy</span>
                     <select id="f-ebay-fulfillment"></select>
