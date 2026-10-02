@@ -138,11 +138,25 @@ async def lifespan(app: FastAPI):
     # 1. Create tables
     init_db()
 
-    # 2. Convert any session token still stored verbatim into a digest. Done at
+    from src.database import SessionLocal
+
+    # 2. Re-write any credential still encrypted under the old, weaker key
+    #    derivation. Until this runs both keys are live and the stored prefix
+    #    decides which is used, so a failure here degrades to "still readable".
+    from src import secrets_crypto
+    _db = SessionLocal()
+    try:
+        moved = secrets_crypto.migrate_legacy_values(_db)
+        if moved:
+            print(f"[security] re-encrypted {moved} stored credential(s) under "
+                  f"the PBKDF2 key. No account needs re-linking.")
+    finally:
+        _db.close()
+
+    # 3. Convert any session token still stored verbatim into a digest. Done at
     #    startup rather than waiting for each holder's next request: a backup
     #    taken in the meantime would otherwise still carry live sessions.
     from src import auth_sessions
-    from src.database import SessionLocal
     _db = SessionLocal()
     try:
         migrated = auth_sessions.hash_existing(_db)
@@ -152,14 +166,14 @@ async def lifespan(app: FastAPI):
     finally:
         _db.close()
 
-    # 3. Discover & load plugins (imported here to avoid a circular import:
+    # 4. Discover & load plugins (imported here to avoid a circular import:
     #    src/__init__.py imports this module, which would then import plugins)
     from src.plugins import discover_and_load_plugins
     loaded = discover_and_load_plugins(app)
     for name in loaded:
         print(f"[plugin] Loaded: {name}")
 
-    # 4. Report configuration problems loudly, once, at startup.
+    # 5. Report configuration problems loudly, once, at startup.
     problems = _startup_warnings()
     if problems:
         print("\n" + "=" * 68)

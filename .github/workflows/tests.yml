@@ -99,6 +99,7 @@ jobs:
             tests/test_marketplace_oauth.py
             tests/test_js_references.py
             tests/test_js_smoke.py
+            tests/test_key_derivation.py
             tests/test_listing_groups.py
             tests/test_listing_tool.py
             tests/test_mobile_ui.py
