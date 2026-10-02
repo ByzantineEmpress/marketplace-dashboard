@@ -34,6 +34,7 @@ from src.email_verification import (
 )
 from src import mailer, storage
 from src import oauth_pkce
+from src import auth_sessions as _sessions
 from src.adapters.base import callback_kwargs
 from src.database import SessionLocal, new_invite_code
 from src.models import (
@@ -97,7 +98,9 @@ def get_current_user(request: Request):
         return None
     db = SessionLocal()
     try:
-        row = db.query(AuthSession).filter(AuthSession.token == token).first()
+        # Only a hash is stored, so the lookup hashes what was presented. A row
+        # written before that change is matched and upgraded in passing.
+        row = _sessions.find(db, token)
         if not row or row.expires_at < datetime.utcnow():
             return None
         user = db.query(User).filter(User.id == row.user_id).first()
@@ -539,7 +542,7 @@ async def google_dev_login(request: Request):
         # Same routing rule as the real Google callback, so the simulator
         # cannot drift from production behaviour.
         dest = _resolve_signin_destination(db, user, pending_invite)
-        db.add(AuthSession(token=token, user_id=user.id, expires_at=datetime.utcnow() + timedelta(days=7)))
+        db.add(AuthSession(token=_sessions.hash_token(token), user_id=user.id, expires_at=datetime.utcnow() + timedelta(days=7)))
         db.commit()
     finally:
         db.close()
@@ -644,7 +647,7 @@ async def google_login_callback(request: Request):
             user.name = name  # keep the display name up to date
         pending_invite = request.cookies.get("pending_invite", "")
         dest = _resolve_signin_destination(db, user, pending_invite)
-        db.add(AuthSession(token=token, user_id=user.id, expires_at=datetime.utcnow() + timedelta(days=7)))
+        db.add(AuthSession(token=_sessions.hash_token(token), user_id=user.id, expires_at=datetime.utcnow() + timedelta(days=7)))
         db.commit()
     finally:
         db.close()
@@ -1065,7 +1068,7 @@ async def login(request: Request):
             dest = _resolve_signin_destination(db, user, "")
 
         db.add(AuthSession(
-            token=token,
+            token=_sessions.hash_token(token),
             user_id=user.id,
             expires_at=datetime.utcnow() + timedelta(days=7),
         ))
@@ -1528,8 +1531,9 @@ async def logout(request: Request):
     if token:
         db = SessionLocal()
         try:
-            db.query(AuthSession).filter(AuthSession.token == token).delete()
-            db.commit()
+            # Matches either form, so a session created before tokens were hashed
+            # is still revoked rather than left alive until it expires.
+            _sessions.destroy(db, token)
         finally:
             db.close()
     response = JSONResponse(content={"ok": True})
