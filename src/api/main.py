@@ -138,14 +138,28 @@ async def lifespan(app: FastAPI):
     # 1. Create tables
     init_db()
 
-    # 2. Discover & load plugins (imported here to avoid a circular import:
+    # 2. Convert any session token still stored verbatim into a digest. Done at
+    #    startup rather than waiting for each holder's next request: a backup
+    #    taken in the meantime would otherwise still carry live sessions.
+    from src import auth_sessions
+    from src.database import SessionLocal
+    _db = SessionLocal()
+    try:
+        migrated = auth_sessions.hash_existing(_db)
+        if migrated:
+            print(f"[security] hashed {migrated} stored session token(s) that "
+                  f"predated hashing; no one was logged out.")
+    finally:
+        _db.close()
+
+    # 3. Discover & load plugins (imported here to avoid a circular import:
     #    src/__init__.py imports this module, which would then import plugins)
     from src.plugins import discover_and_load_plugins
     loaded = discover_and_load_plugins(app)
     for name in loaded:
         print(f"[plugin] Loaded: {name}")
 
-    # 3. Report configuration problems loudly, once, at startup.
+    # 4. Report configuration problems loudly, once, at startup.
     problems = _startup_warnings()
     if problems:
         print("\n" + "=" * 68)

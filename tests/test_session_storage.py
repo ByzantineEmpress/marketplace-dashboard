@@ -109,5 +109,32 @@ class SessionTokenStorageTest(unittest.TestCase):
         self.assertIsNotNone(auth_sessions.find(self.db, second))
 
 
+    def test_existing_rows_are_converted_at_startup(self):
+        """Waiting for each holder's next request leaves a backup taken in the
+        meantime carrying live sessions, which is the whole problem."""
+        legacy_a = secrets.token_urlsafe(48)
+        legacy_b = secrets.token_urlsafe(48)
+        self.db.add(AuthSession(token=legacy_a, user_id=self.user.id,
+                                expires_at=datetime.utcnow() + timedelta(days=1)))
+        self.db.commit()
+        self.db.add(AuthSession(token=legacy_b, user_id=self.user.id,
+                                expires_at=datetime.utcnow() + timedelta(days=1)))
+        self.db.commit()
+
+        migrated = auth_sessions.hash_existing(self.db)
+        self.assertEqual(migrated, 2)
+        for stored in self._stored():
+            self.assertTrue(stored.startswith(auth_sessions.HASH_PREFIX), stored)
+
+        # Both holders are still signed in: their cookie hashes to the same digest.
+        self.assertIsNotNone(auth_sessions.find(self.db, legacy_a))
+        self.assertIsNotNone(auth_sessions.find(self.db, legacy_b))
+
+    def test_the_conversion_is_idempotent(self):
+        auth_sessions.create(self.db, self.user.id)
+        self.assertEqual(auth_sessions.hash_existing(self.db), 0)
+        self.assertEqual(auth_sessions.hash_existing(self.db), 0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

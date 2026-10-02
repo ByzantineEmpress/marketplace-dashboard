@@ -88,6 +88,42 @@ def find(db, token: str):
     return legacy
 
 
+def hash_existing(db) -> int:
+    """Rewrite any session token still stored verbatim as a digest.
+
+    Rows upgrade lazily on next use, but "next use" can be days away — and a
+    backup taken in the meantime still holds live sessions, which is the whole
+    problem this change exists to remove. So they are converted now.
+
+    Safe to run repeatedly and safe to interrupt: a row is either already a
+    digest, in which case it is skipped, or it is not, in which case hashing it
+    leaves the holder's cookie working, because the cookie is hashed on the way
+    in and produces the same digest.
+    """
+    from src.models import AuthSession
+
+    migrated = 0
+    try:
+        rows = db.query(AuthSession).all()
+    except Exception:
+        return 0
+
+    for row in rows:
+        token = row.token or ""
+        if not token or token.startswith(HASH_PREFIX):
+            continue
+        row.token = hash_token(token)
+        migrated += 1
+
+    if migrated:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            return 0
+    return migrated
+
+
 def destroy(db, token: str) -> int:
     """Log out: delete the session for a presented token, either form."""
     from src.models import AuthSession
