@@ -2168,6 +2168,15 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
     # 110.00 that pays out 121.02 looks like it grew.
     gross_sales = db.query(func.sum(Listing.price_cents)).filter(_dedup(sold_scope)).scalar() or 0
 
+    # Net sales is the SAME thing measured after the marketplace's cut, so it can
+    # never exceed gross. The payout cannot stand in for it: the payout also
+    # carries postage the buyer paid and, on Etsy, sales tax that was collected
+    # and remitted, so it is a cash figure rather than a netting of sales. Using
+    # it here made "net" larger than "gross", which reads as a bug even though the
+    # arithmetic was right.
+    sold_fees = db.query(func.sum(Listing.fees_cents)).filter(_dedup(sold_scope)).scalar() or 0
+    net_sales = gross_sales - sold_fees
+
     # Written-off inventory loss cost
     written_off_cost = db.query(
         func.sum(Listing.purchase_price_cents + Listing.parts_cost_cents)
@@ -2312,6 +2321,8 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
         "total_cost_cents": total_cost,
         "sold_revenue_cents": sold_revenue,
         "gross_sales_cents": gross_sales,
+        "net_sales_cents": net_sales,
+        "sold_fees_cents": sold_fees,
         "sold_cost_cents": sold_cost,
         "sold_profit_cents": sold_profit,
         "currency": config.DEFAULT_CURRENCY or "CAD",

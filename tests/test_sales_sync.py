@@ -558,6 +558,26 @@ class RealisedProfitBasisTest(unittest.TestCase):
         self.assertEqual(data["sold_cost_cents"], 1000)
         self.assertEqual(data["sold_profit_cents"], 4000)
 
+    def test_net_sales_is_gross_less_fees_and_never_exceeds_it(self):
+        """Net has to be the same thing measured after the fee, or it is not net.
+
+        Using the payout here made net exceed gross, because the payout also
+        carries postage the buyer paid and tax that was collected and remitted.
+        The arithmetic was right and the label was wrong, which reads as a bug.
+        """
+        self._sold("800531403439", price_cents=11000, fees_cents=2654,
+                   shipping_charged_cents=3756, shipping_cost_cents=3125,
+                   net_payout_cents=12102, purchase_price_cents=2000)
+
+        data = self.client.get("/api/stats?days=all").json()
+
+        self.assertEqual(data["gross_sales_cents"], 11000)
+        self.assertEqual(data["sold_fees_cents"], 2654)
+        self.assertEqual(data["net_sales_cents"], 11000 - 2654)
+        self.assertLess(data["net_sales_cents"], data["gross_sales_cents"])
+        # The payout is still reported, as the cash figure it is.
+        self.assertEqual(data["sold_revenue_cents"], 12102)
+
     def test_gross_and_net_are_both_reported(self):
         """Gross is what the item sold for; net is what arrived. Reporting only
         net hides the fee, and only gross pretends nothing was taken.

@@ -312,10 +312,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             }
 
-            if (stats.sold_revenue_cents !== undefined) {
+            if (stats.net_sales_cents !== undefined) {
                 const statNet = document.getElementById("stat-net");
                 if (statNet) {
-                    statNet.textContent = `${sym}${money(stats.sold_revenue_cents || 0)} ${cur}`;
+                    statNet.textContent = `${sym}${money(stats.net_sales_cents || 0)} ${cur}`;
                 }
             }
 
