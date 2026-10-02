@@ -2162,6 +2162,12 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
     sold_cost = db.query(func.sum(actual_cost)).filter(_dedup(sold_scope)).scalar() or 0
     sold_profit = sold_revenue - sold_cost
 
+    # What the items sold for, before the marketplaces took anything. Kept beside
+    # the net figure rather than instead of it: the two answer different
+    # questions, and only showing the net one makes the fees invisible — a sale of
+    # 110.00 that pays out 121.02 looks like it grew.
+    gross_sales = db.query(func.sum(Listing.price_cents)).filter(_dedup(sold_scope)).scalar() or 0
+
     # Written-off inventory loss cost
     written_off_cost = db.query(
         func.sum(Listing.purchase_price_cents + Listing.parts_cost_cents)
@@ -2305,6 +2311,7 @@ async def get_stats(team: str = None, days: str = None, db: Session = Depends(ge
         "total_value_cents": total_value,
         "total_cost_cents": total_cost,
         "sold_revenue_cents": sold_revenue,
+        "gross_sales_cents": gross_sales,
         "sold_cost_cents": sold_cost,
         "sold_profit_cents": sold_profit,
         "currency": config.DEFAULT_CURRENCY or "CAD",

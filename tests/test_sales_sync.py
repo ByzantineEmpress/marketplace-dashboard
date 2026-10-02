@@ -558,6 +558,26 @@ class RealisedProfitBasisTest(unittest.TestCase):
         self.assertEqual(data["sold_cost_cents"], 1000)
         self.assertEqual(data["sold_profit_cents"], 4000)
 
+    def test_gross_and_net_are_both_reported(self):
+        """Gross is what the item sold for; net is what arrived. Reporting only
+        net hides the fee, and only gross pretends nothing was taken.
+
+        The two can invert: here the buyer paid 37.56 of postage against a 26.54
+        fee, so the payout is HIGHER than the listed price. Anyone reading only
+        gross would think this sale did worse than it did.
+        """
+        self._sold("800531403439", price_cents=11000, fees_cents=2654,
+                   shipping_charged_cents=3756, shipping_cost_cents=3125,
+                   net_payout_cents=12102, purchase_price_cents=2000)
+
+        data = self.client.get("/api/stats?days=all").json()
+
+        self.assertEqual(data["gross_sales_cents"], 11000)
+        self.assertEqual(data["sold_revenue_cents"], 12102)
+        self.assertGreater(data["sold_revenue_cents"], data["gross_sales_cents"])
+        # Profit is still derived from the net figure, not the gross one.
+        self.assertEqual(data["sold_profit_cents"], 12102 - 2000 - 3125)
+
     def test_the_timeline_uses_the_same_basis_as_the_totals(self):
         """The chart and the KPI disagreeing is worse than either being wrong."""
         self._sold("800531403439", price_cents=11000, fees_cents=2654,

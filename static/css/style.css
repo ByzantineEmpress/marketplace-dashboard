@@ -514,6 +514,10 @@ code {
 .stat--active .stat-number { color: var(--accent-text); }
 .stat--sold .stat-number { color: var(--success-text); }
 .stat--value .stat-number { color: var(--warning-text); }
+/* Gross is what the items sold for; net is what actually arrived. Net carries the
+   success colour because it is the figure that lands in the account. */
+.stat--gross .stat-number { color: var(--text); }
+.stat--net .stat-number { color: var(--success-text); }
 
 /* --- Metrics Time Filter --- */
 .metrics-header {

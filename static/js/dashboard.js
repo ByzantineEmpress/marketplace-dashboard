@@ -296,6 +296,29 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (statCost) statCost.textContent = `${sym}${cost} ${cur}`;
             }
 
+            // Gross Sales and Net Sales, side by side on purpose. Gross is what the
+            // items sold for; net is what actually arrived, after the marketplaces
+            // took their fee and passed on the buyer's postage. Showing only one of
+            // them either hides the fee or makes it look like the sales grew.
+            const money = (cents) => Math.abs(cents / 100).toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+            });
+
+            if (stats.gross_sales_cents !== undefined) {
+                const statGross = document.getElementById("stat-gross");
+                if (statGross) {
+                    statGross.textContent = `${sym}${money(stats.gross_sales_cents || 0)} ${cur}`;
+                }
+            }
+
+            if (stats.sold_revenue_cents !== undefined) {
+                const statNet = document.getElementById("stat-net");
+                if (statNet) {
+                    statNet.textContent = `${sym}${money(stats.sold_revenue_cents || 0)} ${cur}`;
+                }
+            }
+
             if (stats.sold_profit_cents !== undefined) {
                 const profitVal = (stats.sold_profit_cents || 0) / 100;
                 const profitStr = Math.abs(profitVal).toLocaleString(undefined, {
