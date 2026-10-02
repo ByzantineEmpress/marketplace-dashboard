@@ -203,33 +203,42 @@ def mask(value: Optional[str], keep: int = 4) -> str:
 
 # -- Migration ------------------------------------------------------------
 #
-# The columns holding encrypted values. Listed explicitly rather than discovered,
-# because a migration that guesses which columns are ciphertext is a migration
-# that can overwrite something it did not understand.
-ENCRYPTED_COLUMNS: Tuple[Tuple[str, str], ...] = (
-    ("marketplace_accounts", "access_token"),
-    ("marketplace_accounts", "refresh_token"),
-    ("user_marketplace_credentials", "value"),
-)
+# The columns holding encrypted values, with the statement that reads each one.
+#
+# Written out in full rather than assembled from the table and column names. Two
+# reasons, and the second is the one that matters: reading through the ORM would
+# apply the decrypting column type and hand back plaintext, when what has to be
+# inspected is the stored ciphertext — and building the SQL from variables means
+# the statement text comes from data rather than from source. Naming each
+# statement makes the set of columns being rewritten auditable at a glance.
+def _encrypted_columns():
+    from sqlalchemy import text
+
+    from src.models import MarketplaceAccount, UserMarketplaceCredential
+
+    return (
+        (MarketplaceAccount, "access_token",
+         text("SELECT id, access_token FROM marketplace_accounts")),
+        (MarketplaceAccount, "refresh_token",
+         text("SELECT id, refresh_token FROM marketplace_accounts")),
+        (UserMarketplaceCredential, "value",
+         text("SELECT id, value FROM user_marketplace_credentials")),
+    )
 
 
 def migrate_legacy_values(db) -> int:
     """Re-write v1 values under the v2 key. Returns how many were moved.
 
-    SQL is used directly, and deliberately: reading through the ORM would apply
-    the decrypting column type, and what has to be rewritten is the stored
-    ciphertext, not the plaintext it stands for.
-
     A value that will not decrypt is left exactly as it is. It is unreadable
     either way, and overwriting it would destroy the only copy of whatever the
     seller's account needs.
     """
-    from sqlalchemy import text
+    from sqlalchemy import update
 
     migrated = 0
-    for table, column in ENCRYPTED_COLUMNS:
+    for model, column, statement in _encrypted_columns():
         try:
-            rows = db.execute(text(f"SELECT id, {column} FROM {table}")).fetchall()
+            rows = db.execute(statement).fetchall()
         except Exception:
             # A table that is not there yet is not a failure worth stopping for.
             db.rollback()
@@ -241,13 +250,15 @@ def migrate_legacy_values(db) -> int:
             plain = decrypt(stored)
             if plain is None or plain == stored:
                 log.warning(
-                    "Leaving an unreadable v1 value in %s.%s alone rather than "
-                    "overwriting it.", table, column,
+                    "Leaving an unreadable v1 value in place rather than "
+                    "overwriting the only copy of it.",
                 )
                 continue
+            # Written through the model, so the column type does the encrypting
+            # under the current key rather than this function assembling
+            # ciphertext by hand.
             db.execute(
-                text(f"UPDATE {table} SET {column} = :value WHERE id = :row_id"),
-                {"value": encrypt(plain), "row_id": row_id},
+                update(model).where(model.id == row_id).values({column: plain})
             )
             migrated += 1
 
