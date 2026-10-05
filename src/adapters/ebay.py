@@ -1291,6 +1291,42 @@ class eBayAdapter(MarketplaceAdapter):
             "fees": _re.findall(r"<Fee[^>]*>(.*?)</Fee>", xml, _re.S)[:1],
         }
 
+    def default_listing_policies(self, token: dict,
+                                 marketplace: str) -> Dict[str, str]:
+        """The seller's default fulfilment, payment and return policies, if any.
+
+        Once an account is in Business Policies, an offer needs all THREE, and eBay
+        refuses to publish when any is empty -- errorId 25007 when the fulfilment
+        one is missing, which reads as a shipping problem and is really a
+        missing-policy problem.
+
+        Read from the account rather than configured here, so the policies stay the
+        seller's to change in eBay without touching this code.
+        """
+        headers = self._inventory_headers(token, marketplace)
+        found: Dict[str, str] = {}
+        for path, key, idfield, slot in (
+            ("fulfillment_policy", "fulfillmentPolicies", "fulfillmentPolicyId",
+             "fulfillment_policy_id"),
+            ("payment_policy", "paymentPolicies", "paymentPolicyId",
+             "payment_policy_id"),
+            ("return_policy", "returnPolicies", "returnPolicyId",
+             "return_policy_id"),
+        ):
+            try:
+                resp = httpx.get(f"{EBAY_API_BASE}/sell/account/v1/{path}",
+                                 headers=headers,
+                                 params={"marketplace_id": marketplace}, timeout=40)
+                if resp.status_code != 200:
+                    continue
+                for policy in (resp.json() or {}).get(key) or []:
+                    if policy.get(idfield):
+                        found[slot] = policy[idfield]
+                        break
+            except Exception:
+                continue
+        return found
+
     def create_book_draft(self, db, draft: dict, user_id=None,
                           credentials: dict = None) -> Dict[str, Any]:
         """Create an inventory item and an UNPUBLISHED offer, and return the draft.
@@ -1378,15 +1414,24 @@ class eBayAdapter(MarketplaceAdapter):
             },
         }
         # Business policies are added only when the seller has them. This account
-        # is not eligible for them, and an offer without the container is accepted
-        # -- verified -- so requiring it would break the working path.
+        # was refused them for most of this build, and an offer without the
+        # container is accepted -- verified -- so requiring it would break the
+        # accounts that have none.
         policies = draft.get("policies") or {}
-        if any(policies.get(k) for k in
+        if not all(policies.get(k) for k in
+                   ("fulfillment_policy_id", "payment_policy_id",
+                    "return_policy_id")):
+            # Fall back to the seller's own defaults rather than leaving the offer
+            # unpublishable. eBay rejects an offer when any of the three is empty,
+            # so a partial set is worse than none: it fails later, at publish time,
+            # with an error that reads like a shipping problem.
+            policies = self.default_listing_policies(token, marketplace)
+        if all(policies.get(k) for k in
                ("fulfillment_policy_id", "payment_policy_id", "return_policy_id")):
             offer_body["listingPolicies"] = {
-                "fulfillmentPolicyId": policies.get("fulfillment_policy_id") or "",
-                "paymentPolicyId": policies.get("payment_policy_id") or "",
-                "returnPolicyId": policies.get("return_policy_id") or "",
+                "fulfillmentPolicyId": policies["fulfillment_policy_id"],
+                "paymentPolicyId": policies["payment_policy_id"],
+                "returnPolicyId": policies["return_policy_id"],
             }
 
         # The location is the shipping origin and a required part of a complete
