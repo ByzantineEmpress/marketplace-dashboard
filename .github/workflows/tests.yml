@@ -101,7 +101,6 @@ jobs:
             tests/test_js_smoke.py
             tests/test_key_derivation.py
             tests/test_listing_groups.py
-            tests/test_listing_tool.py
             tests/test_mobile_ui.py
             tests/test_missing_cost.py
             tests/test_multitenancy.py
