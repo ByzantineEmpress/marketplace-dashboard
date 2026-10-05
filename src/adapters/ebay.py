@@ -1103,12 +1103,18 @@ class eBayAdapter(MarketplaceAdapter):
 
         services = "".join(
             "<ShippingServiceOptions>"
-            f"<ShippingServicePriority>{index}</ShippingServicePriority>"
             f"<ShippingService>{code}</ShippingService>"
-            # Buyer pays: this is not a free-shipping listing.
-            "<FreeShipping>false</FreeShipping>"
-            "<ShippingServiceAdditionalCost currencyID=\"CAD\">0.00"
-            "</ShippingServiceAdditionalCost>"
+            f"<ShippingServicePriority>{index}</ShippingServicePriority>"
+            # Deliberately minimal. A CALCULATED service must NOT carry
+            # ShippingServiceAdditionalCost or FreeShipping: sending
+            # additionalShippingCost[0.0] alongside ShippingType=Calculated is
+            # errorId 10019 "Inconsistent shipping parameters" (err:216169), and it
+            # drags 717 and 21917177 along with it so the weight and dimensions look
+            # wrong when they are not. This is the shape the seller's own calculated
+            # listings use.
+            "<ExpeditedService>false</ExpeditedService>"
+            "<ShippingTimeMin>2</ShippingTimeMin>"
+            "<ShippingTimeMax>7</ShippingTimeMax>"
             "</ShippingServiceOptions>"
             for index, code in enumerate(self.BOOK_SHIPPING_SERVICES, start=1)
         )
