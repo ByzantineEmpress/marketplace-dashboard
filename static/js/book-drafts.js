@@ -124,7 +124,14 @@
         }
 
         var main = el("div", "bd-main");
-        main.appendChild(el("div", "bd-title", draft.title || "(untitled)"));
+        // The title is the way in to editing it. Clicking the row itself would
+        // fight with the checkbox, so the link is deliberate and single-purpose.
+        var titleLink = document.createElement("a");
+        titleLink.className = "bd-title";
+        titleLink.href = "/books/drafts/" + encodeURIComponent(draft.offer_id);
+        titleLink.textContent = draft.title || "(untitled)";
+        titleLink.title = "Edit this draft";
+        main.appendChild(titleLink);
 
         var facts = [
             money(draft.price, draft.currency),

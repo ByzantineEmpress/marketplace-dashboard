@@ -3010,3 +3010,12 @@ body[data-card-view="table"] .listing-grid {
 .bd-addphoto { font-size: 11px; color: var(--accent); cursor: pointer; }
 /* Amber, not red: the draft is fine, it just cannot be published yet. */
 .bd-nophoto { border-color: var(--warning-text); color: var(--warning-text); }
+
+/* -- Edit one draft ------------------------------------------------------ */
+
+.be-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+              margin-top: 14px; }
+.be-actions .btn--danger { margin-left: auto; }
+.bd-title { font-weight: 600; font-size: 14px; overflow-wrap: anywhere;
+            text-decoration: none; }
+.bd-title:hover { text-decoration: underline; }

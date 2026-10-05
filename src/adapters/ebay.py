@@ -848,6 +848,130 @@ class eBayAdapter(MarketplaceAdapter):
                 resolved.append(url)
         return resolved
 
+    def get_draft(self, token: dict, marketplace: str,
+                  offer_id: str) -> Dict[str, Any]:
+        """One draft, assembled from both objects it is made of."""
+        headers = self._inventory_headers(token, marketplace)
+        base = f"{EBAY_API_BASE}/sell/inventory/v1"
+
+        offer_resp = httpx.get(f"{base}/offer/{offer_id}", headers=headers, timeout=40)
+        if offer_resp.status_code != 200:
+            raise RuntimeError(self._inventory_error(
+                "Could not read that draft", offer_resp))
+        offer = offer_resp.json() or {}
+        sku = offer.get("sku") or ""
+
+        item = {}
+        if sku:
+            item_resp = httpx.get(f"{base}/inventory_item/{quote(sku, safe='')}",
+                                  headers=headers, timeout=40)
+            if item_resp.status_code == 200:
+                item = item_resp.json() or {}
+
+        product = item.get("product") or {}
+        price = ((offer.get("pricingSummary") or {}).get("price") or {})
+        return {
+            "offer_id": offer_id,
+            "sku": sku,
+            "status": offer.get("status") or "",
+            "title": product.get("title") or "",
+            "description": offer.get("listingDescription") or "",
+            "price": price.get("value") or "",
+            "currency": price.get("currency") or "CAD",
+            "quantity": offer.get("availableQuantity") or 1,
+            "category_id": offer.get("categoryId") or "",
+            "location": offer.get("merchantLocationKey") or "",
+            "condition": item.get("condition") or "",
+            "images": product.get("imageUrls") or [],
+            "aspects": product.get("aspects") or {},
+            "marketplace": offer.get("marketplaceId") or marketplace,
+        }
+
+    def update_draft(self, token: dict, marketplace: str, offer_id: str,
+                     sku: str, changes: Dict[str, Any]) -> Dict[str, Any]:
+        """Save edits to a draft.
+
+        A draft is TWO objects, and both PUTs REPLACE rather than patch:
+
+          * the inventory ITEM carries the title, description and photos;
+          * the OFFER carries the price, quantity and category.
+
+        So each is read, the edited fields merged in, and the whole thing written
+        back. Sending only the changed fields would wipe everything else on that
+        object -- which is exactly how an earlier partial update emptied a draft's
+        price, description, category and quantity.
+
+        Only the fields actually being changed are merged, so anything the form does
+        not show survives untouched.
+        """
+        headers = self._inventory_headers(token, marketplace)
+        base = f"{EBAY_API_BASE}/sell/inventory/v1"
+
+        if sku and any(k in changes for k in
+                       ("title", "description", "images", "aspects")):
+            item_resp = httpx.get(f"{base}/inventory_item/{quote(sku, safe='')}",
+                                  headers=headers, timeout=40)
+            if item_resp.status_code != 200:
+                raise RuntimeError(self._inventory_error(
+                    "Could not read the draft before saving", item_resp))
+            item = dict(item_resp.json() or {})
+            for key in ("sku", "createdDate", "lastModifiedDate"):
+                item.pop(key, None)
+
+            product = dict(item.get("product") or {})
+            if "title" in changes:
+                product["title"] = (changes.get("title") or "")[:80]
+            if "description" in changes:
+                product["description"] = changes.get("description") or ""
+            if "aspects" in changes:
+                product["aspects"] = changes.get("aspects") or {}
+            if "images" in changes:
+                product["imageUrls"] = self.absolute_image_urls(
+                    changes.get("images") or [])
+            item["product"] = product
+
+            saved = httpx.put(f"{base}/inventory_item/{quote(sku, safe='')}",
+                              headers=headers, json=item, timeout=60)
+            if saved.status_code not in (200, 201, 204):
+                raise RuntimeError(self._inventory_error(
+                    "eBay rejected the changes to the item", saved))
+
+        if any(k in changes for k in
+               ("price", "currency", "quantity", "category_id", "description")):
+            offer_resp = httpx.get(f"{base}/offer/{offer_id}", headers=headers,
+                                   timeout=40)
+            if offer_resp.status_code != 200:
+                raise RuntimeError(self._inventory_error(
+                    "Could not read the draft before saving", offer_resp))
+            offer = dict(offer_resp.json() or {})
+            for key in ("offerId", "status", "listing", "createdDate"):
+                offer.pop(key, None)
+
+            if "price" in changes or "currency" in changes:
+                current = ((offer.get("pricingSummary") or {}).get("price") or {})
+                offer["pricingSummary"] = {"price": {
+                    "value": f"{float(changes.get('price') or 0):.2f}",
+                    "currency": (changes.get("currency")
+                                 or current.get("currency") or "CAD"),
+                }}
+            if "quantity" in changes:
+                offer["availableQuantity"] = max(1, int(changes.get("quantity") or 1))
+            if "category_id" in changes and changes.get("category_id"):
+                offer["categoryId"] = str(changes["category_id"])
+            if "description" in changes:
+                # The offer carries the listing description; the item carries the
+                # catalogue one. They are set to the same text, so an edit has to
+                # reach both or the page would show one and eBay the other.
+                offer["listingDescription"] = changes.get("description") or ""
+
+            saved = httpx.put(f"{base}/offer/{offer_id}", headers=headers,
+                              json=offer, timeout=60)
+            if saved.status_code not in (200, 204):
+                raise RuntimeError(self._inventory_error(
+                    "eBay rejected the changes to the offer", saved))
+
+        return self.get_draft(token, marketplace, offer_id)
+
     def set_draft_images(self, token: dict, marketplace: str, sku: str,
                          images) -> List[str]:
         """Replace a draft's photos, keeping everything else on the item.

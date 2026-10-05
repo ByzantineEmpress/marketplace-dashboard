@@ -207,6 +207,113 @@ class DraftAdapterTest(unittest.TestCase):
             self.adapter.set_draft_images(self.token, "EBAY_CA", "BOOK-1",
                                           ["/static/uploads/a.jpg"])
 
+    def test_saving_merges_into_both_objects_without_wiping_them(self):
+        """A draft is TWO objects and both PUTs replace: the item carries the title,
+        description and photos, the offer carries the price, quantity and category.
+        Sending only the changed fields would wipe the rest of that object, which is
+        how an earlier partial update emptied a draft's price and description."""
+        puts = []
+
+        def fake_get(url, **kwargs):
+            if "/inventory_item/" in url:
+                return self._Resp(200, {
+                    "condition": "USED_GOOD",
+                    "packageWeightAndSize": {"weight": {"value": 1.0,
+                                                        "unit": "KILOGRAM"}},
+                    "product": {"title": "Old Title", "description": "old",
+                                "aspects": {"Author": ["Someone"]}},
+                })
+            return self._Resp(200, {
+                "offerId": "9", "sku": "BOOK-1", "status": "UNPUBLISHED",
+                "format": "FIXED_PRICE", "availableQuantity": 1,
+                "categoryId": "261186", "merchantLocationKey": "Home",
+                "listingPolicies": {"eBayPlusIfEligible": False},
+                "pricingSummary": {"price": {"value": "5.00", "currency": "CAD"}},
+                "listingDescription": "old",
+            })
+
+        def fake_put(url, **kwargs):
+            puts.append(("item" if "inventory_item" in url else "offer",
+                         kwargs.get("json") or {}))
+            return self._Resp(204)
+
+        self.mod.httpx.get = fake_get
+        self.mod.httpx.put = fake_put
+        self.adapter.update_draft(self.token, "EBAY_CA", "9", "BOOK-1",
+                                  {"title": "New Title", "price": 12.5})
+
+        sent = dict(puts)
+        item = sent["item"]
+        # The title changed and the aspects on the same object survived.
+        self.assertEqual(item["product"]["title"], "New Title")
+        self.assertEqual(item["product"]["aspects"], {"Author": ["Someone"]})
+        self.assertEqual(item["condition"], "USED_GOOD")
+        self.assertNotIn("sku", item)
+
+        offer = sent["offer"]
+        # The price changed and the offer's other fields survived.
+        self.assertEqual(offer["pricingSummary"]["price"]["value"], "12.50")
+        self.assertEqual(offer["categoryId"], "261186")
+        self.assertEqual(offer["merchantLocationKey"], "Home")
+        self.assertEqual(offer["availableQuantity"], 1)
+        self.assertNotIn("offerId", offer)
+        self.assertNotIn("status", offer)
+
+    def test_editing_only_the_price_does_not_touch_the_item(self):
+        """Anything the form does not show must survive untouched."""
+        puts = []
+
+        def fake_get(url, **kwargs):
+            return self._Resp(200, {
+                "offerId": "9", "sku": "BOOK-1", "availableQuantity": 3,
+                "pricingSummary": {"price": {"value": "5.00", "currency": "CAD"}},
+            })
+
+        def fake_put(url, **kwargs):
+            puts.append("item" if "inventory_item" in url else "offer")
+            return self._Resp(204)
+
+        self.mod.httpx.get = fake_get
+        self.mod.httpx.put = fake_put
+        self.adapter.update_draft(self.token, "EBAY_CA", "9", "BOOK-1",
+                                  {"price": 9.99})
+        self.assertEqual(puts, ["offer"])
+
+    def test_a_description_edit_reaches_both_objects(self):
+        """The offer carries the listing description and the item the catalogue one.
+        They are set to the same text, so an edit has to reach both or the page and
+        eBay would disagree."""
+        puts = []
+
+        def fake_get(url, **kwargs):
+            if "/inventory_item/" in url:
+                return self._Resp(200, {"product": {"title": "T"}})
+            return self._Resp(200, {"offerId": "9", "sku": "BOOK-1"})
+
+        def fake_put(url, **kwargs):
+            puts.append(("item" if "inventory_item" in url else "offer",
+                         kwargs.get("json") or {}))
+            return self._Resp(204)
+
+        self.mod.httpx.get = fake_get
+        self.mod.httpx.put = fake_put
+        self.adapter.update_draft(self.token, "EBAY_CA", "9", "BOOK-1",
+                                  {"description": "new text"})
+
+        sent = dict(puts)
+        self.assertEqual(sent["item"]["product"]["description"], "new text")
+        self.assertEqual(sent["offer"]["listingDescription"], "new text")
+
+    def test_a_rejected_save_raises_rather_than_looking_ok(self):
+        def fake_get(url, **kwargs):
+            return self._Resp(200, {"offerId": "9", "sku": "BOOK-1"})
+
+        self.mod.httpx.get = fake_get
+        self.mod.httpx.put = lambda url, **k: self._Resp(400, {}, "no")
+        with self.assertRaises(RuntimeError):
+            self.adapter.update_draft(self.token, "EBAY_CA", "9", "BOOK-1",
+                                      {"price": 1})
+
     def test_an_empty_photo_list_resolves_to_nothing(self):
         """eBay requires at least one photo to publish, so an empty list has to
         come out empty rather than as a list containing a blank URL."""

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="bp" id="be-root" data-offer-id="{{ offer_id }}">
+
+    <div class="bp-head">
+        <h1>Edit Draft</h1>
+        <p class="bp-sub">
+            Changes are saved to the draft only. Nothing is published from this page.
+        </p>
+    </div>
+
+    <p class="bp-status" id="be-status"></p>
+
+    <section class="bp-card" id="be-card" hidden>
+        <div class="bp-grid">
+            <label class="bp-field bp-field--wide">
+                <span>Book Title</span>
+                <input type="text" id="be-title" maxlength="80">
+                <em class="bp-hint"><span id="be-title-count">0</span>/80 — eBay truncates past 80</em>
+            </label>
+            <label class="bp-field">
+                <span>Your price</span>
+                <input type="number" id="be-price" min="0" step="0.01">
+            </label>
+            <label class="bp-field">
+                <span>Quantity</span>
+                <input type="number" id="be-quantity" min="1" step="1">
+            </label>
+            <label class="bp-field">
+                <span>Category</span>
+                <input type="text" id="be-category">
+                <em class="bp-hint">eBay needs a leaf category; it was set when the draft was made.</em>
+            </label>
+        </div>
+
+        <label class="bp-field bp-field--wide">
+            <span>Description</span>
+            <textarea id="be-description" rows="18"></textarea>
+        </label>
+
+        <div class="bp-photos">
+            <span class="bp-field-label">Photos</span>
+            <div class="bp-thumbs" id="be-thumbs"></div>
+            <label class="bp-add-photo" for="be-photos">
+                <input type="file" id="be-photos" accept="image/*" multiple hidden>
+                + Add photos
+            </label>
+            <em class="bp-hint">eBay will not publish a listing with no photo.</em>
+        </div>
+
+        <div class="be-actions">
+            <button type="button" class="btn btn--primary" id="be-save">Save changes</button>
+            <a href="/books/drafts" class="btn btn--outline">Back to drafts</a>
+            <button type="button" class="btn btn--danger" id="be-delete">Delete draft</button>
+        </div>
+        <p class="bp-hint" id="be-meta"></p>
+    </section>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/book-draft-edit.js"></script>
+{% endblock %}

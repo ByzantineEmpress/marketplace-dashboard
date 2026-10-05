@@ -416,6 +416,20 @@ async def book_drafts_page(request: Request):
     )
 
 
+@page_router.get("/books/drafts/{offer_id}")
+async def book_draft_edit_page(request: Request, offer_id: str):
+    """Edit one draft. Nothing here publishes; that is a separate, deliberate act."""
+    user = require_auth(request)
+    if not user:
+        return RedirectResponse(url="/login?error=auth_required")
+    return templates.TemplateResponse(
+        request=request,
+        name="book_draft_edit.html",
+        context={"identity": user["name"], "active": "books",
+                 "title": "Edit Draft", "offer_id": offer_id},
+    )
+
+
 @page_router.get("/marketplace-settings")
 async def marketplace_settings_page(request: Request):
     """Per-user page for linking the caller's own marketplace accounts.
@@ -2850,6 +2864,91 @@ async def books_draft_delete(offer_id: str, sku: str = "",
     except Exception as exc:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
     return {"ok": True, "offer_id": offer_id}
+
+
+@api_router.get("/books/drafts/{offer_id}")
+async def books_draft_detail(offer_id: str, db: Session = Depends(get_db),
+                             _user: dict = Depends(check_auth)):
+    """One draft, for the edit form."""
+    from src.adapters import get_adapter
+    from src.marketplace_sync import user_credentials
+    from src.models import MarketplaceAccount
+
+    account = (db.query(MarketplaceAccount)
+               .filter(MarketplaceAccount.platform == "ebay").first())
+    if not account:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "eBay is not connected."})
+
+    def fetch():
+        credentials = user_credentials(db, account.user_id, "ebay")
+        adapter = get_adapter("ebay")
+        token = adapter.get_token(db, user_id=account.user_id,
+                                  credentials=credentials)
+        if not token:
+            raise RuntimeError("eBay is not connected, or its token has expired.")
+        marketplace = (adapter._resolve_marketplace(db, token, account.user_id)
+                       or "EBAY_CA")
+        return adapter.get_draft(token, marketplace, offer_id)
+
+    try:
+        draft = await asyncio.to_thread(fetch)
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+    return {"ok": True, "draft": draft}
+
+
+@api_router.put("/books/drafts/{offer_id}")
+async def books_draft_update(offer_id: str, body: dict,
+                             db: Session = Depends(get_db),
+                             _user: dict = Depends(check_auth)):
+    """Save edits to a draft. Nothing goes live: this only changes the draft."""
+    from src.adapters import get_adapter
+    from src.marketplace_sync import user_credentials
+    from src.models import MarketplaceAccount
+
+    changes = body.get("changes") or {}
+    if not isinstance(changes, dict) or not changes:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "No changes were given."})
+    if "title" in changes and not str(changes.get("title") or "").strip():
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "A title is required."})
+    if "price" in changes:
+        try:
+            if float(changes.get("price") or 0) <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return JSONResponse(status_code=400,
+                                content={"ok": False,
+                                         "error": "A price above zero is required."})
+
+    account = (db.query(MarketplaceAccount)
+               .filter(MarketplaceAccount.platform == "ebay").first())
+    if not account:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "eBay is not connected."})
+
+    def save():
+        credentials = user_credentials(db, account.user_id, "ebay")
+        adapter = get_adapter("ebay")
+        token = adapter.get_token(db, user_id=account.user_id,
+                                  credentials=credentials)
+        if not token:
+            raise RuntimeError("eBay is not connected, or its token has expired.")
+        marketplace = (adapter._resolve_marketplace(db, token, account.user_id)
+                       or "EBAY_CA")
+        sku = str(body.get("sku") or "").strip()
+        if not sku:
+            # Read it from the offer rather than trusting the caller's copy.
+            sku = (adapter.get_draft(token, marketplace, offer_id) or {}).get("sku") or ""
+        return adapter.update_draft(token, marketplace, offer_id, sku, changes)
+
+    try:
+        draft = await asyncio.to_thread(save)
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+    return {"ok": True, "draft": draft}
 
 
 @api_router.post("/books/drafts/{offer_id}/photos")
