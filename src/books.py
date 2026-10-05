@@ -312,11 +312,14 @@ def build_description(meta: Dict[str, Any], condition: str = "",
 
 # -- Market ----------------------------------------------------------------
 
-# Deliberately NOT filtered by category. An ISBN search is already specific
-# enough that every hit is this edition, and eBay's category ids are
-# marketplace-specific: filtering on the US Books id (267) returned "0 available"
-# for a book that the unfiltered search found 20 copies of on ebay.ca. A hardcoded
-# category is worse than none here.
+# Deliberately NOT filtered by category.
+#
+# An ISBN query is already specific to the edition, so a category filter buys
+# nothing. It also cannot be written correctly here: eBay's category ids come from
+# a per-marketplace tree, so the US Books id means something else, or nothing, on
+# ebay.ca. Measured on both a common paperback and an obscure hardcover, adding it
+# changed no result -- which is the point: it carries a marketplace-specific
+# assumption for no benefit, and would fail silently the day it did matter.
 _BOOKS_CATEGORY_HINT = "267"
 
 
