@@ -612,6 +612,15 @@ class eBayAdapter(MarketplaceAdapter):
     BOOKS_LEAF_CATEGORY = {
         "EBAY_CA": "261186",   # Books & Magazines > Books
     }
+    # The seller's drafts live on OUR page, not eBay's.
+    #
+    # Seller Hub's drafts list does NOT show offers created through the Inventory
+    # API. That was tested hard and repeatedly: a complete, valid offer -- leaf
+    # category, price, merchant location, status UNPUBLISHED -- is simply absent
+    # from that page. Sending the seller there after creating a draft shows them a
+    # list without their draft on it, which reads as "nothing happened".
+    DRAFT_PAGE = "/books/drafts"
+    # Kept only so the reason above has a concrete referent. Do not send anyone here.
     SELLER_HUB_DRAFTS = "https://www.ebay.ca/sh/lst/drafts"
 
     def enabled_location_key(self, token: dict, marketplace: str) -> str:
@@ -937,7 +946,8 @@ class eBayAdapter(MarketplaceAdapter):
             "marketplace": marketplace,
             # Seller Hub has no per-draft URL, so this is the drafts list. It is
             # still one click from the draft the page just made.
-            "draft_url": self.SELLER_HUB_DRAFTS,
+            # Our drafts page, which actually lists what was just created.
+            "draft_url": self.DRAFT_PAGE,
             "note": ("Draft created. Weight and dimensions are on the item; "
                      "choose the shipping services in eBay before publishing."),
         }

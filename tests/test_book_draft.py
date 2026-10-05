@@ -134,7 +134,16 @@ class BookDraftTest(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["status"], "UNPUBLISHED")
         self.assertEqual(result["offer_id"], "123")
-        self.assertIn("sh/lst/drafts", result["draft_url"])
+
+    def test_the_draft_link_points_at_our_page_not_ebays(self):
+        """eBay's drafts list does not show offers created through the Inventory
+        API. Sending the seller there after creating one lands them on a page
+        without their draft on it, which reads as "nothing happened"."""
+        self._serve()
+        result = self.adapter.create_book_draft(None, self.DRAFT, user_id=1)
+
+        self.assertEqual(result["draft_url"], "/books/drafts")
+        self.assertNotIn("sh/lst/drafts", result["draft_url"])
 
     def test_no_us_parent_category_is_used(self):
         """267 is the US Books PARENT and is not a leaf. eBay accepts an offer

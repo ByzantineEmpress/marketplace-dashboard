@@ -267,13 +267,19 @@
                     return;
                 }
                 result.className = "bp-result bp-result--ok";
+                // Points at OUR drafts page. eBay's drafts list does not show
+                // offers created through the Inventory API, so sending the seller
+                // there showed them a page without their new draft on it, which
+                // read as "nothing happened".
                 result.innerHTML =
-                    "Draft created — offer <strong>" + out.data.offer_id + "</strong> " +
-                    "(status " + out.data.status + ").<br>" +
-                    '<a href="' + out.data.draft_url + '" target="_blank" rel="noopener">' +
-                    "Open your eBay drafts →</a>";
-                // The whole point of a draft is to go and finish it, so it opens
-                // rather than waiting to be found.
+                    "Draft created — offer <strong>" + out.data.offer_id +
+                    "</strong> (status " + out.data.status + ").<br>" +
+                    "Nothing is on sale yet. " +
+                    '<a href="' + out.data.draft_url + '">Open your book drafts →</a>' +
+                    "<br><span class=\"bp-hint\">eBay's own drafts page does not list "
+                    + "these, so they are kept on the drafts page instead.</span>";
+                // It opens too, so the draft is not left to be hunted for. The
+                // List a Book tab stays where it is, ready for the next book.
                 window.open(out.data.draft_url, "_blank", "noopener");
             })
             .catch(function (err) {
