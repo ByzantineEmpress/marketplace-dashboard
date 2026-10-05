@@ -1126,6 +1126,10 @@ class eBayAdapter(MarketplaceAdapter):
             "</CategoryID></PrimaryCategory>"
             f"<StartPrice currencyID=\"{self._xml_escape(draft.get('currency') or 'CAD')}\">"
             f"{float(draft.get('price') or 0):.2f}</StartPrice>"
+            # The Trading API wants the currency twice: as an attribute on the price
+            # and as its own element. Omitting the element is errorId 10009, and
+            # VerifyAddItem is where that surfaced rather than after a live listing.
+            f"<Currency>{self._xml_escape(draft.get('currency') or 'CAD')}</Currency>"
             f"<Quantity>{max(1, int(draft.get('quantity') or 1))}</Quantity>"
             "<ListingType>FixedPriceItem</ListingType>"
             "<ListingDuration>GTC</ListingDuration>"
