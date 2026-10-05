@@ -1113,6 +1113,29 @@ class eBayAdapter(MarketplaceAdapter):
             for index, code in enumerate(self.BOOK_SHIPPING_SERVICES, start=1)
         )
 
+        # Item specifics. eBay's Books category REQUIRES Language, Book Title and
+        # Author, and answers 21919303 for each one missing -- which is how this was
+        # found. The draft already carries Author and Book Title as item aspects, so
+        # they only had to be sent; Language is defaulted because nothing collects
+        # it yet.
+        aspects = dict(draft.get("aspects") or {})
+        aspects.setdefault("Book Title", [draft.get("title") or ""])
+        aspects.setdefault("Language", [draft.get("language") or "English"])
+        specifics = "".join(
+            "<NameValueList>"
+            f"<Name>{self._xml_escape(name)}</Name>"
+            + "".join(
+                f"<Value>{self._xml_escape(v)}</Value>"
+                for v in (values if isinstance(values, (list, tuple)) else [values])
+                if str(v).strip()
+            )
+            + "</NameValueList>"
+            for name, values in aspects.items()
+            if str(name).strip()
+            and any(str(v).strip() for v in
+                    (values if isinstance(values, (list, tuple)) else [values]))
+        )
+
         weight_kg = int(draft.get("weight_kg") or self.BOOK_PACKAGE_WEIGHT_KG)
         dims = self.BOOK_PACKAGE_DIMENSIONS_CM
         condition = self.TRADING_CONDITION_IDS.get(
@@ -1143,14 +1166,21 @@ class eBayAdapter(MarketplaceAdapter):
             "</PostalCode>"
             f"<DispatchTimeMax>{int(draft.get('dispatch_days') or 2)}</DispatchTimeMax>"
             f"<PictureDetails>{pictures}</PictureDetails>"
+            f"<ItemSpecifics>{specifics}</ItemSpecifics>"
             "<ShippingDetails>"
             "<ShippingType>Calculated</ShippingType>"
             "<CalculatedShippingRate>"
-            f"<WeightMajor unit=\"kg\">{weight_kg}</WeightMajor>"
-            "<WeightMinor unit=\"g\">0</WeightMinor>"
-            f"<PackageLength unit=\"cm\">{dims['length']}</PackageLength>"
-            f"<PackageWidth unit=\"cm\">{dims['width']}</PackageWidth>"
-            f"<PackageDepth unit=\"cm\">{dims['height']}</PackageDepth>"
+            # measurementSystem, NOT unit. Sending unit="kg" / unit="cm" is accepted
+            # as XML and rejected as data: errorId 717 "package weight is not valid"
+            # and 21917177 "enter valid dimensions", with perfectly correct numbers.
+            f"<WeightMajor measurementSystem=\"Metric\">{weight_kg}</WeightMajor>"
+            "<WeightMinor measurementSystem=\"Metric\">0</WeightMinor>"
+            f"<PackageLength measurementSystem=\"Metric\">{dims['length']}"
+            "</PackageLength>"
+            f"<PackageWidth measurementSystem=\"Metric\">{dims['width']}"
+            "</PackageWidth>"
+            f"<PackageDepth measurementSystem=\"Metric\">{dims['height']}"
+            "</PackageDepth>"
             "</CalculatedShippingRate>"
             # eBay requires a return policy on the listing even when the account has
             # no business policies. 30 days, buyer pays return postage.
