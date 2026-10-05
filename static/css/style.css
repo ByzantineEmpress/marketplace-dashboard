@@ -2998,3 +2998,9 @@ body[data-card-view="table"] .listing-grid {
               border: 1px dashed var(--border); border-radius: 6px;
               font-size: 10px; color: var(--text-muted); }
 .bd-thumb { cursor: zoom-in; }
+
+/* Live listing links after a publish, so a bulk publish can be checked rather
+   than taken on trust. */
+.bd-published { padding: 10px 12px; margin-bottom: 10px; font-size: 13px;
+                border: 1px solid var(--success); border-radius: var(--radius-lg);
+                background: var(--bg-elevated); overflow-wrap: anywhere; }

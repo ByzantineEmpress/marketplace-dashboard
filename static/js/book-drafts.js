@@ -172,6 +172,9 @@
         allLabel.insertBefore(all, allLabel.firstChild);
 
         var count = el("span", "bd-bar-count", "");
+        var bulkPublish = el("button", "btn btn--sm btn--success", "Publish selected");
+        bulkPublish.type = "button";
+        bulkPublish.disabled = true;
         var bulk = el("button", "btn btn--sm btn--danger", "Delete selected");
         bulk.type = "button";
         bulk.disabled = true;
@@ -187,6 +190,7 @@
             var n = selected().length;
             count.textContent = n ? n + " selected" : "";
             bulk.disabled = n === 0;
+            bulkPublish.disabled = n === 0;
             all.checked = n > 0 && n === root.querySelectorAll(".bd-check").length;
         }
 
@@ -197,6 +201,104 @@
         });
         root.addEventListener("change", function (event) {
             if (event.target && event.target.classList.contains("bd-check")) sync();
+        });
+
+        // Bulk publish. This is the one action on this page that puts things up for
+        // sale, and it does it to several at once, so the confirmation does the work
+        // rather than a second click: it names the count and the total value, and
+        // says outright that they go live immediately. "Are you sure" would hide
+        // exactly the information needed to answer it.
+        bulkPublish.addEventListener("click", function () {
+            var ids = selected();
+            if (!ids.length) return;
+
+            var chosen = drafts.filter(function (d) {
+                return ids.indexOf(d.offer_id) !== -1;
+            });
+            var total = chosen.reduce(function (sum, d) {
+                var n = parseFloat(d.price);
+                return sum + (isNaN(n) ? 0 : n);
+            }, 0);
+            var currency = (chosen[0] || {}).currency || "";
+            var titles = chosen.slice(0, 8).map(function (d) {
+                return "  • " + (d.title || "(untitled)") + " — "
+                    + money(d.price, d.currency);
+            }).join("\n");
+            if (chosen.length > 8) titles += "\n  • …and " + (chosen.length - 8) + " more";
+
+            var ok = window.confirm(
+                "Publish " + ids.length + " listing" + (ids.length === 1 ? "" : "s")
+                + " for " + currency + " " + total.toFixed(2) + "?\n\n"
+                + titles + "\n\n"
+                + "Every one of these becomes a LIVE eBay listing that buyers can "
+                + "purchase immediately, at the price shown. This cannot be undone "
+                + "from here — published listings have to be ended on eBay."
+            );
+            if (!ok) return;
+
+            bulkPublish.disabled = true;
+            bulk.disabled = true;
+            var published = [], failed = [], done = 0;
+
+            // Sequential: eBay rate-limits, and a half-finished bulk publish is
+            // easier to reason about when the results come back in order.
+            var chain = Promise.resolve();
+            chosen.forEach(function (draft) {
+                chain = chain.then(function () {
+                    bulkPublish.textContent = "Publishing " + (done + 1)
+                        + " of " + chosen.length + "…";
+                    return fetch("/api/books/drafts/"
+                                 + encodeURIComponent(draft.offer_id) + "/publish", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ confirm: true }),
+                    })
+                        .then(function (r) { return r.json(); })
+                        .then(function (data) {
+                            if (data && data.ok) {
+                                published.push(data);
+                            } else {
+                                failed.push({ draft: draft,
+                                              error: (data && data.error) || "failed" });
+                            }
+                        })
+                        .catch(function (err) {
+                            failed.push({ draft: draft, error: err.message });
+                        })
+                        .then(function () { done += 1; });
+                });
+            });
+
+            chain.then(function () {
+                bulkPublish.textContent = "Publish selected";
+                if (!failed.length) {
+                    setStatus("Published " + published.length + " listing"
+                              + (published.length === 1 ? "" : "s") + ".", "ok");
+                } else {
+                    setStatus("Published " + published.length + " of " + chosen.length
+                              + "; " + failed.length + " failed — "
+                              + failed[0].error, "error");
+                }
+                if (published.length) {
+                    var box = document.getElementById("bd-published");
+                    if (box) {
+                        box.hidden = false;
+                        box.textContent = "Live listings: ";
+                        published.forEach(function (p) {
+                            if (p.url) {
+                                var link = document.createElement("a");
+                                link.href = p.url;
+                                link.target = "_blank";
+                                link.rel = "noopener";
+                                link.textContent = p.listing_id || p.offer_id;
+                                link.style.marginRight = "10px";
+                                box.appendChild(link);
+                            }
+                        });
+                    }
+                }
+                load();
+            });
         });
 
         bulk.addEventListener("click", function () {
@@ -247,8 +349,18 @@
 
         bar.appendChild(allLabel);
         bar.appendChild(count);
+        bar.appendChild(bulkPublish);
         bar.appendChild(bulk);
         root.appendChild(bar);
+
+        // Where the live listing links appear after a publish, so a bulk publish
+        // can be checked afterwards instead of taken on trust. Named apart from the
+        // publish handler's own `published` results array, which would otherwise
+        // read as the same thing.
+        var publishedBox = el("div", "bd-published");
+        publishedBox.id = "bd-published";
+        publishedBox.hidden = true;
+        root.appendChild(publishedBox);
 
         drafts.forEach(function (draft) { root.appendChild(row(draft)); });
         sync();
