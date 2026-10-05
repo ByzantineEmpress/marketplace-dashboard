@@ -1176,24 +1176,28 @@ class eBayAdapter(MarketplaceAdapter):
             "<ShippingDetails>"
             "<ShippingType>Calculated</ShippingType>"
             "<CalculatedShippingRate>"
-            # BOTH attributes, and the units spelled eBay's way. This is not
-            # guessed: it is the shape read back from one of this seller's own live
-            # listings via GetItem. Sending unit alone is accepted as XML and
-            # rejected as data (errorId 717 "package weight is not valid",
-            # 21917177 "enter valid dimensions"); sending measurementSystem alone
-            # fails the same way. Note gm, not g.
-            f"<WeightMajor measurementSystem=\"Metric\" unit=\"kg\">{weight_kg}"
-            "</WeightMajor>"
-            "<WeightMinor measurementSystem=\"Metric\" unit=\"gm\">0</WeightMinor>"
+            # Element ORDER matters here: this is a schema sequence, not a set.
+            # eBay's own listings come back as OriginatingPostalCode, package
+            # dimensions, then weights, then the package type -- and emitting them
+            # in a different order is what produced 717 "package weight is not
+            # valid" and 21917177 "enter valid dimensions" against correct numbers.
+            f"<OriginatingPostalCode>{self._xml_escape(draft.get('postal_code') or 'E3C1M1')}"
+            "</OriginatingPostalCode>"
+            # BOTH attributes, and the units spelled eBay's way -- read back from
+            # one of this seller's own live listings via GetItem. unit alone and
+            # measurementSystem alone each fail the same way. Note gm, not g.
+            f"<PackageDepth measurementSystem=\"Metric\" unit=\"cm\">{dims['height']}"
+            "</PackageDepth>"
             f"<PackageLength measurementSystem=\"Metric\" unit=\"cm\">{dims['length']}"
             "</PackageLength>"
             f"<PackageWidth measurementSystem=\"Metric\" unit=\"cm\">{dims['width']}"
             "</PackageWidth>"
-            f"<PackageDepth measurementSystem=\"Metric\" unit=\"cm\">{dims['height']}"
-            "</PackageDepth>"
+            f"<WeightMajor measurementSystem=\"Metric\" unit=\"kg\">{weight_kg}"
+            "</WeightMajor>"
+            "<WeightMinor measurementSystem=\"Metric\" unit=\"gm\">0</WeightMinor>"
+            "<ShippingIrregular>false</ShippingIrregular>"
             # A book is a padded envelope or a parcel; this is the value the
             # seller's own listings use.
-            "<ShippingIrregular>false</ShippingIrregular>"
             "<ShippingPackage>ParcelOrPaddedEnvelope</ShippingPackage>"
             "</CalculatedShippingRate>"
             # eBay requires a return policy on the listing even when the account has
