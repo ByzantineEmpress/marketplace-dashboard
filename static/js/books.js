@@ -117,11 +117,35 @@
                 + market.sampled + " of " + market.available + " listings.";
         }
 
+        keyNote(m);
         renderSearches(data.links || {});
 
         $("bp-listing").hidden = false;
         $("bp-market").hidden = false;
         $("bp-publish").hidden = false;
+    }
+
+    // Google Books is the second catalogue and the fields above are thinner
+    // without it, so a refusal is worth saying out loud. Both of these are
+    // actionable, and neither shows up anywhere else on the page.
+    function keyNote(m) {
+        var el = $("bp-key-note");
+        if (!el) return;
+
+        if (m.google_key_rejected) {
+            el.hidden = false;
+            el.textContent = "Google Books refused your API key (" + m.google_key_rejected
+                + "). That usually means the Books API is not enabled on that Google "
+                + "Cloud project, or the key has API restrictions that exclude it. "
+                + "The details above come from Open Library alone.";
+        } else if (m.google_quota_exceeded) {
+            el.hidden = false;
+            el.textContent = "Google Books is rate limiting this key (quota exceeded). "
+                + "The details above come from Open Library alone.";
+        } else {
+            el.hidden = true;
+            el.textContent = "";
+        }
     }
 
     // One row per search, by ISBN and by title. Sellers list under both, so a

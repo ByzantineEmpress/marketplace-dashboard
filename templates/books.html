@@ -106,6 +106,9 @@
             </div>
         </div>
         <p class="bp-hint" id="bp-market-note"></p>
+        {# Says so when the Google Books key is refused or rate limited. Without
+           this the fields simply look thinner and there is nothing to act on. #}
+        <p class="bp-hint bp-hint--warn" id="bp-key-note" hidden></p>
         {# Two searches, because sellers list under both an ISBN and a title.
            Filled by books.js from links.searches. #}
         <div class="bp-searches" id="bp-searches"></div>

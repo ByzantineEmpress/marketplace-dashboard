@@ -2958,3 +2958,8 @@ body[data-card-view="table"] .listing-grid {
 .bp-search-label em { color: var(--text); font-style: normal; font-weight: 600; }
 .bp-search-links { display: flex; gap: 12px; margin-left: auto; font-size: 13px; }
 .bp-search-links a { white-space: nowrap; }
+
+/* A refusal from a catalogue the page depends on. Amber rather than red: the
+   lookup still worked, just on one source instead of two. */
+.bp-hint--warn { color: var(--warning-text); border-left: 2px solid var(--warning-text);
+                 padding-left: 8px; margin-top: 8px; }
