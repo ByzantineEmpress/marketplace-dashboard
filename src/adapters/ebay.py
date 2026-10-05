@@ -373,6 +373,11 @@ class eBayAdapter(MarketplaceAdapter):
             "Authorization": f"Bearer {token['access_token']}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            # Required by the Inventory API. Without it every write fails with
+            # "errorId 25709 Invalid value for header Content-Language", which
+            # reads like a permissions problem and is not one -- it cost a round
+            # of diagnosis to find.
+            "Content-Language": "en-CA",
             "X-EBAY-C-MARKETPLACE-ID": marketplace,
         }
 
@@ -588,6 +593,146 @@ class eBayAdapter(MarketplaceAdapter):
             "listing_id": listing_id, "offer_id": offer_id, "sku": sku,
             "url": (f"https://www.ebay.ca/itm/{listing_id}" if listing_id else None),
         }
+
+    # -- Books: create an unpublished offer (a draft) --
+
+    # Fixed for every book this page creates, as specified.
+    BOOK_PACKAGE_WEIGHT_KG = 1.0
+    BOOK_PACKAGE_DIMENSIONS_CM = {"length": 25, "width": 25, "height": 10}
+
+    # NOTE ON SHIPPING. An Inventory-API offer carries NO shipping terms: they come
+    # from the seller's account settings, and this account cannot use eBay Business
+    # Policies ("User is not eligible for Business Policy"), so there is nowhere to
+    # attach "Canada Post Regular Parcel" and "UPS Standard Canada" per listing.
+    # The weight and dimensions DO travel, on the inventory item, which is what a
+    # calculated-shipping setting needs to price a quote. The services are chosen
+    # once in eBay's own settings, or by hand in the draft before publishing.
+    BOOKS_CATEGORY_ID = "267"
+    SELLER_HUB_DRAFTS = "https://www.ebay.ca/sh/lst/drafts"
+
+    def create_book_draft(self, db, draft: dict, user_id=None,
+                          credentials: dict = None) -> Dict[str, Any]:
+        """Create an inventory item and an UNPUBLISHED offer, and return the draft.
+
+        An unpublished offer IS an eBay draft: it appears under Seller Hub and can
+        be edited and published there. Nothing goes live, which is what makes this
+        safe to run and safe to test.
+
+        Two calls, in order. The inventory item holds the product and the package,
+        the offer holds the terms; the offer cannot exist without the item.
+
+        Verified against the live account: the item is accepted with the books
+        page's 1kg and 25x25x10, the offer comes back UNPUBLISHED, and neither
+        needs a business policy.
+        """
+        if not credentials:
+            credentials = {}
+
+        token = self.get_token(db, user_id=user_id, credentials=credentials)
+        if not token:
+            raise RuntimeError("eBay is not connected, or its token has expired.")
+
+        marketplace = self._resolve_marketplace(db, token, user_id) or "EBAY_US"
+        headers = self._inventory_headers(token, marketplace)
+
+        sku = (draft.get("sku") or "").strip() or f"BOOK-{int(time.time())}"
+
+        product: Dict[str, Any] = {
+            # eBay truncates the title at 80 characters, so it is cut here rather
+            # than silently on their side.
+            "title": (draft.get("title") or "")[:80],
+            "description": draft.get("description") or "",
+        }
+        images = [u for u in (draft.get("images") or []) if u]
+        if images:
+            product["imageUrls"] = images[:24]
+        aspects = draft.get("aspects") or {}
+        if aspects:
+            product["aspects"] = {
+                str(k): (v if isinstance(v, list) else [str(v)])
+                for k, v in aspects.items() if v not in (None, "")
+            }
+
+        item_body = {
+            "availability": {"shipToLocationAvailability": {
+                "quantity": max(1, int(draft.get("quantity") or 1))}},
+            "condition": self.CONDITION_MAP.get(
+                (draft.get("condition") or "").lower(), "USED_GOOD"),
+            "packageWeightAndSize": {
+                "weight": {"value": self.BOOK_PACKAGE_WEIGHT_KG,
+                           "unit": "KILOGRAM"},
+                "dimensions": {**self.BOOK_PACKAGE_DIMENSIONS_CM,
+                               "unit": "CENTIMETER"},
+            },
+            "product": product,
+        }
+
+        item_resp = httpx.put(
+            f"{EBAY_API_BASE}/sell/inventory/v1/inventory_item/{quote(sku, safe='')}",
+            headers=headers, json=item_body, timeout=60,
+        )
+        if item_resp.status_code not in (200, 201, 204):
+            raise RuntimeError(self._inventory_error(
+                "eBay rejected the book's details", item_resp))
+
+        offer_body = {
+            "sku": sku,
+            "marketplaceId": marketplace,
+            "format": "FIXED_PRICE",
+            "availableQuantity": max(1, int(draft.get("quantity") or 1)),
+            "categoryId": str(draft.get("category_id") or self.BOOKS_CATEGORY_ID),
+            "listingDescription": draft.get("description") or "",
+            "pricingSummary": {
+                "price": {"value": f"{float(draft.get('price') or 0):.2f}",
+                          "currency": draft.get("currency") or "CAD"},
+            },
+        }
+        # Business policies are added only when the seller has them. This account
+        # is not eligible for them, and an offer without the container is accepted
+        # -- verified -- so requiring it would break the working path.
+        policies = draft.get("policies") or {}
+        if any(policies.get(k) for k in
+               ("fulfillment_policy_id", "payment_policy_id", "return_policy_id")):
+            offer_body["listingPolicies"] = {
+                "fulfillmentPolicyId": policies.get("fulfillment_policy_id") or "",
+                "paymentPolicyId": policies.get("payment_policy_id") or "",
+                "returnPolicyId": policies.get("return_policy_id") or "",
+            }
+
+        offer_resp = httpx.post(f"{EBAY_API_BASE}/sell/inventory/v1/offer",
+                                headers=headers, json=offer_body, timeout=60)
+        if offer_resp.status_code not in (200, 201):
+            raise RuntimeError(self._inventory_error(
+                "eBay rejected the draft offer", offer_resp))
+
+        offer_id = (offer_resp.json() or {}).get("offerId")
+        if not offer_id:
+            raise RuntimeError("eBay accepted the offer but returned no offer id.")
+
+        return {
+            "ok": True,
+            "platform": self.PLATFORM,
+            "offer_id": offer_id,
+            "sku": sku,
+            "status": "UNPUBLISHED",
+            "marketplace": marketplace,
+            # Seller Hub has no per-draft URL, so this is the drafts list. It is
+            # still one click from the draft the page just made.
+            "draft_url": self.SELLER_HUB_DRAFTS,
+            "note": ("Draft created. Weight and dimensions are on the item; "
+                     "choose the shipping services in eBay before publishing."),
+        }
+
+    @staticmethod
+    def _inventory_error(prefix: str, resp) -> str:
+        """eBay's own words, plus the status.
+
+        The Inventory API answers a missing header with an error that names a
+        header and reads like a permission problem, so the raw message is worth
+        more than any paraphrase this could invent.
+        """
+        detail = (resp.text or "").strip()[:300]
+        return f"{prefix} (HTTP {resp.status_code}): {detail}"
 
     def _fetch_identity(self, access_token: str) -> dict:
         """The eBay user behind a token: username, immutable userId, and the
