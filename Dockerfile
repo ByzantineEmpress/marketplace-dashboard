@@ -4,9 +4,14 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install system dependencies
+#
+# tesseract-ocr reads the printed ISBN on books too old to carry a barcode, which
+# is the whole reason the books page has an OCR path at all. The English language
+# data is bundled in the base package; --no-install-recommends does not strip it.
 RUN apt-get update && apt-get install -y \
     --no-install-recommends \
     curl \
+    tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (better caching)

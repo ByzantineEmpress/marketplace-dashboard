@@ -2887,3 +2887,65 @@ body[data-card-view="table"] .listing-grid {
 }
 
 
+
+
+/* -- List a Book on eBay ------------------------------------------------- */
+
+.bp { max-width: 900px; margin: 0 auto; padding: 20px 16px 64px; display: flex;
+      flex-direction: column; gap: 16px; }
+.bp-head h1 { margin: 0 0 6px; font-size: 22px; }
+.bp-sub { margin: 0; color: var(--text-muted); font-size: 13px; max-width: 62ch; }
+.bp-card { background: var(--bg-elevated); border: 1px solid var(--border);
+           border-radius: var(--radius-lg); padding: 16px; }
+.bp-h2 { margin: 0 0 12px; font-size: 15px; }
+.bp-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.bp-or { color: var(--text-muted); font-size: 12px; text-transform: uppercase; }
+.bp-manual { display: flex; gap: 8px; flex: 1; min-width: 240px; }
+.bp-manual input { flex: 1; }
+
+/* Big target: this is used one-handed, holding a book. */
+.bp-drop { display: flex; flex-direction: column; gap: 3px; padding: 16px 20px;
+           border: 1px dashed var(--border-strong); border-radius: var(--radius-lg);
+           cursor: pointer; min-width: 200px; }
+.bp-drop:hover { border-color: var(--accent); }
+.bp-drop-cta { font-size: 14px; font-weight: 600; }
+.bp-drop-hint { font-size: 11px; color: var(--text-muted); }
+
+.bp-status { margin: 10px 0 0; font-size: 13px; color: var(--text-muted); min-height: 1em; }
+.bp-preview { margin-top: 10px; max-width: 220px; max-height: 220px;
+              border-radius: 8px; border: 1px solid var(--border); }
+
+.bp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+           gap: 12px; margin-bottom: 12px; }
+.bp-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.bp-field--wide { grid-column: 1 / -1; }
+.bp-field span, .bp-field-label { font-weight: 600; color: var(--text-muted); }
+.bp-field input, .bp-field select, .bp-field textarea { width: 100%; font-family: inherit;
+                                                        font-size: 14px; }
+.bp-field textarea { resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace;
+                     font-size: 12px; line-height: 1.5; }
+.bp-hint { font-size: 11px; color: var(--text-muted); font-style: normal; }
+
+.bp-photos { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.bp-thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
+.bp-thumb { position: relative; width: 64px; height: 64px; }
+.bp-thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: 6px;
+                border: 1px solid var(--border); }
+.bp-thumb button { position: absolute; top: -6px; right: -6px; width: 20px; height: 20px;
+                   border-radius: 50%; border: 1px solid var(--border-strong);
+                   background: var(--bg-elevated); color: var(--text); cursor: pointer;
+                   font-size: 13px; line-height: 1; padding: 0; }
+.bp-add-photo { font-size: 13px; cursor: pointer; color: var(--accent); }
+
+.bp-market { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 10px; }
+.bp-metric { display: flex; flex-direction: column; }
+.bp-metric-num { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bp-metric-label { font-size: 11px; color: var(--text-muted); }
+.bp-links { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0; }
+
+.bp-publish { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.bp-result { width: 100%; padding: 12px; border-radius: 6px; font-size: 13px;
+             border: 1px solid var(--border); text-align: center; }
+.bp-result--ok { border-color: var(--success); }
+.bp-result--fail { border-color: var(--danger); color: var(--danger-text); }
+.btn--lg { padding: 12px 22px; font-size: 15px; }

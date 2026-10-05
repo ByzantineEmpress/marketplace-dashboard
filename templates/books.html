@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="bp">
+
+    <div class="bp-head">
+        <h1>List a Book on eBay</h1>
+        <p class="bp-sub">
+            Photograph the barcode, or type the ISBN. Everything below is filled
+            from the catalogue and is yours to correct before anything is created.
+        </p>
+    </div>
+
+    {# Step 1: get an ISBN, by photo or by hand. #}
+    <section class="bp-card">
+        <div class="bp-row">
+            <label class="bp-drop" for="bp-file">
+                <input type="file" id="bp-file" accept="image/*" capture="environment" hidden>
+                <span class="bp-drop-cta">Photograph the book</span>
+                <span class="bp-drop-hint">The barcode, or the printed ISBN page</span>
+            </label>
+            <div class="bp-or">or</div>
+            <div class="bp-manual">
+                <input type="text" id="bp-isbn" placeholder="Type an ISBN, e.g. 9780140328721">
+                <button type="button" class="btn btn--sm btn--primary" id="bp-lookup-btn">Look up</button>
+            </div>
+        </div>
+        <p class="bp-status" id="bp-scan-status"></p>
+        <img id="bp-preview" class="bp-preview" alt="" hidden>
+    </section>
+
+    {# Step 2: the listing. Every field is editable: catalogue records are wrong
+       often enough that a misread ISBN once returned a completely different book. #}
+    <section class="bp-card" id="bp-listing" hidden>
+        <h2 class="bp-h2">The listing</h2>
+
+        <div class="bp-grid">
+            <label class="bp-field bp-field--wide">
+                <span>Book Title</span>
+                <input type="text" id="bp-title" maxlength="80">
+                <em class="bp-hint"><span id="bp-title-count">0</span>/80 — eBay truncates past 80</em>
+            </label>
+            <label class="bp-field"><span>Author</span><input type="text" id="bp-author"></label>
+            <label class="bp-field"><span>Publisher</span><input type="text" id="bp-publisher"></label>
+            <label class="bp-field"><span>Publication Year</span><input type="text" id="bp-year"></label>
+            <label class="bp-field">
+                <span>Format</span>
+                <select id="bp-format">
+                    <option value="">— pick one —</option>
+                    <option>Hardcover</option>
+                    <option>Hardcover with Dust Jacket</option>
+                    <option>Paperback</option>
+                    <option>Mass Market Paperback</option>
+                    <option>Trade Paperback</option>
+                    <option>Softcover</option>
+                </select>
+            </label>
+            <label class="bp-field"><span>Genre</span><input type="text" id="bp-genre"></label>
+            <label class="bp-field"><span>Topic</span><input type="text" id="bp-topic"></label>
+            <label class="bp-field"><span>ISBN</span><input type="text" id="bp-isbn-final"></label>
+            <label class="bp-field"><span>Your price</span><input type="number" id="bp-price" min="0" step="0.01"></label>
+            <label class="bp-field">
+                <span>Condition</span>
+                <select id="bp-condition">
+                    <option value="very_good">Very good — used</option>
+                    <option value="good" selected>Good — used</option>
+                    <option value="acceptable">Acceptable — used</option>
+                    <option value="like_new">Like new</option>
+                    <option value="new">New</option>
+                </select>
+            </label>
+        </div>
+
+        <label class="bp-field bp-field--wide">
+            <span>Description</span>
+            <textarea id="bp-description" rows="16"></textarea>
+            <em class="bp-hint">Built from the fields above. Edit it freely; the draft uses exactly this text.</em>
+        </label>
+
+        <div class="bp-photos">
+            <span class="bp-field-label">Photos for the listing</span>
+            <div class="bp-thumbs" id="bp-thumbs"></div>
+            <label class="bp-add-photo" for="bp-photos">
+                <input type="file" id="bp-photos" accept="image/*" multiple hidden>
+                + Add photos
+            </label>
+            <em class="bp-hint" id="bp-photo-status"></em>
+        </div>
+    </section>
+
+    {# Step 3: what the market looks like. #}
+    <section class="bp-card" id="bp-market" hidden>
+        <h2 class="bp-h2">The market on eBay</h2>
+        <div class="bp-market">
+            <div class="bp-metric">
+                <span class="bp-metric-num" id="bp-available">—</span>
+                <span class="bp-metric-label">copies listed now</span>
+            </div>
+            <div class="bp-metric">
+                <span class="bp-metric-num" id="bp-average">—</span>
+                <span class="bp-metric-label">average asking price</span>
+            </div>
+            <div class="bp-metric">
+                <span class="bp-metric-num" id="bp-range">—</span>
+                <span class="bp-metric-label">asking range</span>
+            </div>
+        </div>
+        <p class="bp-hint" id="bp-market-note"></p>
+        <div class="bp-links">
+            <a href="#" id="bp-link-active" target="_blank" rel="noopener" class="btn btn--sm btn--outline">See what sellers ask →</a>
+            <a href="#" id="bp-link-sold" target="_blank" rel="noopener" class="btn btn--sm btn--outline">See what they actually SOLD for →</a>
+        </div>
+        <p class="bp-hint">
+            Sold prices are eBay's own data, which this app cannot read. The link
+            opens eBay's sold-and-completed search in a new tab, signed in as you.
+        </p>
+    </section>
+
+    {# Step 4: create it. #}
+    <section class="bp-card bp-publish" id="bp-publish" hidden>
+        <button type="button" class="btn btn--primary btn--lg" id="bp-create-btn">
+            Create eBay draft
+        </button>
+        <p class="bp-hint">
+            Creates an <strong>unpublished</strong> offer: it appears in your eBay
+            drafts to review and publish. Nothing goes live from here.
+        </p>
+        <div class="bp-result" id="bp-result" hidden></div>
+    </section>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/books.js"></script>
+{% endblock %}

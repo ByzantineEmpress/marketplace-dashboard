@@ -88,6 +88,7 @@ jobs:
           # is documented in README.md as an end-to-end check to run by hand.
           SUITES="
             tests/test_book_draft.py
+            tests/test_books_page.py
             tests/test_books.py
             tests/test_data_deletion.py
             tests/test_api_client.py

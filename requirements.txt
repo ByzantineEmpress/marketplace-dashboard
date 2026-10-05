@@ -38,3 +38,14 @@ requests==2.34.2
 # Optional: only needed when UPLOAD_BACKEND=s3 (listing images live in S3
 # instead of static/uploads/). The default local backend does not import it.
 boto3==1.35.90
+
+# Reading an ISBN off a photo of a book, for the books page.
+#
+# zxing-cpp ships as a manylinux wheel, so barcode decoding needs no system
+# packages at all. Pillow is how the uploaded bytes become something it can read.
+# pytesseract is only a wrapper around the tesseract binary, which the Dockerfile
+# installs; OCR is the fallback for books old enough to carry no barcode, where
+# the ISBN is printed as text on the cover or the copyright page.
+Pillow==11.0.0
+zxing-cpp==3.1.1
+pytesseract==0.3.13

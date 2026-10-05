@@ -383,6 +383,20 @@ async def dashboard_page(request: Request):
         context={"identity": user["name"], "is_admin": is_admin, "active": "dashboard"},
     )
 
+@page_router.get("/books")
+async def books_page(request: Request):
+    """List a book on eBay: photograph it, check it, create the draft."""
+    user = require_auth(request)
+    if not user:
+        return RedirectResponse(url="/login?error=auth_required")
+    return templates.TemplateResponse(
+        request=request,
+        name="books.html",
+        context={"identity": user["name"], "active": "books",
+                 "title": "List a Book"},
+    )
+
+
 @page_router.get("/marketplace-settings")
 async def marketplace_settings_page(request: Request):
     """Per-user page for linking the caller's own marketplace accounts.
@@ -2552,6 +2566,130 @@ async def connect_account(body: dict, db: Session = Depends(get_db), user: dict 
         httponly=True, samesite="lax", max_age=600, secure=config.REQUIRE_HTTPS,
     )
     return response
+
+
+@api_router.post("/books/scan")
+async def books_scan(file: UploadFile = File(...),
+                     _user: dict = Depends(check_auth)):
+    """Read an ISBN from a photo of a book.
+
+    Barcode first, printed text second for the books old enough to have no
+    barcode. The reply says which method found it, because the two are not equally
+    trustworthy and the seller should know which one they are relying on.
+    """
+    from src import books as books_mod
+
+    if not file.filename:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "No image uploaded."})
+
+    contents = await file.read(12 * 1024 * 1024)
+    if not contents:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "The file is empty."})
+
+    # Off the event loop: reading a barcode is quick, OCR on a large photo is not.
+    result = await asyncio.to_thread(books_mod.isbn_from_image, contents)
+    return {"ok": bool(result.get("isbn")), **result}
+
+
+@api_router.get("/books/lookup")
+async def books_lookup(isbn: str = "", db: Session = Depends(get_db),
+                       user: dict = Depends(check_auth)):
+    """Everything the page needs for one ISBN, in one call.
+
+    Metadata, the description built from it, what the market looks like, and the
+    eBay search links. Assembled here rather than in the browser so the page has
+    one thing to render and no way to show a half-filled form.
+    """
+    from src import books as books_mod
+    from src.adapters import get_adapter
+    from src.marketplace_sync import user_credentials
+    from src.models import MarketplaceAccount
+
+    def gather():
+        meta = books_mod.lookup_book(isbn)
+        urls = books_mod.search_urls(meta, "EBAY_CA")
+
+        market = {"available": 0, "average_asking": None, "error": None}
+        account = (db.query(MarketplaceAccount)
+                   .filter(MarketplaceAccount.platform == "ebay").first())
+        if account:
+            credentials = user_credentials(db, account.user_id, "ebay")
+            adapter = get_adapter("ebay")
+            token = adapter.get_token(db, user_id=account.user_id,
+                                      credentials=credentials)
+            if token:
+                marketplace = (adapter._resolve_marketplace(db, token, account.user_id)
+                               or "EBAY_CA")
+                market = books_mod.active_market(meta["isbn13"],
+                                                 token["access_token"], marketplace)
+                urls = books_mod.search_urls(meta, marketplace)
+
+        return {
+            "meta": meta,
+            "description": books_mod.build_description(meta),
+            "market": market,
+            "links": urls,
+        }
+
+    try:
+        payload = await asyncio.to_thread(gather)
+    except books_mod.BooksError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+    return {"ok": True, **payload}
+
+
+@api_router.post("/books/draft")
+async def books_draft(body: dict, db: Session = Depends(get_db),
+                      user: dict = Depends(check_auth)):
+    """Create the eBay draft for one book.
+
+    An unpublished offer, so nothing goes up for sale. It still writes to the
+    seller's real account, so it needs the same explicit confirmation the publish
+    endpoint did.
+    """
+    from src.adapters import get_adapter
+    from src.marketplace_sync import user_credentials
+    from src.models import MarketplaceAccount
+
+    if not body.get("confirm"):
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False,
+                     "error": "Not confirmed. This creates a draft on your eBay "
+                              "account."})
+    draft = body.get("draft") or {}
+    if not (draft.get("title") or "").strip():
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "A title is required."})
+    try:
+        price = float(draft.get("price") or 0)
+    except (TypeError, ValueError):
+        price = 0
+    if price <= 0:
+        return JSONResponse(status_code=400,
+                            content={"ok": False,
+                                     "error": "A price above zero is required."})
+
+    account = (db.query(MarketplaceAccount)
+               .filter(MarketplaceAccount.platform == "ebay").first())
+    if not account:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "eBay is not connected."})
+
+    try:
+        credentials = user_credentials(db, account.user_id, "ebay")
+        result = await asyncio.to_thread(
+            get_adapter("ebay").create_book_draft, db, draft,
+            account.user_id, credentials)
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+    return {"ok": True, **result}
 
 
 @api_router.post("/accounts/sync-all")

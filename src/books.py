@@ -310,6 +310,150 @@ def build_description(meta: Dict[str, Any], condition: str = "",
     return "\n\n".join(p for p in parts if p).strip()
 
 
+# -- Reading an ISBN off a photo -------------------------------------------
+
+# OCR reads the hyphen as a space, a 1 as an l and an 8 as a B often enough that
+# accepting only clean digits would miss most old books. These are the swaps that
+# actually turn up on an ISBN string.
+_OCR_CONFUSIONS = str.maketrans({
+    "O": "0", "o": "0", "Q": "0", "D": "0",
+    # Both cases, and i. OCR output is routinely upper-cased, and a table holding
+    # only the lower-case forms silently fails on it: an ISBN ending "...-l"
+    # arrives as "...-L" and is left untranslated.
+    "l": "1", "L": "1", "I": "1", "i": "1", "|": "1", "!": "1",
+    "S": "5", "s": "5", "B": "8", "Z": "2", "z": "2",
+    "G": "6", "b": "6", "g": "9", "q": "9", "A": "4",
+})
+
+# The character classes include the letters OCR substitutes for digits, not just
+# digits, because an ISBN very often ENDS on one: "978-O14-O32872-l" has a
+# misread 1 at the end, and a class of [0-9X] stops the match one character short
+# and yields a completely different, wrong-length candidate.
+_ISBN_EDGE = "0-9XxOXolI|!"
+_ISBN_MIDDLE = "0-9XxOXolI|!\\-\\s"
+_ISBN_CANDIDATE = re.compile(
+    rf"[{_ISBN_EDGE}][{_ISBN_MIDDLE}]{{8,20}}[{_ISBN_EDGE}]")
+
+
+def _candidates_from_text(text: str) -> List[str]:
+    """Every plausible ISBN in a block of OCR output, best first.
+
+    Validation is left to normalise_isbn: the check digit is what decides whether
+    a candidate is real, so this only has to be generous enough not to throw the
+    right answer away before it gets there.
+    """
+    found: List[str] = []
+
+    def add(value: str) -> None:
+        # The confusions are applied BEFORE the non-digits are stripped. Doing it
+        # the other way round throws away exactly the characters that need
+        # translating: "978-O14-O32872-l" stripped first becomes "9781432872",
+        # which is the right length and the wrong ISBN.
+        upper = value.upper()
+        for form in (upper, upper.translate(_OCR_CONFUSIONS)):
+            cleaned = re.sub(r"[^0-9X]", "", form)
+            if len(cleaned) in (10, 13) and cleaned not in found:
+                found.append(cleaned)
+
+    # A line mentioning ISBN is the strongest signal on the page, so those go
+    # first. The letters are spaced out because OCR routinely splits them.
+    for line in text.splitlines():
+        if re.search(r"i\s*s\s*b\s*n", line, re.IGNORECASE):
+            for match in _ISBN_CANDIDATE.findall(line):
+                add(match)
+
+    for match in _ISBN_CANDIDATE.findall(text):
+        add(match)
+
+    for run in re.findall(r"\d[\d\s\-]{8,}\d", text):
+        add(run)
+
+    return found
+
+
+def isbn_from_image(data: bytes) -> Dict[str, Any]:
+    """Read an ISBN from a photo, by barcode first and printed text second.
+
+    The barcode is tried first because it is exact: a decoded EAN-13 either has a
+    valid check digit or it does not, so there is nothing to interpret. The printed
+    ISBN is the fallback for books old enough to predate barcodes, and it is OCR,
+    so every candidate goes through the same check-digit validation and the first
+    that passes wins. That is what stops a misread becoming a confidently wrong
+    book -- which matters, because a wrong ISBN silently lists the wrong title.
+    """
+    result: Dict[str, Any] = {
+        "isbn": None, "method": None, "candidates": [], "raw_text": "",
+        "error": None,
+    }
+    if not data:
+        result["error"] = "No image was uploaded."
+        return result
+
+    # 1. Barcode.
+    try:
+        import io as _io
+
+        import zxingcpp
+        from PIL import Image
+
+        image = Image.open(_io.BytesIO(data))
+        for barcode in zxingcpp.read_barcodes(image) or []:
+            text = (getattr(barcode, "text", "") or "").strip()
+            if not text:
+                continue
+            result["candidates"].append(text)
+            try:
+                normalised = normalise_isbn(text)
+            except BooksError:
+                continue
+            result["isbn"] = normalised["isbn13"]
+            result["method"] = "barcode"
+            return result
+    except ImportError as exc:
+        result["error"] = f"Barcode reading is unavailable: {exc}"
+    except Exception as exc:
+        result["error"] = f"Could not read a barcode: {exc}"
+
+    # 2. Printed ISBN, for books too old to have one.
+    try:
+        import io as _io
+
+        import pytesseract
+        from PIL import Image
+
+        image = Image.open(_io.BytesIO(data)).convert("L")
+        # Enlarged and greyscaled: tesseract does markedly better on a small ISBN
+        # string that has been scaled up than on the raw photo.
+        if min(image.size) < 1000:
+            image = image.resize((image.width * 2, image.height * 2))
+        text = pytesseract.image_to_string(image, config="--psm 6")
+        result["raw_text"] = text[:2000]
+
+        # _candidates_from_text already offers a confusion-corrected variant of
+        # each match, so these only need validating.
+        for candidate in _candidates_from_text(text):
+            try:
+                normalised = normalise_isbn(candidate)
+            except BooksError:
+                continue
+            result["candidates"].append(candidate)
+            result["isbn"] = normalised["isbn13"]
+            result["method"] = "printed"
+            return result
+
+        if not result["error"]:
+            result["error"] = ("No ISBN found in that image. Type it in, or try a "
+                               "closer photo of the barcode or the copyright page.")
+    except ImportError as exc:
+        if not result["error"]:
+            result["error"] = f"Text reading is unavailable: {exc}"
+    except Exception as exc:
+        if not result["error"]:
+            result["error"] = f"Could not read text: {exc}"
+
+    return result
+
+
 # -- Market ----------------------------------------------------------------
 
 # Deliberately NOT filtered by category.
