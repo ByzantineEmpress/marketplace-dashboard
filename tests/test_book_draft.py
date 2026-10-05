@@ -38,6 +38,7 @@ class BookDraftTest(unittest.TestCase):
         self.adapter = get_adapter("ebay")
         self.calls = []
         self._put, self._post = ebay_mod.httpx.put, ebay_mod.httpx.post
+        self._get = ebay_mod.httpx.get
 
         # A token and a resolved marketplace, without touching the network.
         self.adapter.get_token = lambda *a, **k: {"access_token": "tok"}
@@ -46,8 +47,20 @@ class BookDraftTest(unittest.TestCase):
 
     def tearDown(self):
         self.mod.httpx.put, self.mod.httpx.post = self._put, self._post
+        self.mod.httpx.get = self._get
 
-    def _serve(self, put_status=204, offer_status=201, offer_id="123"):
+    def _serve(self, put_status=204, offer_status=201, offer_id="123",
+               locations=None):
+        if locations is None:
+            locations = [{"merchantLocationKey": "FrederictonHome",
+                          "merchantLocationStatus": "ENABLED"}]
+
+        def fake_get(url, **kwargs):
+            self.calls.append(("GET", url, kwargs))
+            if "/location" in url:
+                return _Resp(200, {"locations": locations})
+            return _Resp(200, {})
+
         def fake_put(url, **kwargs):
             self.calls.append(("PUT", url, kwargs))
             return _Resp(put_status, {}, "item rejected")
@@ -57,6 +70,7 @@ class BookDraftTest(unittest.TestCase):
             return _Resp(offer_status, {"offerId": offer_id} if offer_id else {},
                          "offer rejected")
 
+        self.mod.httpx.get = fake_get
         self.mod.httpx.put, self.mod.httpx.post = fake_put, fake_post
 
     DRAFT = {
@@ -116,11 +130,46 @@ class BookDraftTest(unittest.TestCase):
         self.assertEqual(result["offer_id"], "123")
         self.assertIn("sh/lst/drafts", result["draft_url"])
 
-    def test_the_item_is_created_before_the_offer(self):
-        """The offer cannot exist without its inventory item."""
+    def test_the_sellers_location_is_attached_to_the_offer(self):
+        """An offer with no location is incomplete: it existed over the API but
+        never showed in Seller Hub's drafts, so the seller saw nothing created."""
         self._serve()
         self.adapter.create_book_draft(None, self.DRAFT, user_id=1)
-        self.assertEqual([c[0] for c in self.calls], ["PUT", "POST"])
+
+        post = [c for c in self.calls if c[0] == "POST"][0]
+        self.assertEqual(post[2]["json"]["merchantLocationKey"], "FrederictonHome")
+
+    def test_only_an_enabled_location_is_used(self):
+        self._serve(locations=[
+            {"merchantLocationKey": "Disabled", "merchantLocationStatus": "DISABLED"},
+            {"merchantLocationKey": "Live", "merchantLocationStatus": "ENABLED"},
+        ])
+        self.adapter.create_book_draft(None, self.DRAFT, user_id=1)
+        post = [c for c in self.calls if c[0] == "POST"][0]
+        self.assertEqual(post[2]["json"]["merchantLocationKey"], "Live")
+
+    def test_an_account_with_no_location_still_creates_a_draft(self):
+        """Better an incomplete draft than a failure: the seller can add a location
+        in eBay, and refusing outright would block the whole page."""
+        self._serve(locations=[])
+        result = self.adapter.create_book_draft(None, self.DRAFT, user_id=1)
+        self.assertTrue(result["ok"])
+        post = [c for c in self.calls if c[0] == "POST"][0]
+        self.assertNotIn("merchantLocationKey", post[2]["json"])
+
+    def test_a_location_lookup_failure_does_not_stop_the_draft(self):
+        self._serve()
+        self.mod.httpx.get = lambda url, **k: _Resp(500, {}, "boom")
+        result = self.adapter.create_book_draft(None, self.DRAFT, user_id=1)
+        self.assertTrue(result["ok"])
+
+    def test_the_item_is_created_before_the_offer(self):
+        """The offer cannot exist without its inventory item. The location lookup
+        in between is a read and does not matter to the ordering."""
+        self._serve()
+        self.adapter.create_book_draft(None, self.DRAFT, user_id=1)
+        mutations = [c[0] for c in self.calls if c[0] in ("PUT", "POST")]
+        self.assertEqual(mutations, ["PUT", "POST"])
 
     def test_a_rejected_item_stops_before_the_offer(self):
         self._serve(put_status=400)

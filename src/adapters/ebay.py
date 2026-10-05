@@ -610,6 +610,29 @@ class eBayAdapter(MarketplaceAdapter):
     BOOKS_CATEGORY_ID = "267"
     SELLER_HUB_DRAFTS = "https://www.ebay.ca/sh/lst/drafts"
 
+    def enabled_location_key(self, token: dict, marketplace: str) -> str:
+        """The seller's first enabled inventory location, or "".
+
+        An offer needs one. It is the shipping origin that calculated shipping
+        prices a quote from, and an offer without it is incomplete -- which is how
+        a draft came to exist over the API while not showing up in Seller Hub.
+
+        Read from the account rather than configured here, so no address lives in
+        this codebase and the seller keeps control of what buyers are quoted from.
+        """
+        try:
+            resp = httpx.get(f"{EBAY_API_BASE}/sell/inventory/v1/location",
+                             headers=self._inventory_headers(token, marketplace),
+                             timeout=40)
+            if resp.status_code != 200:
+                return ""
+            for loc in (resp.json() or {}).get("locations") or []:
+                if (loc.get("merchantLocationStatus") or "").upper() == "ENABLED":
+                    return loc.get("merchantLocationKey") or ""
+        except Exception:
+            return ""
+        return ""
+
     def create_book_draft(self, db, draft: dict, user_id=None,
                           credentials: dict = None) -> Dict[str, Any]:
         """Create an inventory item and an UNPUBLISHED offer, and return the draft.
@@ -699,6 +722,18 @@ class eBayAdapter(MarketplaceAdapter):
                 "returnPolicyId": policies.get("return_policy_id") or "",
             }
 
+        # The location is the shipping origin and a required part of a complete
+        # offer. Without it the draft existed over the API but never appeared in
+        # Seller Hub's drafts list, which read to the seller as "nothing was
+        # created".
+        location = self.enabled_location_key(token, marketplace)
+        if location:
+            offer_body["merchantLocationKey"] = location
+
+        # NOTE: updateOffer (PUT) REPLACES the offer -- whatever is not in the body
+        # is removed. Adding the location to an existing draft with a partial PUT
+        # silently wiped its price, description, category and quantity. Any future
+        # change to an offer must send every field back, not just the changed one.
         offer_resp = httpx.post(f"{EBAY_API_BASE}/sell/inventory/v1/offer",
                                 headers=headers, json=offer_body, timeout=60)
         if offer_resp.status_code not in (200, 201):
