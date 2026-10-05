@@ -84,10 +84,16 @@ class BookDraftTest(unittest.TestCase):
         self._serve()
         self.adapter.create_book_draft(None, self.DRAFT, user_id=1)
 
-        for method, _url, kwargs in self.calls:
+        # Scoped to the Inventory API on purpose: Content-Language is its
+        # requirement, and the Taxonomy reads that resolve the category have no
+        # business sending it.
+        inventory = [c for c in self.calls
+                     if "/sell/inventory/" in str(c[1]) and c[0] in ("PUT", "POST")]
+        self.assertTrue(inventory, "no inventory calls were made")
+        for method, url, kwargs in inventory:
             headers = kwargs.get("headers") or {}
             self.assertEqual(headers.get("Content-Language"), "en-CA",
-                             f"{method} went out without Content-Language")
+                             f"{method} {url} went out without Content-Language")
 
     def test_the_weight_and_dimensions_are_what_was_specified(self):
         self._serve()
@@ -129,6 +135,33 @@ class BookDraftTest(unittest.TestCase):
         self.assertEqual(result["status"], "UNPUBLISHED")
         self.assertEqual(result["offer_id"], "123")
         self.assertIn("sh/lst/drafts", result["draft_url"])
+
+    def test_no_us_parent_category_is_used(self):
+        """267 is the US Books PARENT and is not a leaf. eBay accepts an offer
+        built on it -- 201, no complaint -- and then never surfaces it, so the
+        draft existed over the API and nowhere in Seller Hub."""
+        self._serve()
+        self.adapter.create_book_draft(None, self.DRAFT, user_id=1)
+        post = [c for c in self.calls if c[0] == "POST"][0]
+        self.assertNotEqual(post[2]["json"]["categoryId"], "267")
+        self.assertTrue(post[2]["json"]["categoryId"])
+
+    def test_a_leaf_from_the_taxonomy_is_preferred(self):
+        self._serve()
+        self.adapter.suggest_categories = lambda *a, **k: [
+            {"id": "261186", "name": "Books", "path": "Books & Magazines > Books"},
+        ]
+        self.adapter.category_aspects = lambda *a, **k: {"aspects": []}
+        self.adapter.create_book_draft(None, self.DRAFT, user_id=1)
+        post = [c for c in self.calls if c[0] == "POST"][0]
+        self.assertEqual(post[2]["json"]["categoryId"], "261186")
+
+    def test_a_caller_supplied_category_wins(self):
+        self._serve()
+        self.adapter.create_book_draft(
+            None, dict(self.DRAFT, category_id="29223"), user_id=1)
+        post = [c for c in self.calls if c[0] == "POST"][0]
+        self.assertEqual(post[2]["json"]["categoryId"], "29223")
 
     def test_the_sellers_location_is_attached_to_the_offer(self):
         """An offer with no location is incomplete: it existed over the API but

@@ -607,7 +607,11 @@ class eBayAdapter(MarketplaceAdapter):
     # The weight and dimensions DO travel, on the inventory item, which is what a
     # calculated-shipping setting needs to price a quote. The services are chosen
     # once in eBay's own settings, or by hand in the draft before publishing.
-    BOOKS_CATEGORY_ID = "267"
+    # Fallback books category per marketplace, used only when the taxonomy lookup
+    # returns nothing. These are LEAF categories -- see books_category_id.
+    BOOKS_LEAF_CATEGORY = {
+        "EBAY_CA": "261186",   # Books & Magazines > Books
+    }
     SELLER_HUB_DRAFTS = "https://www.ebay.ca/sh/lst/drafts"
 
     def enabled_location_key(self, token: dict, marketplace: str) -> str:
@@ -632,6 +636,50 @@ class eBayAdapter(MarketplaceAdapter):
         except Exception:
             return ""
         return ""
+
+    def books_category_id(self, token: dict, marketplace: str,
+                          query: str = "") -> str:
+        """A LEAF category to file a book under, for this marketplace.
+
+        Being a leaf is not cosmetic, and this is the bug that hid every draft.
+        eBay ACCEPTS an offer created against a non-leaf category -- 201, no
+        complaint -- and then never surfaces it. The offer exists over the API and
+        appears nowhere in Seller Hub, which reads to the seller as "no draft was
+        created". The US parent id 267 was hardcoded here, and 267 is not a leaf:
+
+            get_item_aspects_for_category(267) -> 400
+            "The specified category ID must be a leaf category."
+
+        261186 is the EBAY_CA books leaf. The title is tried first so the book
+        lands on the right shelf, then the generic word, since suggestions are the
+        only browsable way into a category tree of this size. Each candidate is
+        checked for leaf-ness before it is used, because eBay's suggestions are not
+        guaranteed to be leaves.
+        """
+        candidates: List[str] = []
+        for phrase in ((query or "").strip(), "books"):
+            if not phrase:
+                continue
+            for suggestion in self.suggest_categories(token, marketplace, phrase):
+                # suggest_categories reshapes eBay's reply to {id, name, path}, so
+                # this reads "id" and not eBay's nested "category" object. Reading
+                # the wrong key found nothing and quietly fell back every time.
+                cid = str((suggestion or {}).get("id") or "").strip()
+                if cid and cid not in candidates:
+                    candidates.append(cid)
+
+        # Capped: each check is a round trip, and the right answer is always near
+        # the top of a suggestion list.
+        for cid in candidates[:3]:
+            try:
+                if self.category_aspects(token, marketplace, cid):
+                    return cid
+            except Exception:
+                continue
+
+        if candidates:
+            return candidates[0]
+        return self.BOOKS_LEAF_CATEGORY.get(marketplace, "261186")
 
     def create_book_draft(self, db, draft: dict, user_id=None,
                           credentials: dict = None) -> Dict[str, Any]:
@@ -698,12 +746,19 @@ class eBayAdapter(MarketplaceAdapter):
             raise RuntimeError(self._inventory_error(
                 "eBay rejected the book's details", item_resp))
 
+        # A LEAF category, resolved for this marketplace. Not 267: that is the US
+        # parent, and using it made eBay accept the offer and then hide it.
+        category = str(draft.get("category_id") or "").strip()
+        if not category:
+            category = self.books_category_id(
+                token, marketplace, draft.get("title") or "")
+
         offer_body = {
             "sku": sku,
             "marketplaceId": marketplace,
             "format": "FIXED_PRICE",
             "availableQuantity": max(1, int(draft.get("quantity") or 1)),
-            "categoryId": str(draft.get("category_id") or self.BOOKS_CATEGORY_ID),
+            "categoryId": category,
             "listingDescription": draft.get("description") or "",
             "pricingSummary": {
                 "price": {"value": f"{float(draft.get('price') or 0):.2f}",
