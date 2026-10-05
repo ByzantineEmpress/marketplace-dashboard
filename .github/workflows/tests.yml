@@ -89,6 +89,7 @@ jobs:
           SUITES="
             tests/test_book_draft.py
             tests/test_google_books_key.py
+            tests/test_settings_smoke.py
             tests/test_books_page.py
             tests/test_books.py
             tests/test_data_deletion.py

@@ -106,28 +106,28 @@
         const saveBtn = el("button", "btn btn--primary", "Save");
         saveBtn.type = "button";
 
+        // These are created for every platform and their click handlers are wired
+        // further down. They must NOT be declared inside the `if` below: const is
+        // block-scoped, so declaring them in there left every later reference
+        // throwing "connectBtn is not defined" for a platform without a Connect
+        // button -- which aborted the whole render loop and emptied the page.
+        // Only the appending is conditional, which is what actually hides them.
+        const connectBtn = el("button", "btn btn--success", "Connect");
+        connectBtn.type = "button";
+        if (!info.is_configured) {
+            connectBtn.disabled = true;
+            connectBtn.title = "Save your credentials first.";
+        }
+
+        const syncBtn = el("button", "btn btn--outline", "Sync now");
+        syncBtn.type = "button";
+
         actions.appendChild(saveBtn);
 
-        // Connect, Sync and Disconnect only mean something for a marketplace with
-        // an OAuth flow. A plain API key (Google Books) has none: Connect would
-        // invite a click that cannot work, Sync would have nothing to fetch, and
-        // "Disconnect & delete data" would offer to delete listings it never had.
+        // Connect and Sync only mean something for a marketplace with an OAuth
+        // flow. A plain API key (Google Books) has none: Connect would invite a
+        // click that cannot work and Sync would have nothing to fetch.
         if (info.connectable) {
-            // Connect runs the marketplace's own OAuth flow. Necessary but not
-            // sufficient to just save keys: the API credentials identify the
-            // application, while an access token authorises reading THIS user's
-            // shop. Without it a sync has nothing to authenticate with, which is
-            // exactly the "no valid access token" message this button prevents.
-            const connectBtn = el("button", "btn btn--success", "Connect");
-            connectBtn.type = "button";
-            if (!info.is_configured) {
-                connectBtn.disabled = true;
-                connectBtn.title = "Save your credentials first.";
-            }
-
-            const syncBtn = el("button", "btn btn--outline", "Sync now");
-            syncBtn.type = "button";
-
             actions.appendChild(connectBtn);
             actions.appendChild(syncBtn);
         }
