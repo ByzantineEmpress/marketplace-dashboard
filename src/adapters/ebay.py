@@ -1170,17 +1170,25 @@ class eBayAdapter(MarketplaceAdapter):
             "<ShippingDetails>"
             "<ShippingType>Calculated</ShippingType>"
             "<CalculatedShippingRate>"
-            # measurementSystem, NOT unit. Sending unit="kg" / unit="cm" is accepted
-            # as XML and rejected as data: errorId 717 "package weight is not valid"
-            # and 21917177 "enter valid dimensions", with perfectly correct numbers.
-            f"<WeightMajor measurementSystem=\"Metric\">{weight_kg}</WeightMajor>"
-            "<WeightMinor measurementSystem=\"Metric\">0</WeightMinor>"
-            f"<PackageLength measurementSystem=\"Metric\">{dims['length']}"
+            # BOTH attributes, and the units spelled eBay's way. This is not
+            # guessed: it is the shape read back from one of this seller's own live
+            # listings via GetItem. Sending unit alone is accepted as XML and
+            # rejected as data (errorId 717 "package weight is not valid",
+            # 21917177 "enter valid dimensions"); sending measurementSystem alone
+            # fails the same way. Note gm, not g.
+            f"<WeightMajor measurementSystem=\"Metric\" unit=\"kg\">{weight_kg}"
+            "</WeightMajor>"
+            "<WeightMinor measurementSystem=\"Metric\" unit=\"gm\">0</WeightMinor>"
+            f"<PackageLength measurementSystem=\"Metric\" unit=\"cm\">{dims['length']}"
             "</PackageLength>"
-            f"<PackageWidth measurementSystem=\"Metric\">{dims['width']}"
+            f"<PackageWidth measurementSystem=\"Metric\" unit=\"cm\">{dims['width']}"
             "</PackageWidth>"
-            f"<PackageDepth measurementSystem=\"Metric\">{dims['height']}"
+            f"<PackageDepth measurementSystem=\"Metric\" unit=\"cm\">{dims['height']}"
             "</PackageDepth>"
+            # A book is a padded envelope or a parcel; this is the value the
+            # seller's own listings use.
+            "<ShippingIrregular>false</ShippingIrregular>"
+            "<ShippingPackage>ParcelOrPaddedEnvelope</ShippingPackage>"
             "</CalculatedShippingRate>"
             # eBay requires a return policy on the listing even when the account has
             # no business policies. 30 days, buyer pays return postage.
