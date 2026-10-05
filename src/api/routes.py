@@ -397,6 +397,25 @@ async def books_page(request: Request):
     )
 
 
+@page_router.get("/books/drafts")
+async def book_drafts_page(request: Request):
+    """The seller's unpublished eBay offers.
+
+    eBay's own drafts page does not list offers created through the Inventory API,
+    which is why this page exists: without it a draft is invisible until it is
+    published, and there is nowhere to review it.
+    """
+    user = require_auth(request)
+    if not user:
+        return RedirectResponse(url="/login?error=auth_required")
+    return templates.TemplateResponse(
+        request=request,
+        name="book_drafts.html",
+        context={"identity": user["name"], "active": "books",
+                 "title": "Book Drafts"},
+    )
+
+
 @page_router.get("/marketplace-settings")
 async def marketplace_settings_page(request: Request):
     """Per-user page for linking the caller's own marketplace accounts.
@@ -2719,6 +2738,118 @@ async def books_draft(body: dict, db: Session = Depends(get_db),
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
     return {"ok": True, **result}
+
+
+@api_router.get("/books/drafts")
+async def books_drafts(db: Session = Depends(get_db),
+                       _user: dict = Depends(check_auth)):
+    """The caller's unpublished eBay offers -- the drafts, since eBay's own drafts
+    page does not show offers created through the Inventory API."""
+    from src.adapters import get_adapter
+    from src.marketplace_sync import user_credentials
+    from src.models import MarketplaceAccount
+
+    account = (db.query(MarketplaceAccount)
+               .filter(MarketplaceAccount.platform == "ebay").first())
+    if not account:
+        return {"ok": False, "error": "eBay is not connected.", "drafts": []}
+
+    def gather():
+        credentials = user_credentials(db, account.user_id, "ebay")
+        adapter = get_adapter("ebay")
+        token = adapter.get_token(db, user_id=account.user_id,
+                                  credentials=credentials)
+        if not token:
+            raise RuntimeError("eBay is not connected, or its token has expired.")
+        marketplace = (adapter._resolve_marketplace(db, token, account.user_id)
+                       or "EBAY_CA")
+        return adapter.list_book_drafts(token, marketplace)
+
+    try:
+        drafts = await asyncio.to_thread(gather)
+    except Exception as exc:
+        return JSONResponse(status_code=500,
+                            content={"ok": False, "error": str(exc), "drafts": []})
+    return {"ok": True, "drafts": drafts, "count": len(drafts)}
+
+
+@api_router.post("/books/drafts/{offer_id}/publish")
+async def books_draft_publish(offer_id: str, body: dict = None,
+                              db: Session = Depends(get_db),
+                              _user: dict = Depends(check_auth)):
+    """Put an unpublished offer on sale.
+
+    This is the point of no return: it creates a live listing that buyers can buy.
+    The confirmation is explicit and separate from the delete path, because one of
+    these is reversible and the other is not.
+    """
+    from src.adapters import get_adapter
+    from src.marketplace_sync import user_credentials
+    from src.models import MarketplaceAccount
+
+    if not (body or {}).get("confirm"):
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False,
+                     "error": "Not confirmed. Publishing creates a live eBay "
+                              "listing that buyers can purchase."})
+
+    account = (db.query(MarketplaceAccount)
+               .filter(MarketplaceAccount.platform == "ebay").first())
+    if not account:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "eBay is not connected."})
+
+    def publish():
+        credentials = user_credentials(db, account.user_id, "ebay")
+        adapter = get_adapter("ebay")
+        token = adapter.get_token(db, user_id=account.user_id,
+                                  credentials=credentials)
+        if not token:
+            raise RuntimeError("eBay is not connected, or its token has expired.")
+        marketplace = (adapter._resolve_marketplace(db, token, account.user_id)
+                       or "EBAY_CA")
+        return adapter.publish_offer(token, marketplace, offer_id)
+
+    try:
+        result = await asyncio.to_thread(publish)
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+    return {"ok": True, **result}
+
+
+@api_router.delete("/books/drafts/{offer_id}")
+async def books_draft_delete(offer_id: str, sku: str = "",
+                             db: Session = Depends(get_db),
+                             _user: dict = Depends(check_auth)):
+    """Delete an unpublished offer. Reversible only in the sense that the draft can
+    be created again -- nothing is live, so nothing is lost from eBay."""
+    from src.adapters import get_adapter
+    from src.marketplace_sync import user_credentials
+    from src.models import MarketplaceAccount
+
+    account = (db.query(MarketplaceAccount)
+               .filter(MarketplaceAccount.platform == "ebay").first())
+    if not account:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "eBay is not connected."})
+
+    def remove():
+        credentials = user_credentials(db, account.user_id, "ebay")
+        adapter = get_adapter("ebay")
+        token = adapter.get_token(db, user_id=account.user_id,
+                                  credentials=credentials)
+        if not token:
+            raise RuntimeError("eBay is not connected, or its token has expired.")
+        marketplace = (adapter._resolve_marketplace(db, token, account.user_id)
+                       or "EBAY_CA")
+        return adapter.delete_draft(token, marketplace, offer_id, sku)
+
+    try:
+        await asyncio.to_thread(remove)
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+    return {"ok": True, "offer_id": offer_id}
 
 
 @api_router.post("/accounts/sync-all")

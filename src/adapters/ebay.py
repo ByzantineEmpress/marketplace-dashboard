@@ -692,6 +692,124 @@ class eBayAdapter(MarketplaceAdapter):
 
         return self.BOOKS_LEAF_CATEGORY.get(marketplace, "261186")
 
+    def list_book_drafts(self, token: dict, marketplace: str) -> List[Dict[str, Any]]:
+        """Every unpublished offer this seller has, newest first.
+
+        These ARE the drafts. eBay's Seller Hub drafts list does not show offers
+        created through the Inventory API -- verified repeatedly, with a valid leaf
+        category, a price and a merchant location all set -- so the seller has no
+        eBay-side page to look at. This is that page.
+
+        eBay's offer list endpoint will not list by marketplace alone (it answers
+        "invalid value for a SKU"), so the inventory items are walked and each
+        one's offers read. Two calls per draft, which is nothing at this size.
+        """
+        headers = self._inventory_headers(token, marketplace)
+        base = f"{EBAY_API_BASE}/sell/inventory/v1"
+        drafts: List[Dict[str, Any]] = []
+
+        try:
+            resp = httpx.get(f"{base}/inventory_item", headers=headers,
+                             params={"limit": 100}, timeout=60)
+            if resp.status_code != 200:
+                return []
+            items = (resp.json() or {}).get("inventoryItems") or []
+        except Exception:
+            return []
+
+        for item in items:
+            sku = item.get("sku") or ""
+            if not sku:
+                continue
+            product = item.get("product") or {}
+            try:
+                o = httpx.get(f"{base}/offer", headers=headers,
+                              params={"sku": sku, "limit": 20}, timeout=40)
+                if o.status_code != 200:
+                    continue
+                offers = (o.json() or {}).get("offers") or []
+            except Exception:
+                continue
+
+            for summary in offers:
+                offer_id = summary.get("offerId")
+                if not offer_id:
+                    continue
+                detail = {}
+                try:
+                    d = httpx.get(f"{base}/offer/{offer_id}", headers=headers,
+                                  timeout=40)
+                    detail = d.json() if d.status_code == 200 else {}
+                except Exception:
+                    detail = {}
+
+                price = ((detail.get("pricingSummary") or {}).get("price") or {})
+                drafts.append({
+                    "offer_id": offer_id,
+                    "sku": sku,
+                    "status": detail.get("status") or summary.get("status") or "",
+                    "title": product.get("title") or "",
+                    "price": price.get("value") or "",
+                    "currency": price.get("currency") or "CAD",
+                    "category_id": detail.get("categoryId") or "",
+                    "quantity": detail.get("availableQuantity") or 1,
+                    "location": detail.get("merchantLocationKey") or "",
+                    "description": detail.get("listingDescription") or "",
+                    "image": (product.get("imageUrls") or [None])[0],
+                    "marketplace": detail.get("marketplaceId") or marketplace,
+                })
+
+        # Newest first: the offer id is not a timestamp, so order by sku, which is
+        # generated from one when this page creates the draft.
+        drafts.sort(key=lambda d: str(d.get("sku") or ""), reverse=True)
+        return drafts
+
+    def publish_offer(self, token: dict, marketplace: str,
+                      offer_id: str) -> Dict[str, Any]:
+        """Publish an unpublished offer, making it a live listing.
+
+        There is no confirmation to give eBay and nothing to undo from here: this
+        is the step that puts the item on sale. Every caller must have asked the
+        seller first.
+        """
+        headers = self._inventory_headers(token, marketplace)
+        resp = httpx.post(
+            f"{EBAY_API_BASE}/sell/inventory/v1/offer/{offer_id}/publish",
+            headers=headers, timeout=90)
+        if resp.status_code not in (200, 201):
+            raise RuntimeError(self._inventory_error(
+                "eBay refused to publish the listing", resp))
+        body = resp.json() if resp.content else {}
+        return {
+            "offer_id": offer_id,
+            "listing_id": (body or {}).get("listingId") or "",
+            "url": f"https://www.ebay.ca/itm/{(body or {}).get('listingId')}"
+                   if (body or {}).get("listingId") else "",
+        }
+
+    def delete_draft(self, token: dict, marketplace: str, offer_id: str,
+                     sku: str = "") -> bool:
+        """Remove an unpublished offer, and the inventory item with it.
+
+        The item is deleted only after the offer is gone: an item cannot be
+        withdrawn while an offer still references it.
+        """
+        headers = self._inventory_headers(token, marketplace)
+        base = f"{EBAY_API_BASE}/sell/inventory/v1"
+        resp = httpx.delete(f"{base}/offer/{offer_id}", headers=headers, timeout=40)
+        if resp.status_code not in (200, 204):
+            raise RuntimeError(self._inventory_error(
+                "eBay refused to delete the draft", resp))
+        if sku:
+            try:
+                httpx.delete(f"{base}/inventory_item/{quote(sku, safe='')}",
+                             headers=headers, timeout=40)
+            except Exception:
+                # The offer is gone, which is what was asked. A stray inventory
+                # item is harmless and must not make the delete look failed.
+                pass
+        return True
+
     def create_book_draft(self, db, draft: dict, user_id=None,
                           credentials: dict = None) -> Dict[str, Any]:
         """Create an inventory item and an UNPUBLISHED offer, and return the draft.

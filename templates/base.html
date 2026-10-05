@@ -51,6 +51,7 @@
                administrator to do it was the original bug. #}
             <a href="/marketplace-settings" class="nav-link{% if active == 'marketplace' %} active{% endif %}">My Accounts</a>
             <a href="/books" class="nav-link{% if active == 'books' %} active{% endif %}">List a Book</a>
+            <a href="/books/drafts" class="nav-link{% if active == 'books' %} active{% endif %}">Book Drafts</a>
             {% endif %}
             {% if is_admin is not defined or is_admin %}
             <a href="/admin" class="nav-link{% if active == 'admin' %} active{% endif %}">Admin</a>

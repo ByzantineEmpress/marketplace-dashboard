@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="bd">
+
+    <div class="bd-head">
+        <div>
+            <h1>Book Drafts</h1>
+            <p class="bd-sub">
+                Your unpublished eBay offers. Nothing here is on sale yet.
+            </p>
+        </div>
+        <a href="/books" class="btn btn--primary">List another book</a>
+    </div>
+
+    <div class="bd-note">
+        <strong>Why this page exists.</strong> eBay's own drafts list does not show
+        listings created through its Inventory API &mdash; the offer is created and
+        valid, but never appears there. So drafts are kept here instead, straight
+        from the API, and published from here when you are ready.
+    </div>
+
+    <div id="bd-status" class="settings-status" role="status" aria-live="polite"></div>
+
+    <div id="bd-drafts">
+        <p class="section-desc">Loading your drafts&hellip;</p>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/book-drafts.js"></script>
+{% endblock %}
