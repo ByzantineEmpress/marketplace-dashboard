@@ -134,10 +134,38 @@ class DraftAdapterTest(unittest.TestCase):
 
     def test_a_failed_publish_raises_with_ebays_own_words(self):
         self.mod.httpx.post = lambda url, **k: self._Resp(
-            400, {"errors": [{"message": "nope"}]})
+            400, {"errors": [{"errorId": 99999, "message": "nope"}]})
         with self.assertRaises(RuntimeError) as caught:
             self.adapter.publish_offer(self.token, "EBAY_CA", "9")
         self.assertIn("HTTP 400", str(caught.exception))
+
+    def test_the_known_publish_errors_say_what_to_do(self):
+        """eBay answers with an errorId and a category and leaves the seller to
+        work it out. The two that have actually blocked this seller now say what
+        to do about them."""
+        def refusing(error_id, message):
+            self.mod.httpx.post = lambda url, **k: self._Resp(
+                400, {"errors": [{"errorId": error_id, "message": message}]})
+            with self.assertRaises(RuntimeError) as caught:
+                self.adapter.publish_offer(self.token, "EBAY_CA", "9")
+            return str(caught.exception)
+
+        no_photo = refusing(25002, "Add at least 1 photo.")
+        self.assertIn("no photo", no_photo)
+        self.assertIn("Add at least 1 photo", no_photo)  # eBay's words kept too
+
+        no_shipping = refusing(25007, "invalid data in the Fulfillment policy")
+        self.assertIn("shipping", no_shipping.lower())
+        self.assertIn("Business Policies", no_shipping)
+
+    def test_an_untranslated_publish_error_still_carries_the_raw_text(self):
+        """Anything not worth paraphrasing must not be swallowed."""
+        self.mod.httpx.post = lambda url, **k: self._Resp(
+            400, {"errors": [{"errorId": 12345, "message": "something new"}]})
+        with self.assertRaises(RuntimeError) as caught:
+            self.adapter.publish_offer(self.token, "EBAY_CA", "9")
+        self.assertIn("12345", str(caught.exception))
+        self.assertIn("something new", str(caught.exception))
 
     def test_publish_returns_the_listing_id_and_url(self):
         self.mod.httpx.post = lambda url, **k: self._Resp(

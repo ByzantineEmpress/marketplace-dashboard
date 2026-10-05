@@ -773,6 +773,19 @@ class eBayAdapter(MarketplaceAdapter):
         drafts.sort(key=lambda d: str(d.get("sku") or ""), reverse=True)
         return drafts
 
+    # eBay's publish errors, translated. The raw text names an errorId and a
+    # category and leaves the seller to work out what to do; these say what to do.
+    PUBLISH_HELP = {
+        25002: ("eBay will not publish a listing with no photo. Add at least one "
+                "photo to this draft."),
+        25007: ("This account cannot use eBay Business Policies, so the offer "
+                "carries no shipping terms, and eBay has no default shipping "
+                "service to fall back on. A shipping service has to be set on the "
+                "account in eBay before this can be published."),
+        25001: ("eBay rejected the listing for a problem with the item. Its own "
+                "words are below."),
+    }
+
     def publish_offer(self, token: dict, marketplace: str,
                       offer_id: str) -> Dict[str, Any]:
         """Publish an unpublished offer, making it a live listing.
@@ -786,8 +799,7 @@ class eBayAdapter(MarketplaceAdapter):
             f"{EBAY_API_BASE}/sell/inventory/v1/offer/{offer_id}/publish",
             headers=headers, timeout=90)
         if resp.status_code not in (200, 201):
-            raise RuntimeError(self._inventory_error(
-                "eBay refused to publish the listing", resp))
+            raise RuntimeError(self._publish_error(resp))
         body = resp.json() if resp.content else {}
         return {
             "offer_id": offer_id,
@@ -795,6 +807,35 @@ class eBayAdapter(MarketplaceAdapter):
             "url": f"https://www.ebay.ca/itm/{(body or {}).get('listingId')}"
                    if (body or {}).get("listingId") else "",
         }
+
+    def _publish_error(self, resp) -> str:
+        """eBay's own words, plus what to do about the ones worth explaining."""
+        errors = []
+        try:
+            errors = (resp.json() or {}).get("errors") or []
+        except Exception:
+            errors = []
+
+        for error in errors:
+            help_text = self.PUBLISH_HELP.get(error.get("errorId"))
+            if help_text:
+                detail = (error.get("longMessage") or error.get("message") or "")
+                return f"{help_text} (eBay said: {detail.strip()[:200]})"
+
+        # Nothing to paraphrase, so pass eBay's own errors through -- with their
+        # ids, because those are what makes a new failure searchable. The raw body
+        # is the fallback rather than the first choice: it can be empty even when
+        # the errors parsed fine, which would leave a message ending in "HTTP 400:".
+        if errors:
+            bits = []
+            for error in errors[:3]:
+                detail = (error.get("longMessage") or error.get("message") or "").strip()
+                error_id = error.get("errorId")
+                bits.append(f"{error_id}: {detail}" if error_id else detail)
+            detail = " | ".join(b for b in bits if b) or "(no detail given)"
+        else:
+            detail = (resp.text or "").strip()[:300] or "(no detail given)"
+        return f"eBay refused to publish the listing (HTTP {resp.status_code}): {detail}"
 
     def delete_draft(self, token: dict, marketplace: str, offer_id: str,
                      sku: str = "") -> bool:
