@@ -151,8 +151,15 @@ class DraftAdapterTest(unittest.TestCase):
             return str(caught.exception)
 
         no_photo = refusing(25002, "Add at least 1 photo.")
-        self.assertIn("no photo", no_photo)
-        self.assertIn("Add at least 1 photo", no_photo)  # eBay's words kept too
+        self.assertIn("Add at least 1 photo", no_photo)  # eBay's words, kept verbatim
+        self.assertIn("item specific", no_photo.lower())
+
+        # 25002 must NOT be paraphrased into a specific cause. It reported "add a
+        # photo" on one publish and "Language is missing" on the next, on the same
+        # draft, so a hardcoded reading sends the seller after the wrong thing.
+        language = refusing(25002, "The item specific Language is missing.")
+        self.assertIn("Language is missing", language)
+        self.assertNotIn("no photo", language.lower())
 
         no_shipping = refusing(25007, "invalid data in the Fulfillment policy")
         self.assertIn("shipping", no_shipping.lower())

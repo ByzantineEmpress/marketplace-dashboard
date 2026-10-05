@@ -775,9 +775,17 @@ class eBayAdapter(MarketplaceAdapter):
 
     # eBay's publish errors, translated. The raw text names an errorId and a
     # category and leaves the seller to work out what to do; these say what to do.
+    #
+    # 25002 is deliberately NOT given a specific instruction. It is a generic
+    # "something is wrong with your item specifics", and it has reported both
+    # "Add at least 1 photo" and "The item specific Language is missing" on this
+    # very listing. Hardcoding the photo reading sent the seller looking for a
+    # missing photo on a draft that had two, while the real problem was Language.
+    # eBay's own words name the field; a paraphrase must not overrule them.
     PUBLISH_HELP = {
-        25002: ("eBay will not publish a listing with no photo. Add at least one "
-                "photo to this draft."),
+        25002: ("eBay rejected an item specific on this listing. Its own words below "
+                "name the field. Note that a missing PHOTO and a missing LANGUAGE "
+                "both report as 25002, so the message is what distinguishes them."),
         25007: ("This account cannot use eBay Business Policies, so the offer "
                 "carries no shipping terms, and eBay has no default shipping "
                 "service to fall back on. A shipping service has to be set on the "
@@ -1366,6 +1374,13 @@ class eBayAdapter(MarketplaceAdapter):
             if resolved:
                 product["imageUrls"] = resolved[:24]
         aspects = draft.get("aspects") or {}
+        # eBay's Books category REQUIRES Language, and nothing on the book page
+        # collects it. Left out, the draft is created happily and then refuses to
+        # publish with "The item specific Language is missing" -- under errorId
+        # 25002, which reads as a photo problem. Defaulted here so a draft is
+        # publishable when it is made rather than at the publish click.
+        if not any(str(k).strip().lower() == "language" for k in aspects):
+            aspects = {**aspects, "Language": [draft.get("language") or "English"]}
         if aspects:
             product["aspects"] = {
                 str(k): (v if isinstance(v, list) else [str(v)])
