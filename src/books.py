@@ -312,7 +312,12 @@ def build_description(meta: Dict[str, Any], condition: str = "",
 
 # -- Market ----------------------------------------------------------------
 
-BOOKS_CATEGORY_ID = "267"  # eBay's Books category
+# Deliberately NOT filtered by category. An ISBN search is already specific
+# enough that every hit is this edition, and eBay's category ids are
+# marketplace-specific: filtering on the US Books id (267) returned "0 available"
+# for a book that the unfiltered search found 20 copies of on ebay.ca. A hardcoded
+# category is worse than none here.
+_BOOKS_CATEGORY_HINT = "267"
 
 
 def _marketplace_host(marketplace: str) -> str:
@@ -382,7 +387,7 @@ def active_market(isbn: str, access_token: str,
             "https://api.ebay.com/buy/browse/v1/item_summary/search",
             headers={"Authorization": f"Bearer {access_token}",
                      "X-EBAY-C-MARKETPLACE-ID": marketplace},
-            params={"q": query, "limit": 50, "category_ids": BOOKS_CATEGORY_ID},
+            params={"q": query, "limit": 50},
             timeout=40,
         )
         if resp.status_code != 200:
