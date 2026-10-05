@@ -55,7 +55,7 @@ class BooksPageTest(unittest.TestCase):
             res = client.get("/books")
         self.assertEqual(res.status_code, 200)
         self.assertIn("List a Book on eBay", res.text)
-        for control in ("bp-file", "bp-isbn", "bp-create-btn", "bp-link-sold"):
+        for control in ("bp-file", "bp-isbn", "bp-create-btn", "bp-searches"):
             self.assertIn(control, res.text)
 
     def test_it_needs_a_session(self):

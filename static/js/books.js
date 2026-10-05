@@ -117,12 +117,32 @@
                 + market.sampled + " of " + market.available + " listings.";
         }
 
-        $("bp-link-active").href = links.active || "#";
-        $("bp-link-sold").href = links.sold || "#";
+        renderSearches(data.links || {});
 
         $("bp-listing").hidden = false;
         $("bp-market").hidden = false;
         $("bp-publish").hidden = false;
+    }
+
+    // One row per search, by ISBN and by title. Sellers list under both, so a
+    // single link would hide whichever half they did not use.
+    function renderSearches(links) {
+        var box = $("bp-searches");
+        if (!box) return;
+
+        var searches = links.searches || [];
+        if (!searches.length) { box.innerHTML = ""; return; }
+
+        box.innerHTML = searches.map(function (s) {
+            var tag = s.kind === "isbn" ? "by ISBN" : "by title";
+            return '<div class="bp-search">' +
+                '<span class="bp-search-label">' + tag + ': <em>' +
+                escapeHtml(s.label || s.query) + '</em></span>' +
+                '<span class="bp-search-links">' +
+                '<a href="' + s.active + '" target="_blank" rel="noopener">asking prices →</a>' +
+                '<a href="' + s.sold + '" target="_blank" rel="noopener">SOLD prices →</a>' +
+                '</span></div>';
+        }).join("");
     }
 
     function titleCount() {

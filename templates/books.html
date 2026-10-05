@@ -106,12 +106,11 @@
             </div>
         </div>
         <p class="bp-hint" id="bp-market-note"></p>
-        <div class="bp-links">
-            <a href="#" id="bp-link-active" target="_blank" rel="noopener" class="btn btn--sm btn--outline">See what sellers ask →</a>
-            <a href="#" id="bp-link-sold" target="_blank" rel="noopener" class="btn btn--sm btn--outline">See what they actually SOLD for →</a>
-        </div>
+        {# Two searches, because sellers list under both an ISBN and a title.
+           Filled by books.js from links.searches. #}
+        <div class="bp-searches" id="bp-searches"></div>
         <p class="bp-hint">
-            Sold prices are eBay's own data, which this app cannot read. The link
+            Sold prices are eBay's own data, which this app cannot read. Each link
             opens eBay's sold-and-completed search in a new tab, signed in as you.
         </p>
     </section>

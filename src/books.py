@@ -134,21 +134,66 @@ def _open_library(isbn: str) -> Dict[str, Any]:
         out["publisher"] = publishers[0] if publishers else ""
         out["publication_year"] = _year_from(data.get("publish_date"))
 
-        # Open Library's subjects are the closest thing it has to genre and topic.
+        # The EDITION carries the binding when anyone has recorded it. It often
+        # has no subjects at all, which is why they are read from the work below.
+        out["physical_format"] = data.get("physical_format") or ""
         subjects = [s for s in (data.get("subjects") or []) if isinstance(s, str)]
         out["subjects"] = subjects[:12]
         out["pages"] = data.get("number_of_pages")
+
+        # The WORK is where the subjects live. Reading only the edition left Genre
+        # and Topic empty on every book that had them recorded against the work
+        # rather than the printing -- which is most of them.
+        works = data.get("works") or []
+        if works:
+            wkey = (works[0] or {}).get("key")
+            if wkey:
+                try:
+                    w = httpx.get(f"{OPEN_LIBRARY}{wkey}.json", timeout=25)
+                    if w.status_code == 200:
+                        work = w.json() or {}
+                        out["work_subjects"] = [
+                            s for s in (work.get("subjects") or [])
+                            if isinstance(s, str)
+                        ]
+                        out["subject_places"] = [
+                            s for s in (work.get("subject_places") or [])
+                            if isinstance(s, str)
+                        ]
+                        out["subject_times"] = [
+                            s for s in (work.get("subject_times") or [])
+                            if isinstance(s, str)
+                        ]
+                        if not out["title"]:
+                            out["title"] = work.get("title") or ""
+                except Exception:
+                    pass
     except Exception:
         return {}
     return out
 
 
 def _google_books(isbn: str) -> Dict[str, Any]:
+    import os
+
     import httpx
 
     out: Dict[str, Any] = {}
     try:
-        resp = httpx.get(GOOGLE_BOOKS, params={"q": f"isbn:{isbn}"}, timeout=30)
+        params = {"q": f"isbn:{isbn}"}
+        # Optional. Without a key the shared anonymous quota is easily exhausted,
+        # and the API then answers 429 -- which looks like "this book has no
+        # categories" rather than "we were rate limited". GOOGLE_BOOKS_API_KEY
+        # raises the limit; the source is simply skipped when it is not set and
+        # the quota is gone.
+        key = os.environ.get("GOOGLE_BOOKS_API_KEY") or ""
+        if key:
+            params["key"] = key
+
+        resp = httpx.get(GOOGLE_BOOKS, params=params, timeout=30)
+        if resp.status_code == 429:
+            out["quota_exceeded"] = True
+            return out
         if resp.status_code != 200:
             return out
         items = (resp.json() or {}).get("items") or []
@@ -187,12 +232,63 @@ def infer_format(*hints: str) -> str:
     return ""
 
 
+# Subjects that are library-metadata artefacts rather than anything a buyer would
+# recognise as a genre or a topic.
+_SUBJECT_NOISE = {
+    "open library staff picks", "accessible book", "protected daisy",
+    "in library", "internet archive wishlist", "large type books", "overdrive",
+    "electronic books", "new york times reviewed", "staff picks", "award winner",
+    "series", "miscellanea", "general", "criticism and interpretation",
+}
+
+# Words that mark a subject as a GENRE rather than a topic, so the two fields can
+# be told apart. Without this the split was arbitrary, and "Foxes" would land in
+# Genre while "Juvenile fiction" landed in Topic.
+_GENRE_HINTS = (
+    "fiction", "novel", "stories", "story", "mystery", "romance", "fantasy",
+    "science fiction", "history", "historical", "biography", "autobiography",
+    "thriller", "horror", "adventure", "poetry", "drama", "juvenile",
+    "children", "young adult", "comic", "graphic novel", "essays", "travel",
+    "crime", "detective", "western", "humor", "humour", "religion", "philosophy",
+)
+
+
+def _split_subjects(pool: List[str]) -> Dict[str, str]:
+    """Sort a bag of subjects into a Genre and a Topic.
+
+    Open Library's work records carry a dozen or more subjects of mixed kinds --
+    "Juvenile fiction" next to "Foxes" next to "Open Library Staff Picks". The
+    order they arrive in is roughly relevance, so the first usable ones are taken
+    rather than trying to score them.
+    """
+    genre: List[str] = []
+    topic: List[str] = []
+    seen = set()
+
+    for raw in pool:
+        subject = (raw or "").strip()
+        if not subject:
+            continue
+        key = subject.lower()
+        if key in seen or key in _SUBJECT_NOISE:
+            continue
+        seen.add(key)
+
+        is_genre = any(hint in key for hint in _GENRE_HINTS)
+        target = genre if is_genre else topic
+        if len(target) < 2:
+            target.append(subject)
+
+    return {"genre": " / ".join(genre), "topic": " / ".join(topic)}
+
+
 def lookup_book(isbn: str) -> Dict[str, Any]:
     """Everything an eBay book listing needs, from two free catalogues.
 
     Google Books fills what Open Library leaves blank and the other way round:
-    neither is complete, and between them they cover almost everything with an
-    ISBN. A book found in neither is reported as such rather than half-filled.
+    neither is complete. Google Books answers 429 once its anonymous daily quota
+    is gone, and that is reported rather than silently treated as "this book has
+    no categories" -- which is exactly how Genre and Topic came out empty.
     """
     normalised = normalise_isbn(isbn)
     key = normalised["isbn13"]
@@ -206,15 +302,31 @@ def lookup_book(isbn: str) -> Dict[str, Any]:
     publisher = ol.get("publisher") or gb.get("publisher") or ""
     year = ol.get("publication_year") or gb.get("publication_year") or ""
 
-    subjects = list(ol.get("subjects") or [])
-    categories = list(gb.get("categories") or [])
-    genre = categories[0] if categories else (subjects[0] if subjects else "")
-    topic = ""
-    pool = categories[1:] + subjects[1:]
-    if pool:
-        topic = " / ".join(pool[:2])
+    # Subjects come from the WORK, categories from Google Books. The edition's own
+    # subjects are usually empty, which is why only reading the edition left these
+    # two fields blank on nearly every book.
+    pool = (list(gb.get("categories") or [])
+            + list(ol.get("work_subjects") or [])
+            + list(ol.get("subjects") or []))
+    split = _split_subjects(pool)
+
+    # Format: the edition's recorded binding if anyone wrote it down, otherwise
+    # inferred from wording that mentions one. Left blank when neither says --
+    # a wrong Format on a book is a returned item, and the seller can see the
+    # binding in their hand in a way no catalogue can.
+    fmt = (ol.get("physical_format") or "").strip()
+    if not fmt:
+        fmt = infer_format(title, " ".join(pool), gb.get("description") or "")
 
     found = bool(title or author)
+
+    sources = []
+    if ol:
+        sources.append("openlibrary")
+    # A quota refusal is not a source. Counting it as one made the page look as
+    # though Google Books had answered and simply had no categories.
+    if gb and not gb.get("quota_exceeded"):
+        sources.append("googlebooks")
 
     return {
         **normalised,
@@ -223,15 +335,16 @@ def lookup_book(isbn: str) -> Dict[str, Any]:
         "title": title,
         "publisher": publisher,
         "publication_year": year,
-        "format": infer_format(
-            " ".join(categories), " ".join(subjects), gb.get("description") or ""),
-        "genre": genre,
-        "topic": topic,
+        "format": fmt,
+        "genre": split["genre"],
+        "topic": split["topic"],
         "pages": ol.get("pages") or gb.get("pages"),
         "summary": gb.get("description") or "",
-        "subjects": subjects,
-        "sources": [name for name, data in
-                    (("openlibrary", ol), ("googlebooks", gb)) if data],
+        "subjects": pool[:20],
+        "sources": sources,
+        # Surfaced so the page can say WHY a field is empty instead of leaving the
+        # seller to guess that the lookup half-failed.
+        "google_quota_exceeded": bool(gb.get("quota_exceeded")),
     }
 
 
@@ -476,33 +589,53 @@ def _marketplace_host(marketplace: str) -> str:
     }.get(marketplace, "www.ebay.com")
 
 
-def search_urls(meta: Dict[str, Any], marketplace: str = "EBAY_CA") -> Dict[str, str]:
-    """eBay search links the seller can open while signed in.
+def search_urls(meta: Dict[str, Any], marketplace: str = "EBAY_CA") -> Dict[str, Any]:
+    """eBay search links the seller can open while signed in, by ISBN and by title.
 
     Sold history is only available to the seller's own account, so it is handed
-    over as a link rather than faked. Both links carry the same query so the two
-    views are directly comparable.
+    over as a link rather than faked.
+
+    BOTH searches are offered because sellers list under both: many put the title
+    in and never enter an ISBN, so an ISBN-only search silently misses them, and a
+    title-only search pulls in every other printing of the book. Showing the two
+    side by side is what makes the difference visible.
     """
     host = _marketplace_host(marketplace)
     isbn = (meta.get("isbn13") or meta.get("isbn10") or "").strip()
-
-    # Prefer the ISBN: it identifies the exact edition, where a title and author
-    # would return every printing of the book.
-    if isbn:
-        query = isbn
-    else:
-        query = " ".join(
-            x for x in ((meta.get("title") or "").strip(),
-                        (meta.get("author") or "").strip()) if x)
+    title = (meta.get("title") or "").strip()
+    author = (meta.get("author") or "").strip()
 
     from urllib.parse import quote_plus
 
-    base = f"https://{host}/sch/i.html?_nkw={quote_plus(query)}"
+    def build(query: str, label: str, kind: str) -> Dict[str, str]:
+        base = f"https://{host}/sch/i.html?_nkw={quote_plus(query)}"
+        return {
+            "kind": kind,
+            "label": label,
+            "query": query,
+            "active": f"{base}&_ipg=60",
+            # LH_Sold + LH_Complete is eBay's own "sold listings" filter.
+            "sold": f"{base}&LH_Sold=1&LH_Complete=1&_ipg=60",
+        }
+
+    searches: List[Dict[str, str]] = []
+    if isbn:
+        searches.append(build(isbn, f"ISBN {isbn}", "isbn"))
+
+    # Title plus author, because the title alone returns other books with the same
+    # name and the author is what narrows it back down.
+    title_query = " ".join(x for x in (title, author) if x)
+    if title_query:
+        searches.append(build(title_query, title or title_query, "title"))
+
+    primary = searches[0] if searches else {}
     return {
-        "query": query,
-        "active": f"{base}&_ipg=60",
-        # LH_Sold + LH_Complete is eBay's own "sold listings" filter.
-        "sold": f"{base}&LH_Sold=1&LH_Complete=1&_ipg=60",
+        "searches": searches,
+        # Kept for callers that only want the one link, which is the ISBN search
+        # when there is an ISBN.
+        "query": primary.get("query", ""),
+        "active": primary.get("active", ""),
+        "sold": primary.get("sold", ""),
     }
 
 

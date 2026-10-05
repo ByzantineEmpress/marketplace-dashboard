@@ -128,15 +128,118 @@ class SearchUrlTest(unittest.TestCase):
         self.assertIn("ebay.ca", books.search_urls(self.META, "EBAY_CA")["sold"])
         self.assertIn("ebay.co.uk", books.search_urls(self.META, "EBAY_GB")["sold"])
 
-    def test_it_searches_the_isbn_rather_than_the_title(self):
-        """An ISBN identifies the edition; a title returns every printing."""
+    def test_it_offers_both_an_isbn_and_a_title_search(self):
+        """Sellers list under both. An ISBN-only search misses every seller who
+        typed the title, and a title-only search drags in other printings."""
+        searches = books.search_urls(self.META, "EBAY_CA")["searches"]
+        self.assertEqual([s["kind"] for s in searches], ["isbn", "title"])
+
+    def test_both_searches_carry_their_own_sold_filter(self):
+        for search in books.search_urls(self.META, "EBAY_CA")["searches"]:
+            self.assertIn("LH_Sold=1", search["sold"], search["kind"])
+            self.assertIn("LH_Complete=1", search["sold"], search["kind"])
+
+    def test_the_title_search_carries_the_author_too(self):
+        """The title alone returns every other book of the same name."""
+        title = [s for s in books.search_urls(self.META, "EBAY_CA")["searches"]
+                 if s["kind"] == "title"][0]
+        # The query itself stays readable; it is encoded only inside the URLs.
+        self.assertEqual(title["query"], "The Stone Flower Alan Scholefield")
+        self.assertIn("Stone+Flower", title["active"])
+        self.assertIn("Scholefield", title["sold"])
+
+    def test_the_isbn_search_is_the_one_reported_first(self):
+        """Kept for callers that only want a single link."""
         urls = books.search_urls(self.META, "EBAY_CA")
         self.assertEqual(urls["query"], "9780241108253")
 
-    def test_it_falls_back_to_title_and_author(self):
+    def test_a_book_with_no_isbn_still_gets_a_title_search(self):
         urls = books.search_urls({"title": "The Stone Flower",
                                   "author": "Alan Scholefield"}, "EBAY_CA")
         self.assertIn("Stone+Flower", urls["active"])
+        self.assertEqual([s["kind"] for s in urls["searches"]], ["title"])
+
+    def test_nothing_to_search_for_yields_no_searches(self):
+        self.assertEqual(books.search_urls({}, "EBAY_CA")["searches"], [])
+
+
+class SubjectSplitTest(unittest.TestCase):
+    """Genre and Topic, told apart from a bag of library subjects.
+
+    The work record is where these come from. The edition record has no subjects
+    on most books, which is why both fields came out empty.
+    """
+
+    REAL = ["Animals", "Hunger", "Open Library Staff Picks", "Juvenile fiction",
+            "Children's stories, English", "Foxes", "Fiction", "Tunnels"]
+
+    def test_a_genre_is_taken_from_the_genre_like_subjects(self):
+        self.assertIn("Juvenile fiction", books._split_subjects(self.REAL)["genre"])
+
+    def test_a_topic_is_taken_from_the_topical_subjects(self):
+        """The split is the point: "Foxes" is a topic, not a genre."""
+        split = books._split_subjects(self.REAL)
+        self.assertIn("Animals", split["topic"])
+        self.assertNotIn("Foxes", split["genre"])
+
+    def test_library_metadata_is_not_offered_as_a_genre_or_topic(self):
+        split = books._split_subjects(self.REAL)
+        self.assertNotIn("Open Library Staff Picks", split["genre"])
+        self.assertNotIn("Open Library Staff Picks", split["topic"])
+
+    def test_duplicates_are_dropped(self):
+        self.assertEqual(books._split_subjects(["Fiction", "fiction", "FICTION"])
+                         ["genre"], "Fiction")
+
+    def test_each_field_is_capped_at_two(self):
+        split = books._split_subjects(
+            ["Fiction", "Fantasy fiction", "Mystery fiction", "Adventure stories",
+             "Foxes", "Animals", "Tunnels", "Rivers"])
+        self.assertEqual(len(split["genre"].split(" / ")), 2)
+        self.assertEqual(len(split["topic"].split(" / ")), 2)
+
+    def test_nothing_in_gives_nothing_out(self):
+        self.assertEqual(books._split_subjects([]), {"genre": "", "topic": ""})
+
+
+class FormatTest2(unittest.TestCase):
+    """Format comes from the edition's recorded binding when there is one."""
+
+    def _with(self, ol, gb=None):
+        import src.books as b
+        original_ol, original_gb = b._open_library, b._google_books
+        b._open_library = lambda isbn: ol
+        b._google_books = lambda isbn: (gb or {})
+        try:
+            return b.lookup_book("0-241-10825-X")
+        finally:
+            b._open_library, b._google_books = original_ol, original_gb
+
+    def test_the_recorded_binding_wins(self):
+        meta = self._with({"title": "T", "physical_format": "Hardcover"})
+        self.assertEqual(meta["format"], "Hardcover")
+
+    def test_it_is_left_blank_rather_than_guessed(self):
+        """No binding recorded and nothing in the wording: say nothing. A wrong
+        Format on a book is a returned item."""
+        meta = self._with({"title": "T",
+                           "work_subjects": ["Foxes", "Animals"]})
+        self.assertEqual(meta["format"], "")
+
+    def test_the_work_subjects_reach_genre_and_topic(self):
+        meta = self._with({"title": "T",
+                           "work_subjects": ["Historical fiction",
+                                             "Adventure stories",
+                                             "Napoleonic Wars"]})
+        self.assertIn("Historical fiction", meta["genre"])
+        self.assertIn("Napoleonic Wars", meta["topic"])
+
+    def test_a_google_quota_refusal_is_reported_not_hidden(self):
+        """429 means rate limited, and silently treating it as "no categories" is
+        how Genre and Topic came out empty in the first place."""
+        meta = self._with({"title": "T"}, {"quota_exceeded": True})
+        self.assertTrue(meta["google_quota_exceeded"])
+        self.assertNotIn("googlebooks", meta["sources"])
 
 
 class MetadataDiscrepancyTest(unittest.TestCase):
