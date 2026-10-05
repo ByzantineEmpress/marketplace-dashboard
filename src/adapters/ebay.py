@@ -819,6 +819,68 @@ class eBayAdapter(MarketplaceAdapter):
                 pass
         return True
 
+    def absolute_image_urls(self, images) -> List[str]:
+        """Photo references as eBay needs them: absolute and public.
+
+        The local storage backend returns "/static/uploads/x.jpg". A relative path
+        is not a URL eBay can retrieve, and it drops the image without complaint --
+        which is how a draft ends up with no photo, and then cannot be published,
+        because eBay requires at least one photo:
+
+            errorId 25002 "Add at least 1 photo."
+
+        A path that cannot be made absolute is dropped rather than sent, since a
+        draft with no photo is clearer than one carrying a URL that resolves nowhere.
+        """
+        from src import config as _config
+
+        base = (getattr(_config, "APP_BASE_URL", "") or "").rstrip("/")
+        resolved: List[str] = []
+        for url in images or []:
+            url = str(url).strip()
+            if not url:
+                continue
+            if url.startswith("/"):
+                if not base:
+                    continue
+                url = base + url
+            if url.startswith(("http://", "https://")):
+                resolved.append(url)
+        return resolved
+
+    def set_draft_images(self, token: dict, marketplace: str, sku: str,
+                         images) -> List[str]:
+        """Replace a draft's photos, keeping everything else on the item.
+
+        The photos live on the inventory ITEM, and PUT on an item REPLACES it -- so
+        the current body is read first and written back with the photos merged in.
+        Sending only the photos would wipe the title, description and item aspects,
+        which is the same trap that emptied a draft's price and description when the
+        merchant location was attached.
+        """
+        url = (f"{EBAY_API_BASE}/sell/inventory/v1/inventory_item/"
+               f"{quote(sku, safe='')}")
+        headers = self._inventory_headers(token, marketplace)
+
+        current = httpx.get(url, headers=headers, timeout=40)
+        if current.status_code != 200:
+            raise RuntimeError(self._inventory_error(
+                "Could not read the draft before adding photos", current))
+
+        item = dict(current.json() or {})
+        # Read-only fields eBay returns but will not accept back.
+        for key in ("sku", "createdDate", "lastModifiedDate"):
+            item.pop(key, None)
+        product = dict(item.get("product") or {})
+        product["imageUrls"] = self.absolute_image_urls(images)
+        item["product"] = product
+
+        resp = httpx.put(url, headers=headers, json=item, timeout=60)
+        if resp.status_code not in (200, 201, 204):
+            raise RuntimeError(self._inventory_error(
+                "eBay rejected the photos", resp))
+        return product["imageUrls"]
+
     def create_book_draft(self, db, draft: dict, user_id=None,
                           credentials: dict = None) -> Dict[str, Any]:
         """Create an inventory item and an UNPUBLISHED offer, and return the draft.
@@ -854,24 +916,7 @@ class eBayAdapter(MarketplaceAdapter):
         }
         images = [u for u in (draft.get("images") or []) if u]
         if images:
-            # eBay fetches these itself, so they have to be absolute and public.
-            # The local storage backend returns "/static/uploads/x.jpg", and a
-            # relative path is not a URL eBay can retrieve: it drops the image
-            # without complaint, which is how a draft ends up with no photo on it.
-            from src import config as _config
-
-            base = (getattr(_config, "APP_BASE_URL", "") or "").rstrip("/")
-            resolved = []
-            for url in images:
-                url = str(url).strip()
-                if url.startswith("/"):
-                    if not base:
-                        # Sending eBay a path it will discard, or a URL pointing at
-                        # nowhere, is worse than sending the draft with no photo.
-                        continue
-                    url = base + url
-                if url.startswith(("http://", "https://")):
-                    resolved.append(url)
+            resolved = self.absolute_image_urls(images)
             if resolved:
                 product["imageUrls"] = resolved[:24]
         aspects = draft.get("aspects") or {}

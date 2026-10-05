@@ -3004,3 +3004,9 @@ body[data-card-view="table"] .listing-grid {
 .bd-published { padding: 10px 12px; margin-bottom: 10px; font-size: 13px;
                 border: 1px solid var(--success); border-radius: var(--radius-lg);
                 background: var(--bg-elevated); overflow-wrap: anywhere; }
+
+.bd-nophoto-wrap { display: flex; flex-direction: column; gap: 4px; align-items: center;
+                   flex-shrink: 0; }
+.bd-addphoto { font-size: 11px; color: var(--accent); cursor: pointer; }
+/* Amber, not red: the draft is fine, it just cannot be published yet. */
+.bd-nophoto { border-color: var(--warning-text); color: var(--warning-text); }

@@ -171,5 +171,97 @@ class DraftAdapterTest(unittest.TestCase):
                                                   sku="BOOK-1"))
 
 
+    def test_photos_are_merged_without_wiping_the_item(self):
+        """Photos live on the inventory ITEM and PUT on an item REPLACES it, so the
+        title and aspects must survive the merge. This is the same trap that emptied
+        a draft's price and description when the merchant location was attached."""
+        sent = {}
+
+        def fake_get(url, **kwargs):
+            return self._Resp(200, {
+                "sku": "BOOK-1", "condition": "USED_GOOD",
+                "product": {"title": "A Book", "description": "Author: Someone",
+                            "aspects": {"Author": ["Someone"]}},
+            })
+
+        def fake_put(url, **kwargs):
+            sent.update(kwargs.get("json") or {})
+            return self._Resp(204)
+
+        self.mod.httpx.get = fake_get
+        self.mod.httpx.put = fake_put
+        stored = self.adapter.set_draft_images(
+            self.token, "EBAY_CA", "BOOK-1", ["/static/uploads/a.jpg"])
+
+        product = sent.get("product") or {}
+        self.assertEqual(product.get("title"), "A Book")
+        self.assertEqual(product.get("aspects"), {"Author": ["Someone"]})
+        self.assertEqual(len(stored), 1)
+        self.assertTrue(stored[0].startswith("http"), stored[0])
+        # Read-only fields eBay returns but will not accept back.
+        self.assertNotIn("sku", sent)
+
+    def test_adding_photos_to_an_unreadable_draft_raises(self):
+        self.mod.httpx.get = lambda url, **k: self._Resp(404, {}, "nope")
+        with self.assertRaises(RuntimeError):
+            self.adapter.set_draft_images(self.token, "EBAY_CA", "BOOK-1",
+                                          ["/static/uploads/a.jpg"])
+
+    def test_an_empty_photo_list_resolves_to_nothing(self):
+        """eBay requires at least one photo to publish, so an empty list has to
+        come out empty rather than as a list containing a blank URL."""
+        self.assertEqual(self.adapter.absolute_image_urls([]), [])
+        self.assertEqual(self.adapter.absolute_image_urls([""]), [])
+        self.assertEqual(self.adapter.absolute_image_urls([None]), [])
+        self.assertEqual(self.adapter.absolute_image_urls(["   "]), [])
+
+
+class DraftPhotoRouteTest(unittest.TestCase):
+    def test_it_needs_a_session(self):
+        from fastapi.testclient import TestClient
+        from src.api.main import app
+
+        with TestClient(app) as client:
+            res = client.post("/api/books/drafts/1/photos",
+                              json={"sku": "x", "images": ["/a.jpg"]})
+        self.assertIn(res.status_code, (401, 403))
+
+    def test_no_photos_is_refused(self):
+        import secrets
+        from datetime import datetime, timedelta
+
+        from fastapi.testclient import TestClient
+
+        from src.database import SessionLocal, init_db
+        from src.models import AuthSession, User
+
+        init_db()
+        db = SessionLocal()
+        user = User(email=f"ph.{secrets.token_hex(4)}@example.com", name="P",
+                    provider="google", is_admin=False)
+        db.add(user)
+        db.commit()
+        token = secrets.token_urlsafe(48)
+        db.add(AuthSession(token=token, user_id=user.id,
+                           expires_at=datetime.utcnow() + timedelta(hours=1)))
+        db.commit()
+        uid = user.id
+        db.close()
+
+        try:
+            client = TestClient(app)
+            client.cookies.set("auth_token", token)
+            res = client.post("/api/books/drafts/1/photos", json={"sku": "x"})
+            self.assertEqual(res.status_code, 400)
+            self.assertIn("No photos", res.json()["error"])
+        finally:
+            db = SessionLocal()
+            db.query(AuthSession).filter(AuthSession.user_id == uid).delete(
+                synchronize_session=False)
+            db.query(User).filter(User.id == uid).delete(synchronize_session=False)
+            db.commit()
+            db.close()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

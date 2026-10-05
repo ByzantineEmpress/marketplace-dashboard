@@ -2852,6 +2852,56 @@ async def books_draft_delete(offer_id: str, sku: str = "",
     return {"ok": True, "offer_id": offer_id}
 
 
+@api_router.post("/books/drafts/{offer_id}/photos")
+async def books_draft_photos(offer_id: str, body: dict,
+                             db: Session = Depends(get_db),
+                             _user: dict = Depends(check_auth)):
+    """Attach photos to a draft that has none.
+
+    eBay refuses to publish a listing without at least one:
+
+        errorId 25002 "Add at least 1 photo. More photos are better!"
+
+    so a draft made before photos worked could not be published and had no way to
+    be fixed short of recreating it.
+    """
+    from src.adapters import get_adapter
+    from src.marketplace_sync import user_credentials
+    from src.models import MarketplaceAccount
+
+    images = [str(u) for u in (body.get("images") or []) if u]
+    if not images:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "No photos were given."})
+    sku = str(body.get("sku") or "").strip()
+    if not sku:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "A sku is required."})
+
+    account = (db.query(MarketplaceAccount)
+               .filter(MarketplaceAccount.platform == "ebay").first())
+    if not account:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "eBay is not connected."})
+
+    def attach():
+        credentials = user_credentials(db, account.user_id, "ebay")
+        adapter = get_adapter("ebay")
+        token = adapter.get_token(db, user_id=account.user_id,
+                                  credentials=credentials)
+        if not token:
+            raise RuntimeError("eBay is not connected, or its token has expired.")
+        marketplace = (adapter._resolve_marketplace(db, token, account.user_id)
+                       or "EBAY_CA")
+        return adapter.set_draft_images(token, marketplace, sku, images)
+
+    try:
+        stored = await asyncio.to_thread(attach)
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+    return {"ok": True, "offer_id": offer_id, "images": stored}
+
+
 @api_router.post("/accounts/sync-all")
 async def sync_all_accounts(db: Session = Depends(get_db),
                             user: dict = Depends(check_auth)):

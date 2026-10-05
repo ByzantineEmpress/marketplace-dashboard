@@ -61,7 +61,66 @@
             link.appendChild(img);
             card.appendChild(link);
         } else {
-            card.appendChild(el("span", "bd-nophoto", "no photo"));
+            // eBay refuses to publish a listing with no photo (errorId 25002, "Add
+            // at least 1 photo"), so a draft without one cannot go live at all.
+            // Saying so here means it is discovered before a publish attempt rather
+            // than by one failing.
+            var addWrap = el("div", "bd-nophoto-wrap");
+            addWrap.appendChild(el("span", "bd-nophoto", "no photo"));
+            var addLabel = el("label", "bd-addphoto", "Add photos");
+            var addInput = document.createElement("input");
+            addInput.type = "file";
+            addInput.accept = "image/*";
+            addInput.multiple = true;
+            addInput.hidden = true;
+            addLabel.appendChild(addInput);
+            addWrap.appendChild(addLabel);
+            card.appendChild(addWrap);
+
+            addInput.addEventListener("change", function () {
+                var files = addInput.files;
+                if (!files || !files.length) return;
+                addLabel.textContent = "Uploading…";
+                var urls = [];
+                var chain = Promise.resolve();
+                Array.prototype.forEach.call(files, function (file) {
+                    chain = chain.then(function () {
+                        var fd = new FormData();
+                        fd.append("file", file, file.name);
+                        return fetch("/api/upload", { method: "POST", body: fd })
+                            .then(function (r) { return r.json(); })
+                            .then(function (data) {
+                                if (data && (data.url || data.path)) {
+                                    urls.push(data.url || data.path);
+                                }
+                            });
+                    });
+                });
+                chain
+                    .then(function () {
+                        if (!urls.length) throw new Error("no photos were uploaded");
+                        addLabel.textContent = "Saving…";
+                        return fetch("/api/books/drafts/"
+                                     + encodeURIComponent(draft.offer_id) + "/photos", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ sku: draft.sku, images: urls }),
+                        });
+                    })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        if (!data || !data.ok) {
+                            throw new Error((data && data.error) || "could not save");
+                        }
+                        setStatus("Photos added to \"" + (draft.title || "draft")
+                                  + "\".", "ok");
+                        load();
+                    })
+                    .catch(function (err) {
+                        addLabel.textContent = "Add photos";
+                        setStatus("Could not add photos: " + err.message, "error");
+                    });
+            });
         }
 
         var main = el("div", "bd-main");
