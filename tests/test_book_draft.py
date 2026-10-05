@@ -292,7 +292,7 @@ class BookDraftTest(unittest.TestCase):
         self.adapter.create_book_draft(None, dict(self.DRAFT, title=long_title),
                                        user_id=1)
         put = [c for c in self.calls if c[0] == "PUT"][0]
-        self.assertEqual(len(put[2]["json"]["product"]["title"]), 80)
+        self.assertEqual(len(put[2]["json"]["product"]["title"]), 64)
 
 
 if __name__ == "__main__":

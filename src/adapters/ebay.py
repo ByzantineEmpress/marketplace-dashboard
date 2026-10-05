@@ -599,6 +599,10 @@ class eBayAdapter(MarketplaceAdapter):
     # Fixed for every book this page creates, as specified.
     BOOK_PACKAGE_WEIGHT_KG = 1.0
     BOOK_PACKAGE_DIMENSIONS_CM = {"length": 25, "width": 25, "height": 10}
+    # eBay rejects a Books title longer than this outright, rather than
+    # truncating it: a 65-character title came back as a rejected request.
+    # The page caps input at the same number so the two cannot disagree.
+    BOOK_TITLE_MAX = 64
 
     # NOTE ON SHIPPING. An Inventory-API offer carries NO shipping terms: they come
     # from the seller's account settings, and this account cannot use eBay Business
@@ -978,7 +982,7 @@ class eBayAdapter(MarketplaceAdapter):
 
             product = dict(item.get("product") or {})
             if "title" in changes:
-                product["title"] = (changes.get("title") or "")[:80]
+                product["title"] = (changes.get("title") or "")[:self.BOOK_TITLE_MAX]
             if "description" in changes:
                 product["description"] = changes.get("description") or ""
             if "aspects" in changes:
@@ -1129,7 +1133,7 @@ class eBayAdapter(MarketplaceAdapter):
         product: Dict[str, Any] = {
             # eBay truncates the title at 80 characters, so it is cut here rather
             # than silently on their side.
-            "title": (draft.get("title") or "")[:80],
+            "title": (draft.get("title") or "")[:self.BOOK_TITLE_MAX],
             "description": draft.get("description") or "",
         }
         images = [u for u in (draft.get("images") or []) if u]
