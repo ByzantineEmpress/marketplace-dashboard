@@ -656,29 +656,40 @@ class eBayAdapter(MarketplaceAdapter):
         checked for leaf-ness before it is used, because eBay's suggestions are not
         guaranteed to be leaves.
         """
-        candidates: List[str] = []
-        for phrase in ((query or "").strip(), "books"):
-            if not phrase:
-                continue
+        def candidates_for(phrase: str) -> List[tuple]:
+            found: List[tuple] = []
             for suggestion in self.suggest_categories(token, marketplace, phrase):
                 # suggest_categories reshapes eBay's reply to {id, name, path}, so
                 # this reads "id" and not eBay's nested "category" object. Reading
                 # the wrong key found nothing and quietly fell back every time.
                 cid = str((suggestion or {}).get("id") or "").strip()
-                if cid and cid not in candidates:
-                    candidates.append(cid)
+                path = str((suggestion or {}).get("path") or "")
+                if cid and all(cid != c for c, _ in found):
+                    found.append((cid, path))
+            return found
 
-        # Capped: each check is a round trip, and the right answer is always near
-        # the top of a suggestion list.
-        for cid in candidates[:3]:
-            try:
-                if self.category_aspects(token, marketplace, cid):
-                    return cid
-            except Exception:
+        # This page lists BOOKS, so a suggestion that is not somewhere under Books
+        # is the wrong answer however confident eBay sounds about it: the phrase
+        # "Probe - leaf category check" suggested 4724, which is a real leaf
+        # category and not a book at all. The title only gets to choose among
+        # shelves that sit under Books; the generic word is the safety net.
+        for phrase, must_be_books in (((query or "").strip(), True), ("books", False)):
+            if not phrase:
                 continue
+            found = candidates_for(phrase)
+            # Capped: each check is a round trip, and the right answer is near the
+            # top of a suggestion list.
+            for cid, path in found[:3]:
+                if must_be_books and "book" not in path.lower():
+                    continue
+                try:
+                    if self.category_aspects(token, marketplace, cid):
+                        return cid
+                except Exception:
+                    continue
+            if not must_be_books and found:
+                return found[0][0]
 
-        if candidates:
-            return candidates[0]
         return self.BOOKS_LEAF_CATEGORY.get(marketplace, "261186")
 
     def create_book_draft(self, db, draft: dict, user_id=None,

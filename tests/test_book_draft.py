@@ -149,10 +149,31 @@ class BookDraftTest(unittest.TestCase):
     def test_a_leaf_from_the_taxonomy_is_preferred(self):
         self._serve()
         self.adapter.suggest_categories = lambda *a, **k: [
-            {"id": "261186", "name": "Books", "path": "Books & Magazines > Books"},
+            {"id": "261186", "name": "Books",
+             "path": "Books & Magazines > Books"},
         ]
         self.adapter.category_aspects = lambda *a, **k: {"aspects": []}
         self.adapter.create_book_draft(None, self.DRAFT, user_id=1)
+        post = [c for c in self.calls if c[0] == "POST"][0]
+        self.assertEqual(post[2]["json"]["categoryId"], "261186")
+
+    def test_a_suggestion_outside_books_is_refused_for_the_title(self):
+        """A books page that files the book under something else is worse than one
+        that files it under plain Books. The phrase "Probe - leaf category check"
+        genuinely suggested 4724, a real leaf category and not a book at all."""
+        self._serve()
+
+        def suggest(_token, _market, query):
+            if "Probe" in query:
+                return [{"id": "4724", "name": "Something Else",
+                         "path": "Collectibles > Something Else"}]
+            return [{"id": "261186", "name": "Books",
+                     "path": "Books & Magazines > Books"}]
+
+        self.adapter.suggest_categories = suggest
+        self.adapter.category_aspects = lambda *a, **k: {"aspects": []}
+        self.adapter.create_book_draft(
+            None, dict(self.DRAFT, title="Probe - leaf category check"), user_id=1)
         post = [c for c in self.calls if c[0] == "POST"][0]
         self.assertEqual(post[2]["json"]["categoryId"], "261186")
 
