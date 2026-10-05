@@ -753,10 +753,19 @@ class eBayAdapter(MarketplaceAdapter):
                     detail = {}
 
                 price = ((detail.get("pricingSummary") or {}).get("price") or {})
+                status = str(detail.get("status")
+                             or summary.get("status") or "").upper()
+                # ONLY unpublished offers are drafts. Without this the list kept
+                # showing listings that had already gone live, and offered a
+                # Publish button on something already for sale -- which either
+                # fails or double-lists.
+                if status != "UNPUBLISHED":
+                    continue
+
                 drafts.append({
                     "offer_id": offer_id,
                     "sku": sku,
-                    "status": detail.get("status") or summary.get("status") or "",
+                    "status": status,
                     "title": product.get("title") or "",
                     "price": price.get("value") or "",
                     "currency": price.get("currency") or "CAD",

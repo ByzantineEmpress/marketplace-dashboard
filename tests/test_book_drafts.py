@@ -112,6 +112,37 @@ class DraftAdapterTest(unittest.TestCase):
         def json(self):
             return self._payload
 
+    def test_a_published_offer_is_not_listed_as_a_draft(self):
+        """It kept showing listings that had already gone live, with a Publish
+        button on something already for sale."""
+        def fake_get(url, **kwargs):
+            if "/inventory_item" in url:
+                return self._Resp(200, {"inventoryItems": [
+                    {"sku": "BOOK-1", "product": {"title": "A Book"}}]})
+            if "/offer/" in url:
+                return self._Resp(200, {"offerId": "9", "status": "PUBLISHED",
+                                        "pricingSummary": {"price": {
+                                            "value": "12.34", "currency": "CAD"}}})
+            return self._Resp(200, {"offers": [{"offerId": "9"}]})
+
+        self.mod.httpx.get = fake_get
+        self.assertEqual(self.adapter.list_book_drafts(self.token, "EBAY_CA"), [])
+
+    def test_an_unpublished_offer_is_listed(self):
+        def fake_get(url, **kwargs):
+            if "/inventory_item" in url:
+                return self._Resp(200, {"inventoryItems": [
+                    {"sku": "BOOK-1", "product": {"title": "A Book"}}]})
+            if "/offer/" in url:
+                return self._Resp(200, {"offerId": "9", "status": "UNPUBLISHED",
+                                        "pricingSummary": {"price": {
+                                            "value": "12.34", "currency": "CAD"}}})
+            return self._Resp(200, {"offers": [{"offerId": "9"}]})
+
+        self.mod.httpx.get = fake_get
+        drafts = self.adapter.list_book_drafts(self.token, "EBAY_CA")
+        self.assertEqual([d["offer_id"] for d in drafts], ["9"])
+
     def test_only_unpublished_offers_come_back(self):
         def fake_get(url, **kwargs):
             if "/inventory_item" in url:
