@@ -226,6 +226,45 @@ class BookDraftTest(unittest.TestCase):
         result = self.adapter.create_book_draft(None, self.DRAFT, user_id=1)
         self.assertTrue(result["ok"])
 
+    def test_a_relative_photo_path_becomes_an_absolute_url(self):
+        """eBay fetches listing images itself, so they must be absolute and public.
+        The local storage backend returns "/static/uploads/x.jpg", and a relative
+        path is not a URL eBay can retrieve -- it drops the image without complaint,
+        which is how a draft ends up with no photo on it."""
+        self._serve()
+        self.adapter.create_book_draft(
+            None, dict(self.DRAFT, images=["/static/uploads/abc.jpg"]), user_id=1)
+        put = [c for c in self.calls if c[0] == "PUT"][0]
+        urls = put[2]["json"]["product"]["imageUrls"]
+        self.assertEqual(len(urls), 1)
+        self.assertTrue(urls[0].startswith("http"), urls[0])
+        self.assertTrue(urls[0].endswith("/static/uploads/abc.jpg"), urls[0])
+
+    def test_an_already_absolute_photo_url_is_left_alone(self):
+        self._serve()
+        self.adapter.create_book_draft(
+            None, dict(self.DRAFT, images=["https://cdn.example.test/a.jpg"]),
+            user_id=1)
+        put = [c for c in self.calls if c[0] == "PUT"][0]
+        self.assertEqual(put[2]["json"]["product"]["imageUrls"],
+                         ["https://cdn.example.test/a.jpg"])
+
+    def test_a_path_that_cannot_be_made_absolute_is_dropped(self):
+        """Better a draft with no photo than one carrying a URL that resolves to
+        nowhere."""
+        import src.config as config
+
+        self._serve()
+        original = getattr(config, "APP_BASE_URL", None)
+        config.APP_BASE_URL = ""
+        try:
+            self.adapter.create_book_draft(
+                None, dict(self.DRAFT, images=["/static/uploads/abc.jpg"]), user_id=1)
+        finally:
+            config.APP_BASE_URL = original
+        put = [c for c in self.calls if c[0] == "PUT"][0]
+        self.assertNotIn("imageUrls", put[2]["json"]["product"])
+
     def test_the_item_is_created_before_the_offer(self):
         """The offer cannot exist without its inventory item. The location lookup
         in between is a read and does not matter to the ordering."""

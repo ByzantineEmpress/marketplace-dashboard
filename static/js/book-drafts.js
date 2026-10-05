@@ -39,12 +39,29 @@
         var card = el("div", "bd-row");
         card.dataset.offerId = draft.offer_id;
 
+        var check = document.createElement("input");
+        check.type = "checkbox";
+        check.className = "bd-check";
+        check.value = draft.offer_id;
+        check.setAttribute("aria-label", "Select " + (draft.title || "this draft"));
+        card.appendChild(check);
+
         if (draft.image) {
+            // A link rather than a plain image: the thumbnail is too small to judge
+            // a book's condition from, so clicking opens the full-size photo.
+            var link = document.createElement("a");
+            link.href = draft.image;
+            link.target = "_blank";
+            link.rel = "noopener";
+            link.title = "Open the full-size photo";
             var img = el("img", "bd-thumb");
             img.src = draft.image;
-            img.alt = "";
+            img.alt = draft.title || "";
             img.loading = "lazy";
-            card.appendChild(img);
+            link.appendChild(img);
+            card.appendChild(link);
+        } else {
+            card.appendChild(el("span", "bd-nophoto", "no photo"));
         }
 
         var main = el("div", "bd-main");
@@ -143,7 +160,98 @@
                 + "until you publish it."));
             return;
         }
+
+        // A toolbar rather than a per-row delete only: clearing out several drafts
+        // one confirmation at a time is the tedious part.
+        var bar = el("div", "bd-bar");
+        var all = document.createElement("input");
+        all.type = "checkbox";
+        all.id = "bd-select-all";
+        var allLabel = el("label", "bd-bar-label", "Select all");
+        allLabel.setAttribute("for", "bd-select-all");
+        allLabel.insertBefore(all, allLabel.firstChild);
+
+        var count = el("span", "bd-bar-count", "");
+        var bulk = el("button", "btn btn--sm btn--danger", "Delete selected");
+        bulk.type = "button";
+        bulk.disabled = true;
+
+        function selected() {
+            return Array.prototype.slice
+                .call(root.querySelectorAll(".bd-check"))
+                .filter(function (c) { return c.checked; })
+                .map(function (c) { return c.value; });
+        }
+
+        function sync() {
+            var n = selected().length;
+            count.textContent = n ? n + " selected" : "";
+            bulk.disabled = n === 0;
+            all.checked = n > 0 && n === root.querySelectorAll(".bd-check").length;
+        }
+
+        all.addEventListener("change", function () {
+            Array.prototype.forEach.call(root.querySelectorAll(".bd-check"),
+                function (c) { c.checked = all.checked; });
+            sync();
+        });
+        root.addEventListener("change", function (event) {
+            if (event.target && event.target.classList.contains("bd-check")) sync();
+        });
+
+        bulk.addEventListener("click", function () {
+            var ids = selected();
+            if (!ids.length) return;
+            var ok = window.confirm(
+                "Delete " + ids.length + " draft" + (ids.length === 1 ? "" : "s") + "?\n\n"
+                + "None of them are on sale, so nothing is lost from eBay -- the "
+                + "offers are simply removed."
+            );
+            if (!ok) return;
+
+            bulk.disabled = true;
+            var done = 0, failed = [];
+
+            // Sequential rather than parallel: eBay rate-limits, and a partial
+            // failure is easier to report honestly one at a time.
+            var chain = Promise.resolve();
+            ids.forEach(function (id) {
+                chain = chain.then(function () {
+                    var draft = drafts.filter(function (d) {
+                        return d.offer_id === id;
+                    })[0] || {};
+                    bulk.textContent = "Deleting " + (done + 1) + " of " + ids.length + "…";
+                    return fetch("/api/books/drafts/" + encodeURIComponent(id)
+                                 + "?sku=" + encodeURIComponent(draft.sku || ""),
+                                 { method: "DELETE" })
+                        .then(function (r) { return r.json(); })
+                        .then(function (data) {
+                            if (data && data.ok) { done += 1; }
+                            else { failed.push(id); }
+                        })
+                        .catch(function () { failed.push(id); });
+                });
+            });
+
+            chain.then(function () {
+                if (failed.length) {
+                    setStatus("Deleted " + done + " of " + ids.length + "; "
+                              + failed.length + " failed.", "error");
+                } else {
+                    setStatus("Deleted " + done + " draft"
+                              + (done === 1 ? "" : "s") + ".", "ok");
+                }
+                load();
+            });
+        });
+
+        bar.appendChild(allLabel);
+        bar.appendChild(count);
+        bar.appendChild(bulk);
+        root.appendChild(bar);
+
         drafts.forEach(function (draft) { root.appendChild(row(draft)); });
+        sync();
     }
 
     function load() {

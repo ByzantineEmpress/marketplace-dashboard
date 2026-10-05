@@ -854,7 +854,26 @@ class eBayAdapter(MarketplaceAdapter):
         }
         images = [u for u in (draft.get("images") or []) if u]
         if images:
-            product["imageUrls"] = images[:24]
+            # eBay fetches these itself, so they have to be absolute and public.
+            # The local storage backend returns "/static/uploads/x.jpg", and a
+            # relative path is not a URL eBay can retrieve: it drops the image
+            # without complaint, which is how a draft ends up with no photo on it.
+            from src import config as _config
+
+            base = (getattr(_config, "APP_BASE_URL", "") or "").rstrip("/")
+            resolved = []
+            for url in images:
+                url = str(url).strip()
+                if url.startswith("/"):
+                    if not base:
+                        # Sending eBay a path it will discard, or a URL pointing at
+                        # nowhere, is worse than sending the draft with no photo.
+                        continue
+                    url = base + url
+                if url.startswith(("http://", "https://")):
+                    resolved.append(url)
+            if resolved:
+                product["imageUrls"] = resolved[:24]
         aspects = draft.get("aspects") or {}
         if aspects:
             product["aspects"] = {
