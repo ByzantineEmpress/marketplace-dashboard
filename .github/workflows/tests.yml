@@ -87,6 +87,7 @@ jobs:
           # tests/test_teams.py is excluded because it needs a running server; it
           # is documented in README.md as an end-to-end check to run by hand.
           SUITES="
+            tests/test_books.py
             tests/test_data_deletion.py
             tests/test_api_client.py
             tests/test_ebay_deletion.py
