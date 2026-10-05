@@ -209,7 +209,7 @@ class FormatTest2(unittest.TestCase):
         import src.books as b
         original_ol, original_gb = b._open_library, b._google_books
         b._open_library = lambda isbn: ol
-        b._google_books = lambda isbn: (gb or {})
+        b._google_books = lambda isbn, api_key="": (gb or {})
         try:
             return b.lookup_book("0-241-10825-X")
         finally:
@@ -259,7 +259,7 @@ class MetadataDiscrepancyTest(unittest.TestCase):
         original = b._open_library
         b._open_library = lambda isbn: {"publisher": "Hamish Hamilton",
                                         "publication_year": "1982"}
-        b._google_books = lambda isbn: {}
+        b._google_books = lambda isbn, api_key="": {}
         try:
             meta = b.lookup_book("0-241-10825-X")
         finally:
@@ -281,7 +281,7 @@ class MetadataDiscrepancyTest(unittest.TestCase):
 
         original_ol, original_gb = b._open_library, b._google_books
         b._open_library = lambda isbn: {}
-        b._google_books = lambda isbn: {}
+        b._google_books = lambda isbn, api_key="": {}
         try:
             meta = b.lookup_book("0-241-10825-X")
         finally:

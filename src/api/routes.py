@@ -2360,7 +2360,25 @@ PLATFORM_CREDENTIALS = {
         # would block Connect with "save your refresh token first", which is a
         # value the user cannot have before connecting.
     ],
+    # Not a marketplace: a key for looking book details up. It is stored and
+    # masked through exactly the same machinery -- encrypted at rest, never sent
+    # to the browser -- but it has no OAuth flow and nothing to sync, so the page
+    # renders it with a Save button only. See OAUTH_PLATFORMS below.
+    "google_books": [
+        ("api_key", "Google Books API Key"),
+    ],
 }
+
+# Display names for platforms whose key is not a tidy single word. Without this
+# "google_books" is rendered as "Google_books".
+PLATFORM_LABELS = {
+    "google_books": "Google Books — book lookups",
+}
+
+# The platforms with an OAuth flow behind them. Everything else is a plain key:
+# showing it a Connect button would invite a click that cannot work, and a
+# "Disconnect & delete data" button would offer to delete listings it never had.
+OAUTH_PLATFORMS = {"ebay", "etsy"}
 
 # Credential keys that are secrets: never returned, only a masked hint.
 SECRET_CREDENTIAL_KEYS = {
@@ -2436,9 +2454,11 @@ async def get_credential_status(db: Session = Depends(get_db), user: dict = Depe
                 "hint": secrets_crypto.mask(value) if value and key in SECRET_CREDENTIAL_KEYS else "",
             })
         result[platform] = {
-            "label": platform.capitalize(),
+            "label": PLATFORM_LABELS.get(platform, platform.capitalize()),
             "fields": fields,
             "is_configured": all(creds.get(k) for k, _ in keys),
+            # Drives whether the page offers Connect, Sync and Disconnect.
+            "connectable": platform in OAUTH_PLATFORMS,
         }
     return result
 
@@ -2608,7 +2628,16 @@ async def books_lookup(isbn: str = "", db: Session = Depends(get_db),
     from src.models import MarketplaceAccount
 
     def gather():
-        meta = books_mod.lookup_book(isbn)
+        # The caller's own Google Books key, if they saved one on the settings
+        # page. Per-user, decrypted only here, and never returned to the browser.
+        google_key = ""
+        try:
+            google_key = ((_user_credentials(db, user["id"], "google_books")
+                           .get("api_key")) or "")
+        except Exception:
+            google_key = ""
+
+        meta = books_mod.lookup_book(isbn, google_key)
         urls = books_mod.search_urls(meta, "EBAY_CA")
 
         market = {"available": 0, "average_asking": None, "error": None}

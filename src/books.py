@@ -173,7 +173,7 @@ def _open_library(isbn: str) -> Dict[str, Any]:
     return out
 
 
-def _google_books(isbn: str) -> Dict[str, Any]:
+def _google_books(isbn: str, api_key: str = "") -> Dict[str, Any]:
     import os
 
     import httpx
@@ -181,18 +181,23 @@ def _google_books(isbn: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     try:
         params = {"q": f"isbn:{isbn}"}
-        # Optional. Without a key the shared anonymous quota is easily exhausted,
-        # and the API then answers 429 -- which looks like "this book has no
-        # categories" rather than "we were rate limited". GOOGLE_BOOKS_API_KEY
-        # raises the limit; the source is simply skipped when it is not set and
-        # the quota is gone.
-        key = os.environ.get("GOOGLE_BOOKS_API_KEY") or ""
+        # The caller's own key, saved on the settings page, wins over the
+        # environment: without any key at all these requests share an anonymous
+        # pool that is routinely already spent, and Google answers 429 -- which
+        # looks like "this book has no categories" rather than "we were refused".
+        key = (api_key or "").strip() or os.environ.get("GOOGLE_BOOKS_API_KEY") or ""
         if key:
             params["key"] = key
 
         resp = httpx.get(GOOGLE_BOOKS, params=params, timeout=30)
         if resp.status_code == 429:
             out["quota_exceeded"] = True
+            return out
+        if resp.status_code in (400, 403):
+            # A malformed key, a key for the wrong API, or the Books API not
+            # enabled on the project. Distinguished from a quota refusal because
+            # the fix is different and the seller can act on it.
+            out["key_rejected"] = f"HTTP {resp.status_code}"
             return out
         if resp.status_code != 200:
             return out
@@ -282,19 +287,22 @@ def _split_subjects(pool: List[str]) -> Dict[str, str]:
     return {"genre": " / ".join(genre), "topic": " / ".join(topic)}
 
 
-def lookup_book(isbn: str) -> Dict[str, Any]:
+def lookup_book(isbn: str, google_api_key: str = "") -> Dict[str, Any]:
     """Everything an eBay book listing needs, from two free catalogues.
 
     Google Books fills what Open Library leaves blank and the other way round:
-    neither is complete. Google Books answers 429 once its anonymous daily quota
-    is gone, and that is reported rather than silently treated as "this book has
-    no categories" -- which is exactly how Genre and Topic came out empty.
+    neither is complete. Google Books answers 429 once its quota is gone, and that
+    is reported rather than silently treated as "this book has no categories" --
+    which is exactly how Genre and Topic came out empty.
+
+    google_api_key is the caller's own key from the settings page, if they saved
+    one. It is optional: the lookup works on Open Library alone.
     """
     normalised = normalise_isbn(isbn)
     key = normalised["isbn13"]
 
     ol = _open_library(key)
-    gb = _google_books(key)
+    gb = _google_books(key, google_api_key)
 
     # Open Library's author strings are the more reliable of the two when present.
     author = ol.get("author") or gb.get("author") or ""
@@ -323,9 +331,10 @@ def lookup_book(isbn: str) -> Dict[str, Any]:
     sources = []
     if ol:
         sources.append("openlibrary")
-    # A quota refusal is not a source. Counting it as one made the page look as
-    # though Google Books had answered and simply had no categories.
-    if gb and not gb.get("quota_exceeded"):
+    # A refusal is not a source. Counting the quota error as one made the page look
+    # as though Google Books had answered and simply had no categories; counting a
+    # rejected key as one would hide a misconfigured key the same way.
+    if gb and not gb.get("quota_exceeded") and not gb.get("key_rejected"):
         sources.append("googlebooks")
 
     return {
@@ -345,6 +354,7 @@ def lookup_book(isbn: str) -> Dict[str, Any]:
         # Surfaced so the page can say WHY a field is empty instead of leaving the
         # seller to guess that the lookup half-failed.
         "google_quota_exceeded": bool(gb.get("quota_exceeded")),
+        "google_key_rejected": gb.get("key_rejected") or "",
     }
 
 

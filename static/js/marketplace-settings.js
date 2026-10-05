@@ -106,28 +106,37 @@
         const saveBtn = el("button", "btn btn--primary", "Save");
         saveBtn.type = "button";
 
-        // Connect runs the marketplace's own OAuth flow. Necessary but not
-        // sufficient to just save keys: the API credentials identify the
-        // application, while an access token authorises reading THIS user's
-        // shop. Without it a sync has nothing to authenticate with, which is
-        // exactly the "no valid access token" message this button prevents.
-        const connectBtn = el("button", "btn btn--success", "Connect");
-        connectBtn.type = "button";
-        if (!info.is_configured) {
-            connectBtn.disabled = true;
-            connectBtn.title = "Save your credentials first.";
+        actions.appendChild(saveBtn);
+
+        // Connect, Sync and Disconnect only mean something for a marketplace with
+        // an OAuth flow. A plain API key (Google Books) has none: Connect would
+        // invite a click that cannot work, Sync would have nothing to fetch, and
+        // "Disconnect & delete data" would offer to delete listings it never had.
+        if (info.connectable) {
+            // Connect runs the marketplace's own OAuth flow. Necessary but not
+            // sufficient to just save keys: the API credentials identify the
+            // application, while an access token authorises reading THIS user's
+            // shop. Without it a sync has nothing to authenticate with, which is
+            // exactly the "no valid access token" message this button prevents.
+            const connectBtn = el("button", "btn btn--success", "Connect");
+            connectBtn.type = "button";
+            if (!info.is_configured) {
+                connectBtn.disabled = true;
+                connectBtn.title = "Save your credentials first.";
+            }
+
+            const syncBtn = el("button", "btn btn--outline", "Sync now");
+            syncBtn.type = "button";
+
+            actions.appendChild(connectBtn);
+            actions.appendChild(syncBtn);
         }
 
-        const syncBtn = el("button", "btn btn--outline", "Sync now");
-        syncBtn.type = "button";
-
-        actions.appendChild(saveBtn);
-        actions.appendChild(connectBtn);
-        actions.appendChild(syncBtn);
-
         // Disconnect & delete this marketplace's data. Shown when there is
-        // anything to remove: either a live connection or saved credentials.
-        const hasAnything = (account && account.is_connected) || info.is_configured;
+        // anything to remove: either a live connection or saved credentials --
+        // and only for a platform that has a connection to speak of.
+        const hasAnything = info.connectable
+            && ((account && account.is_connected) || info.is_configured);
         if (hasAnything) {
             const disconnectBtn = el("button", "btn btn--danger", "Disconnect & delete data");
             disconnectBtn.type = "button";
