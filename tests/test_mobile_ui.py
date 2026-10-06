@@ -40,8 +40,9 @@ class MobileNavTest(unittest.TestCase):
 class MobileToolbarTest(unittest.TestCase):
     def test_the_toolbar_stacks_on_mobile(self):
         css = _read("static", "css", "style.css")
-        # The one-column layout lives inside the max-width: 767px block.
-        block = css.split("@media (max-width: 767px)")[-1]
+        # The one-column layout lives inside a max-width: 767px block. All of them
+        # are joined for the same reason as the modal test below.
+        block = "\n".join(css.split("@media (max-width: 767px)")[1:])
         self.assertIn(".toolbar-left", block)
         self.assertIn("grid-template-columns: 1fr 1fr", block)
         self.assertIn(".toolbar-right", block)
@@ -54,7 +55,12 @@ class MobileToolbarTest(unittest.TestCase):
 class MobileModalTest(unittest.TestCase):
     def test_the_modal_is_a_dismissible_bottom_sheet(self):
         css = _read("static", "css", "style.css")
-        block = css.split("@media (max-width: 640px)")[-1]
+        # EVERY max-width: 640px block, joined. This used to take only the last one,
+        # which was true only while the modal rules happened to be the final block in
+        # the file -- and stopped being true as soon as a second phone block was added
+        # for the book pages. Searching the rules rather than the file order means a
+        # new phone block cannot silently invalidate this test.
+        block = "\n".join(css.split("@media (max-width: 640px)")[1:])
         self.assertIn("align-items: flex-end", block)
         self.assertIn("border-radius: var(--radius-lg) var(--radius-lg) 0 0", block)
         # The close target must be large enough to hit with a thumb.
