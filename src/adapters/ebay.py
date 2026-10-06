@@ -828,26 +828,136 @@ class eBayAdapter(MarketplaceAdapter):
         drafts.sort(key=lambda d: str(d.get("sku") or ""), reverse=True)
         return drafts
 
-    # eBay's publish errors, translated. The raw text names an errorId and a
-    # category and leaves the seller to work out what to do; these say what to do.
+    # eBay's publish errors, translated. The raw text names an errorId and a category
+    # and leaves the seller to work out what to do; these say what to do.
     #
     # 25002 is deliberately NOT given a specific instruction. It is a generic
     # "something is wrong with your item specifics", and it has reported both
-    # "Add at least 1 photo" and "The item specific Language is missing" on this
-    # very listing. Hardcoding the photo reading sent the seller looking for a
-    # missing photo on a draft that had two, while the real problem was Language.
-    # eBay's own words name the field; a paraphrase must not overrule them.
+    # "Add at least 1 photo" and "The item specific Language is missing" on this very
+    # listing. Hardcoding the photo reading sent the seller looking for a missing
+    # photo on a draft that had two. eBay's own words name the field; a paraphrase
+    # must not overrule them.
     PUBLISH_HELP = {
-        25002: ("eBay rejected an item specific on this listing. Its own words below "
-                "name the field. Note that a missing PHOTO and a missing LANGUAGE "
-                "both report as 25002, so the message is what distinguishes them."),
-        25007: ("This account cannot use eBay Business Policies, so the offer "
-                "carries no shipping terms, and eBay has no default shipping "
-                "service to fall back on. A shipping service has to be set on the "
-                "account in eBay before this can be published."),
-        25001: ("eBay rejected the listing for a problem with the item. Its own "
-                "words are below."),
+        25002: ("eBay rejected an item specific on this listing."),
+        25007: ("The offer has no valid shipping service. This account needs a "
+                "fulfilment, a payment and a return policy before eBay will publish "
+                "it, and all three must be present."),
+        25001: ("eBay rejected the listing for a problem with the item."),
+        25004: ("eBay could not find the category this listing is filed under. It "
+                "needs a leaf category for this marketplace."),
+        25005: ("eBay could not use the price on this listing."),
+        25709: ("eBay rejected a request header. This is a problem with the app "
+                "rather than with your listing."),
+        21919136: ("eBay needs more item specifics for this category."),
     }
+
+    def _publish_error(self, resp) -> str:
+        """eBay's own words, shaped into something a seller can act on.
+
+        The goal is that a rejection reads as a sentence about the listing rather
+        than a blob of JSON. Where eBay names the offending field -- which it does
+        in the parameters of an item-specifics error, and in the message text -- that
+        name is surfaced, because "the item specific Language is missing" is
+        actionable and "errorId 25002" is not.
+        """
+        try:
+            errors = (resp.json() or {}).get("errors") or []
+        except Exception:
+            errors = []
+
+        if not errors:
+            # Nothing parseable. Say so plainly rather than pasting a body.
+            return (f"eBay refused the listing and did not explain why "
+                    f"(HTTP {resp.status_code}). Its full reply is in the logs.")
+
+        lines = []
+        for error in errors[:3]:
+            error_id = error.get("errorId")
+            message = (error.get("longMessage")
+                       or error.get("message") or "").strip()
+            low = message.lower()
+
+            known = self.PUBLISH_HELP.get(error_id)
+            if known:
+                lines.append(known)
+                # The message usually names the field, so it is kept alongside.
+                if message and message.lower() not in known.lower():
+                    lines.append(self._tidy(message))
+                continue
+
+            # The item-specifics family names the missing field in its own message.
+            if "item specific" in low:
+                named = self._named_specific(error, message)
+                lines.append(
+                    f"eBay needs the item specific {named} for this category. "
+                    f"Add it to the listing and publish again." if named
+                    else "eBay needs an item specific this listing does not have.")
+                continue
+
+            if "photo" in low and "at least" in low:
+                lines.append("eBay will not publish a listing with no photo. "
+                             "Add at least one and publish again.")
+                continue
+
+            if "not eligible for business policy" in low or error_id == 20403:
+                lines.append("This eBay account cannot use business policies, so the "
+                             "offer has no shipping terms to publish with.")
+                continue
+
+            # Unknown but readable: pass eBay's message through, tidied, with the id
+            # so it can be looked up.
+            if message:
+                lines.append(self._tidy(message))
+            else:
+                lines.append(f"eBay error {error_id}")
+
+        # Deduplicated: eBay often repeats the same complaint per service or field.
+        seen, unique = set(), []
+        for line in lines:
+            if line not in seen:
+                seen.add(line)
+                unique.append(line)
+
+        detail = " ".join(unique)
+        ids = ", ".join(str(e.get("errorId")) for e in errors[:3] if e.get("errorId"))
+        if ids:
+            detail += f"  (eBay error {ids})"
+        return f"eBay would not publish this listing. {detail}"
+
+    @staticmethod
+    def _tidy(message: str) -> str:
+        """eBay's prose, trimmed of the boilerplate it wraps around every message."""
+        text = " ".join(str(message or "").split())
+        for noise in (
+            "A user error has occurred.",
+            "The request has errors. For help, see the documentation for this API.",
+            "Please verify the request",
+            "More photos are better! Show off your item from every angle and zoom "
+            "in on details.",
+        ):
+            text = text.replace(noise, "")
+        return text.strip() or "eBay did not say why."
+
+    @staticmethod
+    def _named_specific(error: Dict[str, Any], message: str) -> str:
+        """The item specific eBay is asking for, from wherever it named it.
+
+        It appears in the message text ("The item specific Language is missing")
+        and sometimes in the parameters, and either is more use than the error id.
+        """
+        import re as _re
+
+        for parameter in error.get("parameters") or []:
+            value = str((parameter or {}).get("value") or "").strip()
+            # The parameters carry the field name in the first slot and noise after.
+            if value and value.lower() not in ("0", "1") and len(value) < 40:
+                if value.lower() not in ("true", "false"):
+                    return f"“{value}”"
+        match = _re.search(r"item specific (.+?) (?:is|are) (?:missing|required)",
+                           message, _re.IGNORECASE)
+        if match:
+            return f"“{match.group(1).strip()}”"
+        return ""
 
     def publish_offer(self, token: dict, marketplace: str,
                       offer_id: str) -> Dict[str, Any]:
@@ -870,35 +980,6 @@ class eBayAdapter(MarketplaceAdapter):
             "url": f"https://www.ebay.ca/itm/{(body or {}).get('listingId')}"
                    if (body or {}).get("listingId") else "",
         }
-
-    def _publish_error(self, resp) -> str:
-        """eBay's own words, plus what to do about the ones worth explaining."""
-        errors = []
-        try:
-            errors = (resp.json() or {}).get("errors") or []
-        except Exception:
-            errors = []
-
-        for error in errors:
-            help_text = self.PUBLISH_HELP.get(error.get("errorId"))
-            if help_text:
-                detail = (error.get("longMessage") or error.get("message") or "")
-                return f"{help_text} (eBay said: {detail.strip()[:200]})"
-
-        # Nothing to paraphrase, so pass eBay's own errors through -- with their
-        # ids, because those are what makes a new failure searchable. The raw body
-        # is the fallback rather than the first choice: it can be empty even when
-        # the errors parsed fine, which would leave a message ending in "HTTP 400:".
-        if errors:
-            bits = []
-            for error in errors[:3]:
-                detail = (error.get("longMessage") or error.get("message") or "").strip()
-                error_id = error.get("errorId")
-                bits.append(f"{error_id}: {detail}" if error_id else detail)
-            detail = " | ".join(b for b in bits if b) or "(no detail given)"
-        else:
-            detail = (resp.text or "").strip()[:300] or "(no detail given)"
-        return f"eBay refused to publish the listing (HTTP {resp.status_code}): {detail}"
 
     def delete_draft(self, token: dict, marketplace: str, offer_id: str,
                      sku: str = "") -> bool:

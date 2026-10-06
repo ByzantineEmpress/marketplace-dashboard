@@ -61,6 +61,47 @@
             .catch(function (err) { status("Could not read the photo: " + err.message); });
     }
 
+    // -- surviving a reload ------------------------------------------------
+    //
+    // After a book is created or published the form is cleared, because the next
+    // action is always another book and retyping over the last one's data is how
+    // details get carried across by mistake. Clearing means reloading, and a reload
+    // would take the confirmation with it -- so the result is stashed and collected
+    // again on the way back.
+
+    var LAST_RESULT = "bp-last-result";
+
+    function stashResult(html, kind) {
+        try {
+            sessionStorage.setItem(LAST_RESULT,
+                                   JSON.stringify({ html: html, kind: kind }));
+        } catch (err) {
+            // Private mode can refuse storage. Losing the banner is better than
+            // failing a publish that has already happened.
+        }
+    }
+
+    function showStashedResult() {
+        var box = $("bp-result");
+        if (!box) return;
+        var raw = null;
+        try {
+            raw = sessionStorage.getItem(LAST_RESULT);
+            sessionStorage.removeItem(LAST_RESULT);
+        } catch (err) {
+            return;
+        }
+        if (!raw) return;
+        try {
+            var saved = JSON.parse(raw);
+            box.hidden = false;
+            box.className = "bp-result bp-result--" + (saved.kind || "ok");
+            box.innerHTML = saved.html;
+        } catch (err) {
+            // Unreadable stash: nothing to show, and nothing worth breaking over.
+        }
+    }
+
     // -- scanning ----------------------------------------------------------
     //
     // A live viewfinder rather than the camera app. Going out to the camera, taking
@@ -554,6 +595,9 @@
                     + data.listing_id + "</strong>." +
                     (data.url ? '<br><a href="' + data.url + '" target="_blank" '
                                 + 'rel="noopener">View it on eBay \u2192</a>' : "");
+                // Clear the form for the next book, keeping the confirmation.
+                stashResult(result.innerHTML, "ok");
+                window.setTimeout(function () { window.location.reload(); }, 1200);
             })
             .catch(function (err) {
                 result.hidden = false;
@@ -601,6 +645,11 @@
                 // It opens too, so the draft is not left to be hunted for. The
                 // List a Book tab stays where it is, ready for the next book.
                 window.open(out.data.draft_url, "_blank", "noopener");
+                // Clearing here too: the next action after a draft is another book,
+                // and a form that keeps the last one is how the wrong ISBN ends up on
+                // the next listing.
+                stashResult(result.innerHTML, "ok");
+                window.setTimeout(function () { window.location.reload(); }, 1200);
             })
             .catch(function (err) {
                 result.hidden = false;
@@ -639,6 +688,9 @@
                 if (e.key === "Enter") { e.preventDefault(); lookup(); }
             });
         }
+        // The confirmation from before the reload, if there was one.
+        showStashedResult();
+
         if ($("bp-title")) $("bp-title").addEventListener("input", titleCount);
 
         var format = $("bp-format");

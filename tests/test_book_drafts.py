@@ -251,12 +251,63 @@ class DraftAdapterTest(unittest.TestCase):
         self.assertEqual(drafts[0]["price"], "12.34")
         self.assertEqual(drafts[0]["category_id"], "261186")
 
+    def test_a_rejection_reads_as_a_sentence_not_an_error_id(self):
+        """A seller cannot act on "errorId 25002". The message has to say what eBay
+        wants, and name the field where eBay names it."""
+        def refusing(error_id, message):
+            self.mod.httpx.post = lambda url, **k: self._Resp(
+                400, {"errors": [{"errorId": error_id, "message": message}]})
+            with self.assertRaises(RuntimeError) as caught:
+                self.adapter.publish_offer(self.token, "EBAY_CA", "9")
+            return str(caught.exception)
+
+        language = refusing(
+            25002, "A user error has occurred. The item specific Language is missing. "
+                   "Add Language to this listing, enter a valid value, and then try "
+                   "again.")
+        self.assertIn("Language", language)
+        # eBay's boilerplate is stripped rather than pasted in.
+        self.assertNotIn("A user error has occurred", language)
+        self.assertNotIn("{", language)
+
+        photo = refusing(
+            25002, "A user error has occurred. Add at least 1 photo. More photos are "
+                   "better! Show off your item from every angle and zoom in on "
+                   "details.")
+        self.assertIn("photo", photo.lower())
+        self.assertNotIn("More photos are better", photo)
+
+        shipping = refusing(
+            25007, "The eBay listing associated with the inventory item has invalid "
+                   "data in the associated Fulfillment policy.")
+        self.assertIn("policy", shipping.lower())
+
+    def test_an_unrecognised_rejection_still_explains_itself(self):
+        self.mod.httpx.post = lambda url, **k: self._Resp(
+            400, {"errors": [{"errorId": 99999, "message": "A brand new complaint."}]})
+        with self.assertRaises(RuntimeError) as caught:
+            self.adapter.publish_offer(self.token, "EBAY_CA", "9")
+        message = str(caught.exception)
+        self.assertIn("brand new complaint", message)
+        self.assertIn("99999", message)          # so it can be looked up
+
+    def test_a_rejection_with_no_body_does_not_paste_json(self):
+        self.mod.httpx.post = lambda url, **k: self._Resp(400, {})
+        with self.assertRaises(RuntimeError) as caught:
+            self.adapter.publish_offer(self.token, "EBAY_CA", "9")
+        message = str(caught.exception)
+        self.assertIn("did not explain why", message)
+        self.assertNotIn("{", message)
+
     def test_a_failed_publish_raises_with_ebays_own_words(self):
         self.mod.httpx.post = lambda url, **k: self._Resp(
             400, {"errors": [{"errorId": 99999, "message": "nope"}]})
         with self.assertRaises(RuntimeError) as caught:
             self.adapter.publish_offer(self.token, "EBAY_CA", "9")
-        self.assertIn("HTTP 400", str(caught.exception))
+        # eBay's own words, and the id so it can be looked up -- but not "HTTP 400",
+        # which tells a seller nothing.
+        self.assertIn("nope", str(caught.exception))
+        self.assertIn("99999", str(caught.exception))
 
     def test_the_known_publish_errors_say_what_to_do(self):
         """eBay answers with an errorId and a category and leaves the seller to
@@ -269,9 +320,8 @@ class DraftAdapterTest(unittest.TestCase):
                 self.adapter.publish_offer(self.token, "EBAY_CA", "9")
             return str(caught.exception)
 
-        no_photo = refusing(25002, "Add at least 1 photo.")
-        self.assertIn("Add at least 1 photo", no_photo)  # eBay's words, kept verbatim
-        self.assertIn("item specific", no_photo.lower())
+        no_photo = refusing(25002, "A user error has occurred. Add at least 1 photo.")
+        self.assertIn("photo", no_photo.lower())
 
         # 25002 must NOT be paraphrased into a specific cause. It reported "add a
         # photo" on one publish and "Language is missing" on the next, on the same
@@ -282,7 +332,7 @@ class DraftAdapterTest(unittest.TestCase):
 
         no_shipping = refusing(25007, "invalid data in the Fulfillment policy")
         self.assertIn("shipping", no_shipping.lower())
-        self.assertIn("Business Policies", no_shipping)
+        self.assertIn("policy", no_shipping.lower())
 
     def test_an_untranslated_publish_error_still_carries_the_raw_text(self):
         """Anything not worth paraphrasing must not be swallowed."""
