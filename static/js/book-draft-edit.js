@@ -90,6 +90,10 @@
                 setValue("be-quantity", d.quantity);
                 setValue("be-category", d.category_id);
                 setValue("be-description", d.description);
+                setValue("be-weight", d.weight_kg);
+                setValue("be-length", d.length_cm);
+                setValue("be-width", d.width_cm);
+                setValue("be-height", d.height_cm);
                 images = (d.images || []).slice();
                 renderThumbs();
                 titleCount();
@@ -118,6 +122,10 @@
             quantity: parseInt(value("be-quantity"), 10) || 1,
             description: $("be-description").value,
             images: images,
+            weight_kg: value("be-weight"),
+            length_cm: value("be-length"),
+            width_cm: value("be-width"),
+            height_cm: value("be-height"),
         };
         var category = value("be-category");
         if (category) changes.category_id = category;

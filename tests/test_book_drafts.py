@@ -143,6 +143,94 @@ class DraftAdapterTest(unittest.TestCase):
         drafts = self.adapter.list_book_drafts(self.token, "EBAY_CA")
         self.assertEqual([d["offer_id"] for d in drafts], ["9"])
 
+    def test_editing_the_package_merges_it_onto_the_item(self):
+        """Weight and dimensions are priced into a calculated-shipping quote, so a
+        wrong weight quotes the buyer the wrong postage. They live on the inventory
+        item, and PUT on an item replaces it -- so everything else must survive."""
+        puts = []
+
+        def fake_get(url, **kwargs):
+            if "/inventory_item/" in url:
+                return self._Resp(200, {
+                    "condition": "USED_GOOD",
+                    "packageWeightAndSize": {
+                        "weight": {"value": 1.0, "unit": "KILOGRAM"},
+                        "dimensions": {"length": 25, "width": 25, "height": 10,
+                                       "unit": "CENTIMETER"},
+                    },
+                    "product": {"title": "A Book", "aspects": {"Author": ["X"]}},
+                })
+            return self._Resp(200, {"offerId": "9", "sku": "BOOK-1",
+                                    "availableQuantity": 1})
+
+        def fake_put(url, **kwargs):
+            puts.append((url, kwargs.get("json") or {}))
+            return self._Resp(204)
+
+        self.mod.httpx.get = fake_get
+        self.mod.httpx.put = fake_put
+        self.adapter.update_draft(self.token, "EBAY_CA", "9", "BOOK-1",
+                                  {"weight_kg": 2.5, "length_cm": 30})
+
+        item = [body for url, body in puts if "inventory_item" in url][0]
+        package = item["packageWeightAndSize"]
+        self.assertEqual(package["weight"]["value"], 2.5)
+        self.assertEqual(package["weight"]["unit"], "KILOGRAM")
+        self.assertEqual(package["dimensions"]["length"], 30)
+        # The dimensions not being edited keep their values rather than resetting.
+        self.assertEqual(package["dimensions"]["width"], 25)
+        self.assertEqual(package["dimensions"]["height"], 10)
+        self.assertEqual(package["dimensions"]["unit"], "CENTIMETER")
+        # And the rest of the item survives.
+        self.assertEqual(item["product"]["title"], "A Book")
+        self.assertEqual(item["product"]["aspects"], {"Author": ["X"]})
+        # The offer is untouched by a package-only edit.
+        self.assertEqual([u for u, _ in puts if "offer/" in u], [])
+
+    def test_a_nonsense_package_value_falls_back_rather_than_zeroing(self):
+        """A blank or negative weight would make the listing unshippable, so it
+        falls back to the book default instead of being sent as-is."""
+        puts = []
+
+        def fake_get(url, **kwargs):
+            if "/inventory_item/" in url:
+                return self._Resp(200, {"product": {"title": "A Book"}})
+            return self._Resp(200, {"offerId": "9", "sku": "BOOK-1"})
+
+        def fake_put(url, **kwargs):
+            puts.append((url, kwargs.get("json") or {}))
+            return self._Resp(204)
+
+        self.mod.httpx.get = fake_get
+        self.mod.httpx.put = fake_put
+        self.adapter.update_draft(self.token, "EBAY_CA", "9", "BOOK-1",
+                                  {"weight_kg": "", "length_cm": -5})
+
+        item = [body for url, body in puts if "inventory_item" in url][0]
+        package = item["packageWeightAndSize"]
+        self.assertEqual(package["weight"]["value"], 1.0)     # the book default
+        self.assertEqual(package["dimensions"]["length"], 25)
+
+    def test_the_package_is_returned_for_the_editor(self):
+        def fake_get(url, **kwargs):
+            if "/inventory_item/" in url:
+                return self._Resp(200, {
+                    "packageWeightAndSize": {
+                        "weight": {"value": 3.0, "unit": "KILOGRAM"},
+                        "dimensions": {"length": 40, "width": 20, "height": 5,
+                                       "unit": "CENTIMETER"},
+                    },
+                    "product": {"title": "A Book"},
+                })
+            return self._Resp(200, {"offerId": "9", "sku": "BOOK-1"})
+
+        self.mod.httpx.get = fake_get
+        draft = self.adapter.get_draft(self.token, "EBAY_CA", "9")
+        self.assertEqual(draft["weight_kg"], 3.0)
+        self.assertEqual(draft["length_cm"], 40)
+        self.assertEqual(draft["width_cm"], 20)
+        self.assertEqual(draft["height_cm"], 5)
+
     def test_only_unpublished_offers_come_back(self):
         def fake_get(url, **kwargs):
             if "/inventory_item" in url:

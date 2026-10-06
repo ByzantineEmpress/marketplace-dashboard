@@ -931,6 +931,8 @@ class eBayAdapter(MarketplaceAdapter):
                 item = item_resp.json() or {}
 
         product = item.get("product") or {}
+        package = item.get("packageWeightAndSize") or {}
+        dims = package.get("dimensions") or {}
         price = ((offer.get("pricingSummary") or {}).get("price") or {})
         return {
             "offer_id": offer_id,
@@ -947,6 +949,12 @@ class eBayAdapter(MarketplaceAdapter):
             "images": product.get("imageUrls") or [],
             "aspects": product.get("aspects") or {},
             "marketplace": offer.get("marketplaceId") or marketplace,
+            # The package lives on the ITEM, and calculated shipping is priced from
+            # it -- so it is part of what the seller needs to correct.
+            "weight_kg": package.get("weight", {}).get("value") or "",
+            "length_cm": dims.get("length") or "",
+            "width_cm": dims.get("width") or "",
+            "height_cm": dims.get("height") or "",
         }
 
     def update_draft(self, token: dict, marketplace: str, offer_id: str,
@@ -970,7 +978,8 @@ class eBayAdapter(MarketplaceAdapter):
         base = f"{EBAY_API_BASE}/sell/inventory/v1"
 
         if sku and any(k in changes for k in
-                       ("title", "description", "images", "aspects")):
+                       ("title", "description", "images", "aspects",
+                        "weight_kg", "length_cm", "width_cm", "height_cm")):
             item_resp = httpx.get(f"{base}/inventory_item/{quote(sku, safe='')}",
                                   headers=headers, timeout=40)
             if item_resp.status_code != 200:
@@ -991,6 +1000,38 @@ class eBayAdapter(MarketplaceAdapter):
                 product["imageUrls"] = self.absolute_image_urls(
                     changes.get("images") or [])
             item["product"] = product
+
+            # Weight and dimensions are merged the same way, and matter more than
+            # they look: calculated shipping is priced from them, so a wrong 1kg
+            # quotes the buyer the wrong postage.
+            if any(k in changes for k in
+                   ("weight_kg", "length_cm", "width_cm", "height_cm")):
+                package = dict(item.get("packageWeightAndSize") or {})
+                current_dims = dict(package.get("dimensions") or {})
+                unit = current_dims.get("unit") or "CENTIMETER"
+
+                def number(value, fallback):
+                    try:
+                        parsed = float(value)
+                        return parsed if parsed > 0 else fallback
+                    except (TypeError, ValueError):
+                        return fallback
+
+                package["weight"] = {
+                    "value": number(changes.get("weight_kg"),
+                                    self.BOOK_PACKAGE_WEIGHT_KG),
+                    "unit": (package.get("weight") or {}).get("unit") or "KILOGRAM",
+                }
+                package["dimensions"] = {
+                    "length": number(changes.get("length_cm"),
+                                     current_dims.get("length") or 25),
+                    "width": number(changes.get("width_cm"),
+                                    current_dims.get("width") or 25),
+                    "height": number(changes.get("height_cm"),
+                                     current_dims.get("height") or 10),
+                    "unit": unit,
+                }
+                item["packageWeightAndSize"] = package
 
             saved = httpx.put(f"{base}/inventory_item/{quote(sku, safe='')}",
                               headers=headers, json=item, timeout=60)
