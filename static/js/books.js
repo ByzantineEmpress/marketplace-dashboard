@@ -61,6 +61,161 @@
             .catch(function (err) { status("Could not read the photo: " + err.message); });
     }
 
+    // -- scanning ----------------------------------------------------------
+    //
+    // A live viewfinder rather than the camera app. Going out to the camera, taking
+    // a shot, keeping it and coming back is the slowest possible way to read a
+    // barcode that is already in front of the lens -- and it leaves a junk photo on
+    // the phone each time.
+    //
+    // Where the browser can decode barcodes itself (BarcodeDetector, which is
+    // Chrome on Android) it does so continuously and the ISBN appears with no tap at
+    // all. Where it cannot (Safari on iOS) the viewfinder still shows framing and a
+    // Capture button grabs a single frame and sends it down the same decode path --
+    // no file, no camera roll, no file picker.
+
+    var stream = null;
+    var scanning = false;
+    var detector = null;
+
+    function scanStatus(text) {
+        var el = $("bs-hint");
+        if (el) el.textContent = text;
+    }
+
+    function stopScanner() {
+        scanning = false;
+        if (stream) {
+            stream.getTracks().forEach(function (track) { track.stop(); });
+            stream = null;
+        }
+        var video = $("bs-video");
+        if (video) video.srcObject = null;
+        var overlay = $("bs-overlay");
+        if (overlay) overlay.hidden = true;
+    }
+
+    function sendFrame(blob) {
+        // Reuses the same endpoint as the photo path, so the decode rules -- barcode
+        // first, printed ISBN as the fallback -- are the same either way.
+        var body = new FormData();
+        body.append("file", blob, "scan.jpg");
+        return fetch("/api/books/scan", { method: "POST", body: body })
+            .then(function (r) { return r.json(); });
+    }
+
+    function acceptScan(data) {
+        if (!data || !data.isbn) return false;
+        stopScanner();
+        status(data.method === "barcode"
+            ? "Found " + data.isbn + " from the barcode."
+            : "Read " + data.isbn + " from the printed ISBN — check it.");
+        setValue("bp-isbn", data.isbn);
+        lookup(data.isbn);
+        return true;
+    }
+
+    function grabFrame() {
+        var video = $("bs-video");
+        if (!video || !video.videoWidth) return Promise.resolve(null);
+        var canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext("2d").drawImage(video, 0, 0);
+        return new Promise(function (resolve) {
+            canvas.toBlob(function (blob) { resolve(blob); }, "image/jpeg", 0.9);
+        });
+    }
+
+    function liveDetect() {
+        if (!scanning) return;
+        var video = $("bs-video");
+        if (detector && video && video.readyState === video.HAVE_ENOUGH_DATA) {
+            detector.detect(video)
+                .then(function (codes) {
+                    if (!scanning) return;
+                    if (codes && codes.length && codes[0].rawValue) {
+                        // The digits are already an ISBN, so they go straight to the
+                        // lookup rather than being posted as a fake image for the
+                        // server to decode. The lookup validates the check digit and
+                        // reports a bad read, so a misread cannot slip through.
+                        stopScanner();
+                        status("Found " + codes[0].rawValue + " from the barcode.");
+                        setValue("bp-isbn", codes[0].rawValue);
+                        lookup(codes[0].rawValue);
+                        return;
+                    }
+                    setTimeout(liveDetect, 250);
+                })
+                .catch(function () { setTimeout(liveDetect, 400); });
+        } else {
+            setTimeout(liveDetect, 400);
+        }
+    }
+
+    function startScanner() {
+        var overlay = $("bs-overlay");
+        var video = $("bs-video");
+        if (!overlay || !video) return;
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            // No in-page camera: fall back to the file input, which still works.
+            status("This browser cannot open the camera here — use the photo option.");
+            return;
+        }
+
+        overlay.hidden = false;
+        scanStatus("Starting the camera…");
+
+        navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } },
+            audio: false,
+        })
+            .then(function (s) {
+                stream = s;
+                video.srcObject = s;
+                return video.play();
+            })
+            .then(function () {
+                scanning = true;
+                // BarcodeDetector decodes live where it exists, which turns this into
+                // a true scanner: no tap needed at all.
+                if ("BarcodeDetector" in window) {
+                    detector = new window.BarcodeDetector({
+                        formats: ["ean_13", "ean_8"],
+                    });
+                    scanStatus("Point at the barcode — it reads by itself");
+                    liveDetect();
+                } else {
+                    detector = null;
+                    scanStatus("Line the barcode up inside the frame, then Capture");
+                }
+            })
+            .catch(function (err) {
+                stopScanner();
+                status("Could not open the camera: " + err.message
+                       + " — use the photo option instead.");
+            });
+    }
+
+    function captureFrame() {
+        var button = $("bs-shutter");
+        if (button) { button.disabled = true; button.textContent = "Reading…"; }
+        grabFrame()
+            .then(function (blob) {
+                if (!blob) throw new Error("the camera was not ready");
+                return sendFrame(blob);
+            })
+            .then(function (data) {
+                if (acceptScan(data)) return;
+                scanStatus((data && data.error) || "No ISBN found — try again");
+            })
+            .catch(function (err) { scanStatus("Could not read it: " + err.message); })
+            .then(function () {
+                if (button) { button.disabled = false; button.textContent = "Capture"; }
+            });
+    }
+
     // -- looking the book up ----------------------------------------------
 
     function lookup(isbn) {
@@ -392,6 +547,14 @@
     document.addEventListener("DOMContentLoaded", function () {
         var file = $("bp-file");
         if (file) file.addEventListener("change", function () { scanFile(file.files[0]); });
+
+        if ($("bp-scan-btn")) $("bp-scan-btn").addEventListener("click", startScanner);
+        if ($("bs-shutter")) $("bs-shutter").addEventListener("click", captureFrame);
+        if ($("bs-close")) $("bs-close").addEventListener("click", stopScanner);
+        // The camera must not keep running behind a closed overlay.
+        document.addEventListener("visibilitychange", function () {
+            if (document.hidden) stopScanner();
+        });
 
         var photos = $("bp-photos");
         if (photos) photos.addEventListener("change", function () { uploadPhotos(photos.files); });

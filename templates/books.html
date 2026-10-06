@@ -19,6 +19,12 @@
                 <span class="bp-drop-cta">Photograph the book</span>
                 <span class="bp-drop-hint">The barcode, or the printed ISBN page</span>
             </label>
+            {# Scanning, not photographing. The camera app round trip -- open it, take a
+               shot, save it, come back -- is the slowest way to read a barcode that is
+               sitting right there. #}
+            <button type="button" class="btn btn--primary bp-scan" id="bp-scan-btn">
+                Scan the barcode
+            </button>
             <div class="bp-or">or</div>
             <div class="bp-manual">
                 <input type="text" id="bp-isbn" placeholder="Type an ISBN, e.g. 9780140328721">
@@ -28,6 +34,20 @@
         <p class="bp-status" id="bp-scan-status"></p>
         <img id="bp-preview" class="bp-preview" alt="" hidden>
     </section>
+
+    {# The scanner. Hidden until it is needed, and torn down on close so the camera
+       light does not stay on. #}
+    <div class="bs-overlay" id="bs-overlay" hidden>
+        <video id="bs-video" playsinline autoplay muted></video>
+        <div class="bs-frame"></div>
+        <div class="bs-panel">
+            <p class="bs-hint" id="bs-hint">Line the barcode up inside the frame</p>
+            <div class="bs-buttons">
+                <button type="button" class="btn btn--primary" id="bs-shutter">Capture</button>
+                <button type="button" class="btn btn--outline bs-cancel" id="bs-close">Cancel</button>
+            </div>
+        </div>
+    </div>
 
     {# Step 2: the listing. Every field is editable: catalogue records are wrong
        often enough that a misread ISBN once returned a completely different book. #}
