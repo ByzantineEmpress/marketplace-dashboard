@@ -2711,6 +2711,80 @@ async def books_lookup(isbn: str = "", db: Session = Depends(get_db),
     return {"ok": True, **payload}
 
 
+@api_router.post("/books/publish")
+async def books_publish(body: dict, db: Session = Depends(get_db),
+                        user: dict = Depends(check_auth)):
+    """Create the book AND put it on sale, in one action.
+
+    Two steps, and they can come apart: the offer is created first and then
+    published, because that is what eBay requires. If the publish fails the draft
+    still exists, so the reply says so rather than reporting a flat failure --
+    otherwise the seller is left with a listing they cannot find and a draft they
+    do not know about.
+    """
+    from src.adapters import get_adapter
+    from src.marketplace_sync import user_credentials
+    from src.models import MarketplaceAccount
+
+    if not body.get("confirm"):
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False,
+                     "error": "Not confirmed. Publishing creates a live eBay listing "
+                              "that buyers can purchase immediately."})
+    draft = body.get("draft") or {}
+    if not (draft.get("title") or "").strip():
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "A title is required."})
+    try:
+        price = float(draft.get("price") or 0)
+    except (TypeError, ValueError):
+        price = 0
+    if price <= 0:
+        return JSONResponse(status_code=400,
+                            content={"ok": False,
+                                     "error": "A price above zero is required."})
+
+    account = (db.query(MarketplaceAccount)
+               .filter(MarketplaceAccount.platform == "ebay").first())
+    if not account:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "eBay is not connected."})
+
+    def create_and_publish():
+        credentials = user_credentials(db, account.user_id, "ebay")
+        adapter = get_adapter("ebay")
+        token = adapter.get_token(db, user_id=account.user_id,
+                                  credentials=credentials)
+        if not token:
+            raise RuntimeError("eBay is not connected, or its token has expired.")
+        marketplace = (adapter._resolve_marketplace(db, token, account.user_id)
+                       or "EBAY_CA")
+
+        created = adapter.create_book_draft(db, draft, account.user_id, credentials)
+        try:
+            published = adapter.publish_offer(token, marketplace,
+                                              created["offer_id"])
+        except Exception as exc:
+            return {"ok": False, "created": True,
+                    "offer_id": created["offer_id"],
+                    "draft_url": created.get("draft_url") or "/books/drafts",
+                    "error": f"The draft was created, but eBay would not publish "
+                             f"it: {exc}"}
+        return {"ok": True, "created": True, "offer_id": created["offer_id"],
+                **published}
+
+    try:
+        result = await asyncio.to_thread(create_and_publish)
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+
+    if not result.get("ok"):
+        # A partial outcome, not a server error: the draft is real and recoverable.
+        return JSONResponse(status_code=200, content=result)
+    return result
+
+
 @api_router.post("/books/draft")
 async def books_draft(body: dict, db: Session = Depends(get_db),
                       user: dict = Depends(check_auth)):

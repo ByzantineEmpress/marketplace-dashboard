@@ -79,6 +79,32 @@ class BooksPageTest(unittest.TestCase):
         self.assertEqual(no_title.status_code, 400)
         self.assertEqual(no_price.status_code, 400)
 
+    def test_publishing_without_confirmation_is_refused(self):
+        """Publish now is the irreversible one: it puts the book on sale."""
+        with self._client() as client:
+            res = client.post("/api/books/publish",
+                              json={"draft": {"title": "x", "price": 5}})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("live eBay listing", res.json()["error"])
+
+    def test_publishing_needs_a_title_and_a_price(self):
+        with self._client() as client:
+            no_title = client.post("/api/books/publish",
+                                   json={"confirm": True, "draft": {"price": 5}})
+            no_price = client.post("/api/books/publish",
+                                   json={"confirm": True, "draft": {"title": "x"}})
+        self.assertEqual(no_title.status_code, 400)
+        self.assertEqual(no_price.status_code, 400)
+
+    def test_the_page_offers_publishing_separately_from_drafting(self):
+        """One button that sometimes drafts and sometimes publishes would be the
+        worst of both, so the two are distinct controls."""
+        with self._client() as client:
+            res = client.get("/books")
+        self.assertIn("bp-create-btn", res.text)
+        self.assertIn("bp-publish-btn", res.text)
+        self.assertIn("goes live", res.text)
+
     def test_the_lookup_reports_a_bad_isbn_rather_than_guessing(self):
         with self._client() as client:
             res = client.get("/api/books/lookup?isbn=9780241108259")

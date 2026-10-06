@@ -275,6 +275,71 @@
         };
     }
 
+    // Publish immediately. This is the one action on the page that puts something up
+    // for sale, so the confirmation carries the price and says outright that a buyer
+    // can purchase it. A button that sometimes drafts and sometimes publishes would
+    // be the worst of both, which is why this is separate from Create draft.
+    function publishNow() {
+        var btn = $("bp-publish-btn");
+        var result = $("bp-result");
+        var title = value("bp-title");
+        var price = value("bp-price");
+        if (!title) { status("A title is required."); return; }
+        if (!parseFloat(price)) { status("A price above zero is required."); return; }
+
+        var ok = window.confirm(
+            "Publish \"" + title + "\" to eBay now?\n\n"
+            + "It goes live immediately at $" + price + " and buyers can purchase it "
+            + "straight away. No draft is kept, and this cannot be undone from here."
+        );
+        if (!ok) return;
+
+        btn.disabled = true;
+        btn.textContent = "Publishing\u2026";
+        result.hidden = true;
+
+        fetch("/api/books/publish", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ draft: draftPayload(), confirm: true }),
+        })
+            .then(function (r) { return r.json().then(function (d) { return [r, d]; }); })
+            .then(function (pair) {
+                var res = pair[0], data = pair[1];
+                result.hidden = false;
+                if (!data.ok) {
+                    // A partial outcome is possible: the draft may exist even though
+                    // publishing failed. Saying so is what stops the seller hunting
+                    // for a listing that was never created.
+                    if (data.created) {
+                        result.className = "bp-result bp-result--fail";
+                        result.innerHTML = data.error
+                            + "<br>It is on your "
+                            + '<a href="' + (data.draft_url || "/books/drafts") + '">'
+                            + "book drafts</a> page.";
+                    } else {
+                        result.className = "bp-result bp-result--fail";
+                        result.textContent = data.error || ("HTTP " + res.status);
+                    }
+                    return;
+                }
+                result.className = "bp-result bp-result--ok";
+                result.innerHTML = "Live on eBay &mdash; listing <strong>"
+                    + data.listing_id + "</strong>." +
+                    (data.url ? '<br><a href="' + data.url + '" target="_blank" '
+                                + 'rel="noopener">View it on eBay \u2192</a>' : "");
+            })
+            .catch(function (err) {
+                result.hidden = false;
+                result.className = "bp-result bp-result--fail";
+                result.textContent = err.message;
+            })
+            .then(function () {
+                btn.disabled = false;
+                btn.textContent = "Publish now \u2014 goes live";
+            });
+    }
+
     function createDraft() {
         var btn = $("bp-create-btn");
         var result = $("bp-result");
@@ -364,5 +429,6 @@
             if (el) el.addEventListener("input", function () { packageTouched = true; });
         });
         if ($("bp-create-btn")) $("bp-create-btn").addEventListener("click", createDraft);
+        if ($("bp-publish-btn")) $("bp-publish-btn").addEventListener("click", publishNow);
     });
 })();

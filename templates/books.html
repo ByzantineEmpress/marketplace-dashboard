@@ -160,8 +160,19 @@
             Create eBay draft
         </button>
         <p class="bp-hint">
-            Creates an <strong>unpublished</strong> offer: it appears in your eBay
-            drafts to review and publish. Nothing goes live from here.
+            Creates an <strong>unpublished</strong> offer, kept on your
+            <a href="/books/drafts">book drafts</a> page to review and publish.
+            Nothing goes live from here.
+        </p>
+
+        {# Separated, and worded as the irreversible action it is. A single button
+           that sometimes publishes would be the worst of both. #}
+        <button type="button" class="btn btn--success btn--lg" id="bp-publish-btn">
+            Publish now &mdash; goes live
+        </button>
+        <p class="bp-hint">
+            Lists it on eBay <strong>immediately</strong>, at the price above, for
+            buyers to purchase. No draft is kept.
         </p>
         <div class="bp-result" id="bp-result" hidden></div>
     </section>
