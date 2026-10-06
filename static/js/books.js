@@ -360,14 +360,85 @@
         if (!box) return;
         box.innerHTML = images.map(function (url, i) {
             return '<span class="bp-thumb"><img src="' + url + '" alt="">' +
-                '<button type="button" data-index="' + i + '" title="Remove">×</button></span>';
+                '<button type="button" class="bp-thumb-x" data-index="' + i + '"'
+                + ' title="Remove">×</button>' +
+                '<span class="bp-thumb-rotate">' +
+                '<button type="button" data-rotate="-90" data-index="' + i + '"'
+                + ' title="Turn left">↺</button>' +
+                '<button type="button" data-rotate="90" data-index="' + i + '"'
+                + ' title="Turn right">↻</button>' +
+                '</span></span>';
         }).join("");
-        box.querySelectorAll("button").forEach(function (btn) {
+
+        box.querySelectorAll(".bp-thumb-x").forEach(function (btn) {
             btn.addEventListener("click", function () {
                 images.splice(Number(btn.dataset.index), 1);
                 renderThumbs();
             });
         });
+        box.querySelectorAll("[data-rotate]").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                rotateImage(Number(btn.dataset.index), Number(btn.dataset.rotate));
+            });
+        });
+    }
+
+    // Rotating a thumbnail with CSS would only turn the preview: the file eBay gets
+    // would be unchanged. So the image is turned on a canvas and re-uploaded, which
+    // is what actually reaches the listing. EXIF orientation is handled on upload
+    // already; this is for the cases it cannot know about -- a book photographed
+    // flat, or a cover that is simply the wrong way up.
+    function rotateImage(index, degrees) {
+        var url = images[index];
+        if (!url) return;
+        var state = $("bp-photo-status");
+        if (state) state.textContent = "Rotating…";
+
+        var image = new Image();
+        image.crossOrigin = "anonymous";
+        image.onload = function () {
+            var quarter = Math.abs(degrees) % 180 === 90;
+            var canvas = document.createElement("canvas");
+            canvas.width = quarter ? image.naturalHeight : image.naturalWidth;
+            canvas.height = quarter ? image.naturalWidth : image.naturalHeight;
+            var ctx = canvas.getContext("2d");
+            ctx.translate(canvas.width / 2, canvas.height / 2);
+            ctx.rotate(degrees * Math.PI / 180);
+            ctx.drawImage(image, -image.naturalWidth / 2, -image.naturalHeight / 2);
+
+            canvas.toBlob(function (blob) {
+                if (!blob) {
+                    if (state) state.textContent = "Could not rotate that photo.";
+                    return;
+                }
+                var body = new FormData();
+                body.append("file", blob, "rotated.jpg");
+                fetch("/api/upload", { method: "POST", body: body })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        if (!data || !(data.url || data.path)) {
+                            throw new Error((data && data.error) || "upload failed");
+                        }
+                        // Replacing the URL rather than editing in place: the browser
+                        // caches by URL, so the old address would keep showing the old
+                        // orientation.
+                        images[index] = data.url || data.path;
+                        renderThumbs();
+                        if (state) {
+                            state.textContent = images.length + " photo"
+                                + (images.length === 1 ? "" : "s") + " ready.";
+                        }
+                    })
+                    .catch(function (err) {
+                        if (state) state.textContent = "Could not rotate: " + err.message;
+                    });
+            }, "image/jpeg", 0.92);
+        };
+        image.onerror = function () {
+            if (state) state.textContent = "Could not read that photo to rotate it.";
+        };
+        // Same origin, so the canvas is not tainted and toBlob is allowed.
+        image.src = url;
     }
 
     function uploadPhotos(files) {

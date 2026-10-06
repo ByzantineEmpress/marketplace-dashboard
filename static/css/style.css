@@ -3152,3 +3152,35 @@ body[data-card-view="table"] .listing-grid {
 /* The scan button sits above the photo option: it is the faster path, so it gets
    the primary weight. */
 .bp-scan { width: 100%; min-height: 48px; }
+
+/* Rotate and remove on each photo thumbnail. The controls sit over the image rather
+   than beside it: on a phone a row of buttons per photo pushes the grid off screen. */
+.bp-thumb { position: relative; }
+.bp-thumb-rotate {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    justify-content: space-between;
+    padding: 2px;
+    opacity: 0.92;
+}
+.bp-thumb-rotate button {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    line-height: 1;
+    font-size: 15px;
+    border-radius: 6px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-elevated);
+    color: var(--text);
+    cursor: pointer;
+}
+.bp-thumb-rotate button:active { background: var(--accent); color: #fff; }
+/* Bigger targets on a phone, since these are tapped with a thumb. */
+@media (max-width: 640px) {
+    .bp-thumb { width: 84px; height: 84px; }
+    .bp-thumb-rotate button { width: 34px; height: 34px; font-size: 17px; }
+}

@@ -79,6 +79,47 @@ class BooksPageTest(unittest.TestCase):
         self.assertEqual(no_title.status_code, 400)
         self.assertEqual(no_price.status_code, 400)
 
+    def test_exif_orientation_is_baked_into_the_pixels(self):
+        """A phone records which way up it was held in EXIF, not in the pixels, so a
+        photo that looks upright in the camera app arrives sideways on the listing."""
+        import io as _io
+
+        from PIL import Image
+
+        from src.api.routes import _apply_exif_orientation
+
+        # A 4x2 image tagged "rotated 90", which must come back 2x4.
+        image = Image.new("RGB", (4, 2), "red")
+        exif = image.getexif()
+        exif[274] = 6                      # 274 = Orientation, 6 = rotate 270 CW
+        buffer = _io.BytesIO()
+        image.save(buffer, format="JPEG", exif=exif)
+
+        out = _apply_exif_orientation(buffer.getvalue(), ".jpg")
+        with Image.open(_io.BytesIO(out)) as result:
+            self.assertEqual(result.size, (2, 4))
+
+    def test_an_image_with_no_orientation_is_left_alone(self):
+        """Re-encoding every upload would quietly recompress photos for nothing."""
+        import io as _io
+
+        from PIL import Image
+
+        from src.api.routes import _apply_exif_orientation
+
+        image = Image.new("RGB", (4, 2), "red")
+        buffer = _io.BytesIO()
+        image.save(buffer, format="JPEG")
+        original = buffer.getvalue()
+        self.assertEqual(_apply_exif_orientation(original, ".jpg"), original)
+
+    def test_something_undecodable_is_passed_through(self):
+        """A listing with a sideways photo beats a failed upload."""
+        from src.api.routes import _apply_exif_orientation
+
+        self.assertEqual(_apply_exif_orientation(b"not an image", ".jpg"),
+                         b"not an image")
+
     def test_the_page_offers_a_live_scanner(self):
         """The camera-app round trip -- open it, take a photo, keep it, come back --
         is the slowest way to read a barcode that is already in front of the lens, and

@@ -3616,6 +3616,44 @@ async def decide_join_request(
 
 # -- Image uploads --
 
+def _apply_exif_orientation(contents: bytes, ext: str) -> bytes:
+    """Return the image with its EXIF orientation baked into the pixels.
+
+    Phone cameras record orientation as metadata rather than rotating the pixels, so
+    a photo that looks upright in the camera app can appear on its side everywhere
+    else -- including on the eBay listing. Applying it here fixes every upload at
+    once, rather than relying on the seller to spot and correct it.
+
+    Anything that cannot be decoded is returned untouched: a listing with a
+    sideways photo is better than a failed upload.
+    """
+    if ext not in {".jpg", ".jpeg", ".png", ".webp"}:
+        return contents
+    try:
+        import io as _io
+
+        from PIL import Image, ImageOps
+
+        with Image.open(_io.BytesIO(contents)) as image:
+            # Tested explicitly rather than comparing the transposed result to the
+            # original: Pillow does not promise to return the same object when there
+            # is nothing to do, so that check re-encoded every photo for nothing.
+            orientation = (image.getexif() or {}).get(274)
+            if not orientation or orientation == 1:
+                return contents          # already upright, or no tag at all
+
+            oriented = ImageOps.exif_transpose(image)
+            buffer = _io.BytesIO()
+            fmt = "PNG" if ext == ".png" else ("WEBP" if ext == ".webp" else "JPEG")
+            save_kwargs = {"quality": 92} if fmt in ("JPEG", "WEBP") else {}
+            if oriented.mode in ("RGBA", "P") and fmt == "JPEG":
+                oriented = oriented.convert("RGB")
+            oriented.save(buffer, format=fmt, **save_kwargs)
+            return buffer.getvalue()
+    except Exception:
+        return contents
+
+
 @api_router.post("/upload")
 async def upload_image(file: UploadFile = File(...), _user: dict = Depends(check_auth)):
     """Upload an image for a listing.
@@ -3676,6 +3714,12 @@ async def upload_image(file: UploadFile = File(...), _user: dict = Depends(check
 
     if not is_valid_image(contents, ext):
         return JSONResponse(status_code=400, content={"ok": False, "error": "File content does not match a valid image format"})
+
+    # A phone stores which way up it was held in EXIF, not in the pixels. Nothing
+    # applied that, so portrait photos arrived sideways on the listing -- the camera
+    # showed them upright and every other viewer disagreed. Baking the rotation into
+    # the pixels once, here, means the seller does not have to notice and correct it.
+    contents = _apply_exif_orientation(contents, ext)
 
     # Storage location is pluggable: local disk, or an S3 bucket. Validation
     # above is unchanged either way.
