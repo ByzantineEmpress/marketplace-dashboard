@@ -75,6 +75,31 @@
         });
     }
 
+    // The catalogue fields live in the item's ASPECTS, not as their own properties,
+    // so they are read and written by name. eBay's aspect names carry their own
+    // capitalisation and a lookup that assumed it would miss.
+    var ASPECTS = [
+        ["be-author", "Author"],
+        ["be-publisher", "Publisher"],
+        ["be-year", "Publication Year"],
+        ["be-format", "Format"],
+        ["be-genre", "Genre"],
+        ["be-topic", "Topic"],
+        ["be-isbn", "ISBN"],
+    ];
+
+    function aspectText(aspects, name) {
+        var wanted = name.toLowerCase();
+        for (var key in aspects) {
+            if (String(key).toLowerCase() === wanted) {
+                var value = aspects[key];
+                if (Array.isArray(value)) return value.join(" / ");
+                return value === null || value === undefined ? "" : String(value);
+            }
+        }
+        return "";
+    }
+
     function load() {
         status("Loading the draft\u2026");
         fetch("/api/books/drafts/" + encodeURIComponent(offerId))
@@ -94,6 +119,9 @@
                 setValue("be-length", d.length_cm);
                 setValue("be-width", d.width_cm);
                 setValue("be-height", d.height_cm);
+                ASPECTS.forEach(function (pair) {
+                    setValue(pair[0], aspectText(d.aspects || {}, pair[1]));
+                });
                 images = (d.images || []).slice();
                 renderThumbs();
                 titleCount();
@@ -110,6 +138,19 @@
             });
     }
 
+    function aspectsPayload() {
+        var out = {};
+        var title = value("be-title");
+        // Kept in step with the title field rather than exposed twice: two controls
+        // for one value is how they end up disagreeing.
+        if (title) out["Book Title"] = [title];
+        ASPECTS.forEach(function (pair) {
+            var text = value(pair[0]);
+            if (text) out[pair[1]] = [text];
+        });
+        return out;
+    }
+
     function save() {
         var btn = $("be-save");
         btn.disabled = true;
@@ -122,6 +163,9 @@
             quantity: parseInt(value("be-quantity"), 10) || 1,
             description: $("be-description").value,
             images: images,
+            // Only the fields actually filled are sent, so an aspect eBay requires
+            // (Language) that this form does not show survives the merge.
+            aspects: aspectsPayload(),
             weight_kg: value("be-weight"),
             length_cm: value("be-length"),
             width_cm: value("be-width"),

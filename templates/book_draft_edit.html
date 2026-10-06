@@ -34,6 +34,48 @@
             </label>
         </div>
 
+        {# The catalogue fields, editable because an ISBN lookup is not always right:
+           a wrong record returns a different book entirely, and before this the only
+           way to correct one was to delete the draft and start again. #}
+        <div class="bp-grid">
+            <label class="bp-field">
+                <span>Author</span>
+                <input type="text" id="be-author">
+            </label>
+            <label class="bp-field">
+                <span>Publisher</span>
+                <input type="text" id="be-publisher">
+            </label>
+            <label class="bp-field">
+                <span>Publication Year</span>
+                <input type="text" id="be-year">
+            </label>
+            <label class="bp-field">
+                <span>Format</span>
+                <select id="be-format">
+                    <option value="">— pick one —</option>
+                    <option>Hardcover</option>
+                    <option>Hardcover with Dust Jacket</option>
+                    <option>Paperback</option>
+                    <option>Mass Market Paperback</option>
+                    <option>Trade Paperback</option>
+                    <option>Softcover</option>
+                </select>
+            </label>
+            <label class="bp-field">
+                <span>Genre</span>
+                <input type="text" id="be-genre">
+            </label>
+            <label class="bp-field">
+                <span>Topic</span>
+                <input type="text" id="be-topic">
+            </label>
+            <label class="bp-field">
+                <span>ISBN</span>
+                <input type="text" id="be-isbn">
+            </label>
+        </div>
+
         {# The package. Buyer-paid calculated shipping is priced from these numbers,
            so a wrong weight quotes the wrong postage rather than merely looking odd. #}
         <div class="bp-grid">
