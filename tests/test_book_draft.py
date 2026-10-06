@@ -95,6 +95,50 @@ class BookDraftTest(unittest.TestCase):
             self.assertEqual(headers.get("Content-Language"), "en-CA",
                              f"{method} {url} went out without Content-Language")
 
+    def test_the_binding_decides_the_default_package(self):
+        """A hardcover is a bigger, heavier parcel than a paperback, and calculated
+        shipping is priced from these -- so one size must not be assumed for both."""
+        hc = self.adapter.resolve_book_package({"format": "Hardcover with Dust Jacket"})
+        self.assertEqual((hc["weight_kg"], hc["length"], hc["width"], hc["height"]),
+                         (1.0, 20.0, 25.0, 5.0))
+        pb = self.adapter.resolve_book_package({"format": "Paperback"})
+        self.assertEqual((pb["weight_kg"], pb["length"], pb["width"], pb["height"]),
+                         (0.5, 15.0, 20.0, 5.0))
+
+    def test_a_mass_market_paperback_uses_the_paperback_package(self):
+        mm = self.adapter.resolve_book_package({"format": "Mass Market Paperback"})
+        self.assertEqual(mm["weight_kg"], 0.5)
+
+    def test_an_unknown_binding_falls_back_to_the_generic_book_package(self):
+        got = self.adapter.resolve_book_package({"format": ""})
+        self.assertEqual((got["weight_kg"], got["length"], got["width"], got["height"]),
+                         (1.0, 25.0, 25.0, 10.0))
+
+    def test_the_sellers_own_numbers_beat_the_preset(self):
+        got = self.adapter.resolve_book_package(
+            {"format": "Paperback", "weight_kg": 2.0, "length_cm": 30})
+        self.assertEqual(got["weight_kg"], 2.0)
+        self.assertEqual(got["length"], 30.0)
+        # The values they did not override still come from the preset.
+        self.assertEqual(got["width"], 20.0)
+
+    def test_a_nonsense_override_falls_back_to_the_preset(self):
+        got = self.adapter.resolve_book_package(
+            {"format": "Hardcover", "weight_kg": "", "length_cm": -3})
+        self.assertEqual(got["weight_kg"], 1.0)
+        self.assertEqual(got["length"], 20.0)
+
+    def test_the_created_item_carries_the_resolved_package(self):
+        """The create path used to hardcode one size, so a package sent with the
+        draft was silently ignored."""
+        self._serve()
+        self.adapter.create_book_draft(
+            None, dict(self.DRAFT, format="Paperback"), user_id=1)
+        put = [c for c in self.calls if c[0] == "PUT"][0]
+        package = put[2]["json"]["packageWeightAndSize"]
+        self.assertEqual(package["weight"]["value"], 0.5)
+        self.assertEqual(package["dimensions"]["length"], 15)
+
     def test_the_weight_and_dimensions_are_what_was_specified(self):
         self._serve()
         self.adapter.create_book_draft(None, self.DRAFT, user_id=1)

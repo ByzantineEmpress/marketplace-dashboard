@@ -169,6 +169,30 @@
         }).join("");
     }
 
+    // The chosen binding carries its own package. Honour the toggle, and never
+    // overwrite numbers the seller has typed themselves -- turning a deliberate
+    // 2kg book back into 1kg because the format changed would be worse than
+    // leaving it stale.
+    var packageTouched = false;
+
+    function packageFromFormat(force) {
+        var auto = $("bp-package-auto");
+        if (auto && !auto.checked && !force) return;
+        if (packageTouched && !force) return;
+
+        var select = $("bp-format");
+        if (!select || !select.options.length) return;
+        var option = select.options[select.selectedIndex];
+        if (!option) return;
+
+        var weight = option.dataset.weight;
+        if (!weight) return;   // "pick one" has nothing to apply
+        setValue("bp-weight", weight);
+        setValue("bp-length", option.dataset.length);
+        setValue("bp-width", option.dataset.width);
+        setValue("bp-height", option.dataset.height);
+    }
+
     function titleCount() {
         var el = $("bp-title-count");
         if (el) el.textContent = String(value("bp-title").length);
@@ -236,6 +260,11 @@
             quantity: 1,
             condition: value("bp-condition"),
             images: images,
+            format: value("bp-format"),
+            weight_kg: value("bp-weight"),
+            length_cm: value("bp-length"),
+            width_cm: value("bp-width"),
+            height_cm: value("bp-height"),
             aspects: {
                 "Author": value("bp-author") ? [value("bp-author")] : [],
                 "Book Title": value("bp-title") ? [value("bp-title")] : [],
@@ -312,6 +341,28 @@
             });
         }
         if ($("bp-title")) $("bp-title").addEventListener("input", titleCount);
+
+        var format = $("bp-format");
+        if (format) {
+            format.addEventListener("change", function () {
+                // A new binding is an explicit choice, so it reapplies even if the
+                // seller had adjusted the numbers by hand.
+                packageTouched = false;
+                packageFromFormat(true);
+            });
+        }
+        var auto = $("bp-package-auto");
+        if (auto) {
+            auto.addEventListener("change", function () {
+                packageTouched = false;
+                if (auto.checked) packageFromFormat(true);
+            });
+        }
+        ["bp-weight", "bp-length", "bp-width", "bp-height"].forEach(function (id) {
+            var el = $(id);
+            // Only a human edit counts: the pre-fill writes these too.
+            if (el) el.addEventListener("input", function () { packageTouched = true; });
+        });
         if ($("bp-create-btn")) $("bp-create-btn").addEventListener("click", createDraft);
     });
 })();

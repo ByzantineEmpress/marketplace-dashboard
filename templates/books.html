@@ -43,16 +43,26 @@
             <label class="bp-field"><span>Author</span><input type="text" id="bp-author"></label>
             <label class="bp-field"><span>Publisher</span><input type="text" id="bp-publisher"></label>
             <label class="bp-field"><span>Publication Year</span><input type="text" id="bp-year"></label>
+            {# Each binding carries its package, so choosing one pre-fills the weight
+               and dimensions below. The numbers come from the adapter's presets. #}
+            {% set hc = package_presets.hardcover %}
+            {% set pb = package_presets.paperback %}
             <label class="bp-field">
                 <span>Format</span>
                 <select id="bp-format">
                     <option value="">— pick one —</option>
-                    <option>Hardcover</option>
-                    <option>Hardcover with Dust Jacket</option>
-                    <option>Paperback</option>
-                    <option>Mass Market Paperback</option>
-                    <option>Trade Paperback</option>
-                    <option>Softcover</option>
+                    <option data-weight="{{ hc.weight_kg }}" data-length="{{ hc.length }}"
+                            data-width="{{ hc.width }}" data-height="{{ hc.height }}">Hardcover</option>
+                    <option data-weight="{{ hc.weight_kg }}" data-length="{{ hc.length }}"
+                            data-width="{{ hc.width }}" data-height="{{ hc.height }}">Hardcover with Dust Jacket</option>
+                    <option data-weight="{{ pb.weight_kg }}" data-length="{{ pb.length }}"
+                            data-width="{{ pb.width }}" data-height="{{ pb.height }}">Paperback</option>
+                    <option data-weight="{{ pb.weight_kg }}" data-length="{{ pb.length }}"
+                            data-width="{{ pb.width }}" data-height="{{ pb.height }}">Mass Market Paperback</option>
+                    <option data-weight="{{ pb.weight_kg }}" data-length="{{ pb.length }}"
+                            data-width="{{ pb.width }}" data-height="{{ pb.height }}">Trade Paperback</option>
+                    <option data-weight="{{ pb.weight_kg }}" data-length="{{ pb.length }}"
+                            data-width="{{ pb.width }}" data-height="{{ pb.height }}">Softcover</option>
                 </select>
             </label>
             <label class="bp-field"><span>Genre</span><input type="text" id="bp-genre"></label>
@@ -70,6 +80,32 @@
                 </select>
             </label>
         </div>
+
+        {# The package. Buyer-paid calculated shipping is priced from these, so they
+           decide what the buyer is quoted rather than merely being recorded. #}
+        <div class="bp-grid bp-package">
+            <label class="bp-field">
+                <span>Weight (kg)</span>
+                <input type="number" id="bp-weight" min="0.01" step="0.01">
+            </label>
+            <label class="bp-field">
+                <span>Length (cm)</span>
+                <input type="number" id="bp-length" min="1" step="1">
+            </label>
+            <label class="bp-field">
+                <span>Width (cm)</span>
+                <input type="number" id="bp-width" min="1" step="1">
+            </label>
+            <label class="bp-field">
+                <span>Height (cm)</span>
+                <input type="number" id="bp-height" min="1" step="1">
+            </label>
+        </div>
+        <label class="bp-toggle">
+            <input type="checkbox" id="bp-package-auto" checked>
+            <span>Set the package from the format &mdash; hardcover 20&times;25&times;5cm / 1kg,
+                  paperback 15&times;20&times;5cm / 500g</span>
+        </label>
 
         <label class="bp-field bp-field--wide">
             <span>Description</span>

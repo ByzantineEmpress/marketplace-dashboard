@@ -389,11 +389,17 @@ async def books_page(request: Request):
     user = require_auth(request)
     if not user:
         return RedirectResponse(url="/login?error=auth_required")
+    # The package presets come from the adapter, not from a copy in the template:
+    # the page pre-fills from them and the server falls back to them, and two
+    # sources for "what does a paperback weigh" would drift.
+    from src.adapters import get_adapter
+
     return templates.TemplateResponse(
         request=request,
         name="books.html",
         context={"identity": user["name"], "active": "books",
-                 "title": "List a Book"},
+                 "title": "List a Book",
+                 "package_presets": get_adapter("ebay").BOOK_PACKAGE_PRESETS},
     )
 
 

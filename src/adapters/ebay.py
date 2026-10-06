@@ -599,6 +599,48 @@ class eBayAdapter(MarketplaceAdapter):
     # Fixed for every book this page creates, as specified.
     BOOK_PACKAGE_WEIGHT_KG = 1.0
     BOOK_PACKAGE_DIMENSIONS_CM = {"length": 25, "width": 25, "height": 10}
+
+    # A hardcover is a bigger, heavier parcel than a paperback, and calculated
+    # shipping is priced from these -- so the binding decides the default rather
+    # than one size being assumed for every book.
+    BOOK_PACKAGE_PRESETS = {
+        "hardcover": {"weight_kg": 1.0, "length": 20, "width": 25, "height": 5},
+        "paperback": {"weight_kg": 0.5, "length": 15, "width": 20, "height": 5},
+    }
+
+    def resolve_book_package(self, draft: Dict[str, Any]) -> Dict[str, float]:
+        """Weight and dimensions for a book, most specific first.
+
+        What the seller typed wins, then the preset for the binding, then the
+        generic book default. Resolved in one place so the page's pre-fill and the
+        server's fallback cannot disagree about what a paperback weighs.
+        """
+        preset: Dict[str, float] = {}
+        binding = str(draft.get("format") or "").lower()
+        for key, values in self.BOOK_PACKAGE_PRESETS.items():
+            if key in binding:
+                preset = values
+                break
+
+        def pick(field, preset_key, fallback):
+            raw = draft.get(field)
+            if raw not in (None, ""):
+                try:
+                    value = float(raw)
+                    if value > 0:
+                        return value
+                except (TypeError, ValueError):
+                    pass
+            if preset_key in preset:
+                return float(preset[preset_key])
+            return float(fallback)
+
+        return {
+            "weight_kg": pick("weight_kg", "weight_kg", self.BOOK_PACKAGE_WEIGHT_KG),
+            "length": pick("length_cm", "length", self.BOOK_PACKAGE_DIMENSIONS_CM["length"]),
+            "width": pick("width_cm", "width", self.BOOK_PACKAGE_DIMENSIONS_CM["width"]),
+            "height": pick("height_cm", "height", self.BOOK_PACKAGE_DIMENSIONS_CM["height"]),
+        }
     # eBay rejects a Books title longer than this outright, rather than
     # truncating it: a 65-character title came back as a rejected request.
     # The page caps input at the same number so the two cannot disagree.
@@ -1196,16 +1238,22 @@ class eBayAdapter(MarketplaceAdapter):
                 for k, v in aspects.items() if v not in (None, "")
             }
 
+        package = self.resolve_book_package(draft)
         item_body = {
             "availability": {"shipToLocationAvailability": {
                 "quantity": max(1, int(draft.get("quantity") or 1))}},
             "condition": self.CONDITION_MAP.get(
                 (draft.get("condition") or "").lower(), "USED_GOOD"),
+            # Resolved rather than fixed: the binding decides the default, and the
+            # seller's own numbers win over both.
             "packageWeightAndSize": {
-                "weight": {"value": self.BOOK_PACKAGE_WEIGHT_KG,
-                           "unit": "KILOGRAM"},
-                "dimensions": {**self.BOOK_PACKAGE_DIMENSIONS_CM,
-                               "unit": "CENTIMETER"},
+                "weight": {"value": package["weight_kg"], "unit": "KILOGRAM"},
+                "dimensions": {
+                    "length": package["length"],
+                    "width": package["width"],
+                    "height": package["height"],
+                    "unit": "CENTIMETER",
+                },
             },
             "product": product,
         }
