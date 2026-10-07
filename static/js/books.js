@@ -61,6 +61,64 @@
             .catch(function (err) { status("Could not read the photo: " + err.message); });
     }
 
+    // -- the publish confirmation -------------------------------------------
+    //
+    // A native confirm() cannot be styled, and this is the one action on the page
+    // that puts something up for sale -- so it gets a dialog that shows the price
+    // being agreed to at a size the eye lands on. Promise-wrapped so the calling
+    // code still reads as "ask, then publish".
+    function askToPublish(title, price) {
+        var backdrop = $("bp-confirm");
+        if (!backdrop) return Promise.resolve(false);   // never block a fallback
+
+        // textContent, not setValue: that helper writes .value, which a <p> does not
+        // use -- the title would simply never appear.
+        var book = $("bp-confirm-book");
+        if (book) book.textContent = title;
+        var amount = $("bp-confirm-price");
+        if (amount) {
+            var value_ = parseFloat(price);
+            amount.textContent = "$" + (isNaN(value_) ? price : value_.toFixed(2));
+        }
+        backdrop.classList.add("is-open");
+        backdrop.setAttribute("aria-hidden", "false");
+        var go = $("bp-confirm-go");
+        if (go) go.focus();
+
+        return new Promise(function (resolve) {
+            function close(answer) {
+                backdrop.classList.remove("is-open");
+                backdrop.setAttribute("aria-hidden", "true");
+                document.removeEventListener("keydown", onKey);
+                if (go) go.removeEventListener("click", onGo);
+                ["bp-confirm-cancel", "bp-confirm-x"].forEach(function (id) {
+                    var el = $(id);
+                    if (el) el.removeEventListener("click", onCancel);
+                });
+                backdrop.removeEventListener("click", onBackdrop);
+                resolve(answer);
+            }
+            function onGo() { close(true); }
+            function onCancel() { close(false); }
+            // Tapping the dim area behind the dialog cancels, which is what people
+            // expect and is safer than it confirming.
+            function onBackdrop(event) {
+                if (event.target === backdrop) close(false);
+            }
+            function onKey(event) {
+                if (event.key === "Escape") close(false);
+            }
+
+            if (go) go.addEventListener("click", onGo);
+            ["bp-confirm-cancel", "bp-confirm-x"].forEach(function (id) {
+                var el = $(id);
+                if (el) el.addEventListener("click", onCancel);
+            });
+            backdrop.addEventListener("click", onBackdrop);
+            document.addEventListener("keydown", onKey);
+        });
+    }
+
     // -- surviving a reload ------------------------------------------------
     //
     // After a book is created or published the form is cleared, because the next
@@ -554,13 +612,15 @@
         if (!title) { status("A title is required."); return; }
         if (!parseFloat(price)) { status("A price above zero is required."); return; }
 
-        var ok = window.confirm(
-            "Publish \"" + title + "\" to eBay now?\n\n"
-            + "It goes live immediately at $" + price + " and buyers can purchase it "
-            + "straight away. No draft is kept, and this cannot be undone from here."
-        );
-        if (!ok) return;
+        askToPublish(title, price).then(function (ok) {
+            if (!ok) return;
+            runPublish(btn, result);
+        });
+    }
 
+    function runPublish(btn, result) {
+        var title = value("bp-title");
+        var price = value("bp-price");
         btn.disabled = true;
         btn.textContent = "Publishing\u2026";
         result.hidden = true;

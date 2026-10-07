@@ -35,6 +35,37 @@
         <img id="bp-preview" class="bp-preview" alt="" hidden>
     </section>
 
+    {# The publish confirmation. A native confirm() cannot be styled at all, and this
+       is the one action on the page that puts something up for sale -- so it gets a
+       dialog that states the price plainly rather than a browser box that looks the
+       same as every other prompt. Reuses the app's modal, including its bottom-sheet
+       treatment on phones. #}
+    <div class="modal-backdrop" id="bp-confirm" role="dialog" aria-modal="true"
+         aria-labelledby="bp-confirm-title" aria-hidden="true">
+        <div class="modal bp-confirm">
+            <div class="modal-header">
+                <strong class="modal-title" id="bp-confirm-title">Publish to eBay?</strong>
+                <button type="button" class="modal-close" id="bp-confirm-x"
+                        aria-label="Cancel">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="bp-confirm-book" id="bp-confirm-book"></p>
+                <div class="bp-confirm-price">
+                    <span class="bp-confirm-amount" id="bp-confirm-price">$0.00</span>
+                    <span class="bp-confirm-label">asking price</span>
+                </div>
+                <p class="bp-confirm-note">
+                    Goes live <strong>immediately</strong> at this price, for buyers to
+                    purchase. No draft is kept and this cannot be undone from here.
+                </p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn--outline" id="bp-confirm-cancel">Cancel</button>
+                <button type="button" class="btn btn--success" id="bp-confirm-go">Publish now</button>
+            </div>
+        </div>
+    </div>
+
     {# The scanner. Hidden until it is needed, and torn down on close so the camera
        light does not stay on. #}
     <div class="bs-overlay" id="bs-overlay" hidden>

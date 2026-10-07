@@ -3184,3 +3184,48 @@ body[data-card-view="table"] .listing-grid {
     .bp-thumb { width: 84px; height: 84px; }
     .bp-thumb-rotate button { width: 34px; height: 34px; font-size: 17px; }
 }
+
+/* -- The publish confirmation -------------------------------------------- */
+
+.bp-confirm { max-width: 420px; }
+.bp-confirm-book {
+    margin: 0 0 14px;
+    font-size: 15px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+/* The price is the thing being agreed to, so it is the largest element in the
+   dialog rather than one number among several. */
+.bp-confirm-price {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 16px;
+    margin-bottom: 14px;
+    border-radius: var(--radius-lg);
+    background: var(--bg);
+    border: 1px solid var(--border);
+}
+.bp-confirm-amount {
+    font-size: 34px;
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.5px;
+    color: var(--success-text);
+    font-variant-numeric: tabular-nums;
+}
+.bp-confirm-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+}
+.bp-confirm-note {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+.bp-confirm .modal-footer { display: flex; gap: 10px; }
+.bp-confirm .modal-footer .btn { flex: 1; min-height: 44px; }

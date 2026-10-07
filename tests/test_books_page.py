@@ -120,6 +120,37 @@ class BooksPageTest(unittest.TestCase):
         self.assertEqual(_apply_exif_orientation(b"not an image", ".jpg"),
                          b"not an image")
 
+    def test_publishing_asks_through_a_styled_dialog(self):
+        """A native confirm() cannot be styled, and this is the one action that puts
+        something up for sale -- so it gets a dialog that shows the price plainly."""
+        with self._client() as client:
+            res = client.get("/books")
+        self.assertIn("bp-confirm", res.text)
+        self.assertIn("bp-confirm-price", res.text)
+        self.assertIn("asking price", res.text)
+        # It reuses the app's modal, so it inherits the phone bottom-sheet treatment.
+        self.assertIn("modal-backdrop", res.text)
+
+    def test_no_native_confirm_on_the_publish_path(self):
+        """window.confirm cannot be styled at all, which is the whole complaint."""
+        import pathlib
+        js = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "static", "js", "books.js").read_text(encoding="utf-8")
+        self.assertNotIn("window.confirm", js)
+        self.assertIn("askToPublish", js)
+        # The dialog is dismissed by cancel, by the X, by Escape and by tapping away.
+        for escape in ('"bp-confirm-cancel"', '"bp-confirm-x"', "Escape",
+                       "event.target === backdrop"):
+            self.assertIn(escape, js)
+
+    def test_the_price_is_shown_to_two_decimals(self):
+        """The price is what is being agreed to, so it is formatted rather than
+        echoed back as typed."""
+        import pathlib
+        js = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "static", "js", "books.js").read_text(encoding="utf-8")
+        self.assertIn("toFixed(2)", js)
+
     def test_the_page_offers_a_live_scanner(self):
         """The camera-app round trip -- open it, take a photo, keep it, come back --
         is the slowest way to read a barcode that is already in front of the lens, and
