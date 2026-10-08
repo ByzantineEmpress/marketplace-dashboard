@@ -119,6 +119,142 @@
         });
     }
 
+    // -- taking several photos in one go -----------------------------------
+    //
+    // The camera app closes after every single photo, so a book needing a barcode, a
+    // cover and a title page means opening it three times and being kicked back to
+    // the form each time. This keeps the viewfinder up and accumulates shots until
+    // the seller says they are done.
+
+    var captureStream = null;
+    var shots = [];
+
+    function captureCount() {
+        var el = $("pc-count");
+        if (!el) return;
+        el.textContent = shots.length
+            ? shots.length + (shots.length === 1 ? " photo" : " photos")
+            : "No photos yet";
+        var done = $("pc-done");
+        if (done) done.disabled = shots.length === 0;
+    }
+
+    function stopCapture() {
+        if (captureStream) {
+            captureStream.getTracks().forEach(function (t) { t.stop(); });
+            captureStream = null;
+        }
+        var video = $("pc-video");
+        if (video) video.srcObject = null;
+        var overlay = $("pc-overlay");
+        if (overlay) overlay.hidden = true;
+    }
+
+    function snap() {
+        var shutter = $("pc-shutter");
+        if (shutter) shutter.disabled = true;
+        grabFrame("pc-video")
+            .then(function (blob) {
+                if (!blob) throw new Error("the camera was not ready");
+                shots.push(blob);
+                // Shown straight away so a blurred shot can be retaken before
+                // leaving, rather than after uploading.
+                var strip = $("pc-strip");
+                if (strip) {
+                    var thumb = document.createElement("img");
+                    thumb.src = URL.createObjectURL(blob);
+                    thumb.alt = "";
+                    strip.appendChild(thumb);
+                    strip.scrollLeft = strip.scrollWidth;
+                }
+                captureCount();
+            })
+            .catch(function (err) {
+                var count = $("pc-count");
+                if (count) count.textContent = "Could not take that photo: " + err.message;
+            })
+            .then(function () {
+                // Deliberately NOT closing: the whole point is another shot.
+                if (shutter) shutter.disabled = false;
+            });
+    }
+
+    function finishCapture() {
+        var taken = shots.slice();
+        stopCapture();
+        shots = [];
+        var strip = $("pc-strip");
+        if (strip) strip.textContent = "";
+        if (!taken.length) return;
+        var state = $("bp-photo-status");
+        if (state) state.textContent = "Uploading " + taken.length + " photo"
+            + (taken.length === 1 ? "" : "s") + "…";
+
+        var done = 0;
+        var chain = Promise.resolve();
+        taken.forEach(function (blob) {
+            chain = chain.then(function () {
+                var body = new FormData();
+                body.append("file", blob, "photo-" + (done + 1) + ".jpg");
+                return fetch("/api/upload", { method: "POST", body: body })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        done += 1;
+                        if (data && (data.url || data.path)) {
+                            images.push(data.url || data.path);
+                        } else if (data && data.error && state) {
+                            state.textContent = data.error;
+                        }
+                        if (state) {
+                            state.textContent = "Uploading " + done + " of "
+                                + taken.length + "…";
+                        }
+                    })
+                    .catch(function (err) {
+                        if (state) state.textContent = "Upload failed: " + err.message;
+                    });
+            });
+        });
+        chain.then(function () {
+            renderThumbs();
+            if (state) {
+                state.textContent = images.length + " photo"
+                    + (images.length === 1 ? "" : "s") + " ready.";
+            }
+        });
+    }
+
+    function startCapture() {
+        var overlay = $("pc-overlay");
+        var video = $("pc-video");
+        if (!overlay || !video) return;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            status("This browser cannot open the camera here — use the library option.");
+            return;
+        }
+
+        shots = [];
+        var strip = $("pc-strip");
+        if (strip) strip.textContent = "";
+        captureCount();
+        overlay.hidden = false;
+
+        navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } },
+            audio: false,
+        })
+            .then(function (s) {
+                captureStream = s;
+                video.srcObject = s;
+                return video.play();
+            })
+            .catch(function (err) {
+                stopCapture();
+                status("Could not open the camera: " + err.message
+                       + " — use the library option instead.");
+            });
+    }
+
     // -- surviving a reload ------------------------------------------------
     //
     // After a book is created or published the form is cleared, because the next
@@ -214,8 +350,8 @@
         return true;
     }
 
-    function grabFrame() {
-        var video = $("bs-video");
+    function grabFrame(videoId) {
+        var video = $(videoId || "bs-video");
         if (!video || !video.videoWidth) return Promise.resolve(null);
         var canvas = document.createElement("canvas");
         canvas.width = video.videoWidth;
@@ -729,11 +865,20 @@
         if (file) file.addEventListener("change", function () { scanFile(file.files[0]); });
 
         if ($("bp-scan-btn")) $("bp-scan-btn").addEventListener("click", startScanner);
+        if ($("bp-camera-btn")) $("bp-camera-btn").addEventListener("click", startCapture);
+        if ($("pc-shutter")) $("pc-shutter").addEventListener("click", snap);
+        if ($("pc-done")) $("pc-done").addEventListener("click", finishCapture);
+        if ($("pc-cancel")) $("pc-cancel").addEventListener("click", function () {
+            // Discarded deliberately: leaving the camera must not upload what was
+            // taken after the seller decided against it.
+            stopCapture();
+            shots = [];
+        });
         if ($("bs-shutter")) $("bs-shutter").addEventListener("click", captureFrame);
         if ($("bs-close")) $("bs-close").addEventListener("click", stopScanner);
         // The camera must not keep running behind a closed overlay.
         document.addEventListener("visibilitychange", function () {
-            if (document.hidden) stopScanner();
+            if (document.hidden) { stopScanner(); stopCapture(); }
         });
 
         var photos = $("bp-photos");

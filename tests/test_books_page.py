@@ -151,6 +151,44 @@ class BooksPageTest(unittest.TestCase):
             "static", "js", "books.js").read_text(encoding="utf-8")
         self.assertIn("toFixed(2)", js)
 
+    def test_several_photos_can_be_taken_without_leaving_the_camera(self):
+        """The camera app returns after every single shot, so a book needing a
+        barcode, a cover and a title page means opening it three times."""
+        with self._client() as client:
+            res = client.get("/books")
+        self.assertIn("bp-camera-btn", res.text)
+        self.assertIn("pc-overlay", res.text)
+        self.assertIn("pc-shutter", res.text)
+        self.assertIn("pc-strip", res.text)   # what has been taken so far
+        self.assertIn("playsinline", res.text)
+
+        import pathlib
+        js = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "static", "js", "books.js").read_text(encoding="utf-8")
+        # Snapping must NOT close the overlay -- that is the entire request.
+        snap_body = js.split("function snap(")[1].split("function finishCapture(")[0]
+        self.assertNotIn("stopCapture()", snap_body)
+        self.assertIn("shots.push(blob)", snap_body)
+        # And finishing uploads every shot rather than just the last.
+        finish = js.split("function finishCapture(")[1].split("function startCapture(")[0]
+        self.assertIn("taken.forEach", finish)
+
+    def test_cancelling_capture_discards_the_shots(self):
+        """Leaving the camera must not upload photos taken after deciding against
+        them."""
+        import pathlib
+        js = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "static", "js", "books.js").read_text(encoding="utf-8")
+        cancel = js.split('"pc-cancel")) $("pc-cancel").addEventListener')[1][:220]
+        self.assertIn("stopCapture()", cancel)
+        self.assertIn("shots = []", cancel)
+
+    def test_the_capture_camera_is_released_when_the_tab_hides(self):
+        import pathlib
+        js = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "static", "js", "books.js").read_text(encoding="utf-8")
+        self.assertIn("stopScanner(); stopCapture();", js)
+
     def test_the_page_offers_a_live_scanner(self):
         """The camera-app round trip -- open it, take a photo, keep it, come back --
         is the slowest way to read a barcode that is already in front of the lens, and

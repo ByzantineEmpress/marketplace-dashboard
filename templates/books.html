@@ -66,6 +66,22 @@
         </div>
     </div>
 
+    {# Multi-shot capture. The strip across the top is what has been taken so far, so
+       a shot that came out blurred can be judged before leaving the camera. #}
+    <div class="pc-overlay" id="pc-overlay" hidden>
+        <div class="pc-strip" id="pc-strip"></div>
+        <video id="pc-video" playsinline autoplay muted></video>
+        <div class="pc-panel">
+            <span class="pc-count" id="pc-count">No photos yet</span>
+            <div class="pc-buttons">
+                <button type="button" class="btn btn--outline" id="pc-cancel">Cancel</button>
+                <button type="button" class="pc-shutter" id="pc-shutter"
+                        aria-label="Take a photo"></button>
+                <button type="button" class="btn btn--primary" id="pc-done">Done</button>
+            </div>
+        </div>
+    </div>
+
     {# The scanner. Hidden until it is needed, and torn down on close so the camera
        light does not stay on. #}
     <div class="bs-overlay" id="bs-overlay" hidden>
@@ -167,10 +183,19 @@
         <div class="bp-photos">
             <span class="bp-field-label">Photos for the listing</span>
             <div class="bp-thumbs" id="bp-thumbs"></div>
-            <label class="bp-add-photo" for="bp-photos">
-                <input type="file" id="bp-photos" accept="image/*" multiple hidden>
-                + Add photos
-            </label>
+            {# Two ways in. The camera one keeps the viewfinder open so several shots
+               can be taken in a row -- the camera app returns after every single
+               photo, which for a book with a barcode, a cover and a title page means
+               opening it three times. #}
+            <div class="bp-photo-actions">
+                <button type="button" class="btn btn--primary" id="bp-camera-btn">
+                    Take photos
+                </button>
+                <label class="bp-add-photo" for="bp-photos">
+                    <input type="file" id="bp-photos" accept="image/*" multiple hidden>
+                    From the library
+                </label>
+            </div>
             <em class="bp-hint" id="bp-photo-status"></em>
         </div>
     </section>
