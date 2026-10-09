@@ -11,6 +11,7 @@ That makes two things worth pinning:
 
 import secrets
 import unittest
+import unittest.mock
 from datetime import datetime, timedelta
 
 from tests import _env  # noqa: E402,F401  isort:skip  (must precede src imports)
@@ -250,6 +251,53 @@ class DraftAdapterTest(unittest.TestCase):
         self.assertEqual(drafts[0]["title"], "A Book")
         self.assertEqual(drafts[0]["price"], "12.34")
         self.assertEqual(drafts[0]["category_id"], "261186")
+
+    def test_a_newly_created_offer_is_retried_not_reported(self):
+        """eBay registers a new offer asynchronously, so publishing immediately can
+        answer "Offer not found" for an offer that is perfectly real. Telling the
+        seller their listing failed would be reporting a problem that has already
+        stopped being true."""
+        calls = []
+
+        def fake_post(url, **kwargs):
+            calls.append(url)
+            if len(calls) < 3:
+                return self._Resp(400, {"errors": [{"errorId": 25604,
+                                                    "message": "Offer not found."}]})
+            return self._Resp(200, {"listingId": "1234567890"})
+
+        self.mod.httpx.post = fake_post
+        # The backoff is real; patched out so the suite does not sit through it.
+        # time is imported inside publish_offer, so it is the same module object.
+        with unittest.mock.patch("time.sleep"):
+            result = self.adapter.publish_offer(self.token, "EBAY_CA", "9")
+        self.assertEqual(result["listing_id"], "1234567890")
+        self.assertEqual(len(calls), 3, "it should have retried until it worked")
+
+    def test_a_genuine_rejection_is_not_retried(self):
+        """Only "not yet" is retried. Publishing twice is the risk, so a real refusal
+        must fail on the first answer rather than being repeated."""
+        calls = []
+
+        def fake_post(url, **kwargs):
+            calls.append(url)
+            return self._Resp(400, {"errors": [{"errorId": 25007,
+                                                "message": "bad policy"}]})
+
+        self.mod.httpx.post = fake_post
+        with self.assertRaises(RuntimeError):
+            self.adapter.publish_offer(self.token, "EBAY_CA", "9")
+        self.assertEqual(len(calls), 1)
+
+    def test_the_not_found_case_explains_itself_if_it_persists(self):
+        self.mod.httpx.post = lambda url, **k: self._Resp(
+            400, {"errors": [{"errorId": 25604, "message": "Offer not found."}]})
+        with unittest.mock.patch("time.sleep"):
+            with self.assertRaises(RuntimeError) as caught:
+                self.adapter.publish_offer(self.token, "EBAY_CA", "9")
+            message = str(caught.exception)
+        self.assertIn("had not registered it yet", message)
+        self.assertIn("25604", message)
 
     def test_a_rejection_reads_as_a_sentence_not_an_error_id(self):
         """A seller cannot act on "errorId 25002". The message has to say what eBay

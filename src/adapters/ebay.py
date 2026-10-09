@@ -849,7 +849,26 @@ class eBayAdapter(MarketplaceAdapter):
         25709: ("eBay rejected a request header. This is a problem with the app "
                 "rather than with your listing."),
         21919136: ("eBay needs more item specifics for this category."),
+        25604: ("eBay could not find the offer it was asked to publish. That usually "
+                "means the offer had only just been created and eBay had not "
+                "registered it yet, so trying again in a moment normally works."),
     }
+
+    @staticmethod
+    def _publish_error_id(resp):
+        """The first error id in a rejection, or None.
+
+        Read in one place so the retry decision and the message cannot disagree
+        about which failure they are looking at.
+        """
+        try:
+            errors = (resp.json() or {}).get("errors") or []
+        except Exception:
+            return None
+        for error in errors:
+            if error.get("errorId"):
+                return error["errorId"]
+        return None
 
     def _publish_error(self, resp) -> str:
         """eBay's own words, shaped into something a seller can act on.
@@ -959,6 +978,15 @@ class eBayAdapter(MarketplaceAdapter):
             return f"“{match.group(1).strip()}”"
         return ""
 
+    # eBay registers a newly created offer asynchronously, so publishing one
+    # immediately can come back "Offer not found" for an offer that is perfectly
+    # real and was created seconds ago. Retried rather than reported, because the
+    # alternative is telling the seller their listing failed for a reason that has
+    # already stopped being true.
+    PUBLISH_RETRY_ERROR_IDS = {25604}
+    PUBLISH_RETRY_ATTEMPTS = 4
+    PUBLISH_RETRY_DELAY = 1.5
+
     def publish_offer(self, token: dict, marketplace: str,
                       offer_id: str) -> Dict[str, Any]:
         """Publish an unpublished offer, making it a live listing.
@@ -967,11 +995,23 @@ class eBayAdapter(MarketplaceAdapter):
         is the step that puts the item on sale. Every caller must have asked the
         seller first.
         """
+        import time
+
         headers = self._inventory_headers(token, marketplace)
-        resp = httpx.post(
-            f"{EBAY_API_BASE}/sell/inventory/v1/offer/{offer_id}/publish",
-            headers=headers, timeout=90)
-        if resp.status_code not in (200, 201):
+        resp = None
+        for attempt in range(1, self.PUBLISH_RETRY_ATTEMPTS + 1):
+            resp = httpx.post(
+                f"{EBAY_API_BASE}/sell/inventory/v1/offer/{offer_id}/publish",
+                headers=headers, timeout=90)
+            if resp.status_code in (200, 201):
+                break
+            # Only the not-found case is retried: it means "not yet", whereas the
+            # others are genuine refusals that waiting cannot fix. Publishing twice
+            # is the risk here, so nothing else is repeated.
+            if (self._publish_error_id(resp) in self.PUBLISH_RETRY_ERROR_IDS
+                    and attempt < self.PUBLISH_RETRY_ATTEMPTS):
+                time.sleep(self.PUBLISH_RETRY_DELAY)
+                continue
             raise RuntimeError(self._publish_error(resp))
         body = resp.json() if resp.content else {}
         return {
