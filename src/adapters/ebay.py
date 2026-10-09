@@ -747,6 +747,27 @@ class eBayAdapter(MarketplaceAdapter):
 
         return self.BOOKS_LEAF_CATEGORY.get(marketplace, "261186")
 
+    # How many of the per-item lookups run at once. eBay tolerates this comfortably,
+    # and doing them one at a time is what made the drafts page take a minute: 82
+    # inventory items meant 165 round trips, each waiting for the last.
+    DRAFT_FETCH_WORKERS = 8
+
+    @staticmethod
+    def _offer_detail(base: str, headers: dict, offer_id: str,
+                      fallback: Dict[str, Any]) -> Dict[str, Any]:
+        """One offer's full record, or the summary if it cannot be read.
+
+        Falls back rather than raising: a draft showing no price beats a drafts page
+        that fails because one offer in eighty was unreadable.
+        """
+        try:
+            resp = httpx.get(f"{base}/offer/{offer_id}", headers=headers, timeout=40)
+            if resp.status_code == 200:
+                return resp.json() or fallback
+        except Exception:
+            pass
+        return fallback
+
     def list_book_drafts(self, token: dict, marketplace: str) -> List[Dict[str, Any]]:
         """Every unpublished offer this seller has, newest first.
 
@@ -772,43 +793,50 @@ class eBayAdapter(MarketplaceAdapter):
         except Exception:
             return []
 
-        for item in items:
+        # Each item's lookup is independent, so they run together. Sequentially is
+        # what made this page take a minute: 82 items meant 165 round trips to eBay,
+        # each waiting for the previous one before it could start.
+        def drafts_for(item):
             sku = item.get("sku") or ""
             if not sku:
-                continue
+                return []
             product = item.get("product") or {}
             try:
                 o = httpx.get(f"{base}/offer", headers=headers,
                               params={"sku": sku, "limit": 20}, timeout=40)
                 if o.status_code != 200:
-                    continue
+                    return []
                 offers = (o.json() or {}).get("offers") or []
             except Exception:
-                continue
+                return []
 
+            found = []
             for summary in offers:
                 offer_id = summary.get("offerId")
                 if not offer_id:
                     continue
-                detail = {}
-                try:
-                    d = httpx.get(f"{base}/offer/{offer_id}", headers=headers,
-                                  timeout=40)
-                    detail = d.json() if d.status_code == 200 else {}
-                except Exception:
-                    detail = {}
 
-                price = ((detail.get("pricingSummary") or {}).get("price") or {})
-                status = str(detail.get("status")
-                             or summary.get("status") or "").upper()
+                # The status is read BEFORE the detail call, because only unpublished
+                # offers are drafts and most items on this account are live listings.
+                # That check alone removes most of the calls this page used to make.
+                status = str(summary.get("status") or "").upper()
+                detail = summary
+                if not status:
+                    detail = self._offer_detail(base, headers, offer_id, summary)
+                    status = str(detail.get("status") or "").upper()
                 # ONLY unpublished offers are drafts. Without this the list kept
                 # showing listings that had already gone live, and offered a
                 # Publish button on something already for sale -- which either
                 # fails or double-lists.
                 if status != "UNPUBLISHED":
                     continue
+                if not summary.get("pricingSummary"):
+                    # A real draft needs its price shown, so this one is worth the
+                    # call the others skipped.
+                    detail = self._offer_detail(base, headers, offer_id, summary)
 
-                drafts.append({
+                price = ((detail.get("pricingSummary") or {}).get("price") or {})
+                found.append({
                     "offer_id": offer_id,
                     "sku": sku,
                     "status": status,
@@ -822,6 +850,13 @@ class eBayAdapter(MarketplaceAdapter):
                     "image": (product.get("imageUrls") or [None])[0],
                     "marketplace": detail.get("marketplaceId") or marketplace,
                 })
+            return found
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=self.DRAFT_FETCH_WORKERS) as pool:
+            for group in pool.map(drafts_for, items):
+                drafts.extend(group)
 
         # Newest first: the offer id is not a timestamp, so order by sku, which is
         # generated from one when this page creates the draft.

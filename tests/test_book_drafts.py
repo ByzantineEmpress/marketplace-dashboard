@@ -113,6 +113,52 @@ class DraftAdapterTest(unittest.TestCase):
         def json(self):
             return self._payload
 
+    def test_published_offers_cost_no_detail_call(self):
+        """The detail call is what made the page slow. Most items are live listings,
+        so checking the status from the summary before fetching the detail removes
+        the majority of the 165 calls it used to make."""
+        calls = []
+
+        def fake_get(url, **kwargs):
+            calls.append(url)
+            if url.endswith("/inventory_item"):
+                return self._Resp(200, {"inventoryItems": [
+                    {"sku": "BOOK-%d" % n, "product": {"title": "Book %d" % n}}
+                    for n in range(20)]})
+            if "/offer/" in url:
+                raise AssertionError("a detail call was made: " + url)
+            return self._Resp(200, {"offers": [
+                {"offerId": "live-%s" % url[-4:], "status": "PUBLISHED",
+                 "pricingSummary": {"price": {"value": "9.99"}}}]})
+
+        self.mod.httpx.get = fake_get
+        drafts = self.adapter.list_book_drafts(self.token, "EBAY_CA")
+
+        self.assertEqual(drafts, [], "published offers are not drafts")
+        # 1 listing call plus 1 per item, and nothing else.
+        self.assertEqual(len(calls), 21, f"expected 21 calls, made {len(calls)}")
+
+    def test_a_draft_still_gets_its_detail_fetched(self):
+        """A real draft needs its price and category, so it does cost a call."""
+        calls = []
+
+        def fake_get(url, **kwargs):
+            calls.append(url)
+            if url.endswith("/inventory_item"):
+                return self._Resp(200, {"inventoryItems": [
+                    {"sku": "BOOK-1", "product": {"title": "A Book"}}]})
+            if "/offer/" in url:
+                return self._Resp(200, {"offerId": "9", "status": "UNPUBLISHED",
+                                        "categoryId": "261186",
+                                        "pricingSummary": {"price": {
+                                            "value": "12.34", "currency": "CAD"}}})
+            return self._Resp(200, {"offers": [{"offerId": "9"}]})
+
+        self.mod.httpx.get = fake_get
+        drafts = self.adapter.list_book_drafts(self.token, "EBAY_CA")
+        self.assertEqual([d["offer_id"] for d in drafts], ["9"])
+        self.assertEqual(drafts[0]["price"], "12.34")
+
     def test_a_published_offer_is_not_listed_as_a_draft(self):
         """It kept showing listings that had already gone live, with a Publish
         button on something already for sale."""
