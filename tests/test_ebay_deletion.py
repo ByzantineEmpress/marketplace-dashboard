@@ -114,13 +114,54 @@ class DeletionEndpointTest(unittest.TestCase):
                               params={"challenge_code": "x"})
         self.assertEqual(res.status_code, 503)
 
+    def test_an_unmatched_notification_is_acknowledged_but_not_recorded(self):
+        """eBay sends these for every account that has authorised the app, and it
+        does not sign the POST -- ownership is proved once, by the GET challenge. So
+        an unconditional insert let 16,879 notifications accumulate, not one of which
+        concerned a user of this instance: 99.5% of every row in the database.
+
+        eBay must still get its 2xx or it retries, so the reply is unchanged.
+        """
+        res = self.client.post("/api/ebay/account-deletion", json={
+            "metadata": {"topic": "MARKETPLACE_ACCOUNT_DELETION",
+                         "schemaVersion": "1.0"},
+            "notification": {
+                "notificationId": "n-unmatched",
+                "eventDate": "2025-01-01T00:00:00Z",
+                "data": {"username": "someone-else", "userId": "u-someone-else"},
+            },
+        })
+        self.assertEqual(res.status_code, 200)
+
+        from src.models import EbayAccountDeletion
+        db = SessionLocal()
+        try:
+            row = db.query(EbayAccountDeletion).filter_by(
+                notification_id="n-unmatched").first()
+            self.assertIsNone(row, "a notification that matched nothing was stored")
+        finally:
+            db.close()
+
     def test_post_records_and_acknowledges(self):
+        """A notification that DOES match is still recorded, and disconnects."""
+        from src.models import MarketplaceAccount
+
+        db = SessionLocal()
+        try:
+            account = db.query(MarketplaceAccount).filter_by(platform="ebay").first()
+            if account is None or not account.platform_user_id:
+                self.skipTest("no connected eBay account in this test database")
+            username = account.account_name or ""
+            user_id = account.platform_user_id
+        finally:
+            db.close()
+
         res = self.client.post("/api/ebay/account-deletion", json={
             "metadata": {"topic": "MARKETPLACE_ACCOUNT_DELETION", "schemaVersion": "1.0"},
             "notification": {
                 "notificationId": "n-test",
                 "eventDate": "2025-01-01T00:00:00Z",
-                "data": {"username": "deleted_user", "userId": "u-deleted"},
+                "data": {"username": username, "userId": user_id},
             },
         })
         self.assertEqual(res.status_code, 200)

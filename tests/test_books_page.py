@@ -262,6 +262,25 @@ class BooksPageTest(unittest.TestCase):
         self.assertEqual(res.status_code, 422)  # missing required file
 
 
+class DeletionNotificationTest(unittest.TestCase):
+    """eBay sends account-deletion notifications for every account that has
+    authorised the app, and the endpoint is reachable by anyone who knows the URL --
+    eBay does not sign the POST. Storing them all put 16,879 rows in the database,
+    not one of which concerned a user of this instance."""
+
+    def test_an_unmatched_notification_is_not_stored(self):
+        import pathlib
+        routes = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "src", "api", "routes.py").read_text(encoding="utf-8")
+        block = routes.split("async def ebay_account_deletion_notification")[1]
+        block = block.split("@api_router.post")[0]
+        # The insert must be behind the match test, not run unconditionally.
+        self.assertIn("if disconnected:", block)
+        self.assertLess(block.index("if disconnected:"), block.index("db.add(record)"))
+        # And it must still acknowledge, or eBay retries forever.
+        self.assertIn("acknowledged", block)
+
+
 class ScanTest(unittest.TestCase):
     """The scan endpoint is only as good as what it refuses."""
 

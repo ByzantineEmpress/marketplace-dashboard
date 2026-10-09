@@ -1542,16 +1542,28 @@ async def ebay_account_deletion_notification(request: Request):
         disconnected = ebay_notifications.disconnect_matching_ebay_accounts(
             db, info["username"], info["user_id"])
 
-        record = EbayAccountDeletion(
-            notification_id=info["notification_id"] or None,
-            topic=info["topic"] or None,
-            username=info["username"] or None,
-            ebay_user_id=info["user_id"] or None,
-            event_date=info["event_date"] or None,
-            accounts_disconnected=disconnected,
-        )
-        db.add(record)
-        db.commit()
+        # Recorded ONLY when it matched something of ours.
+        #
+        # eBay sends these for every account that has authorised the application --
+        # and this endpoint is reachable by anyone who knows the URL, because eBay
+        # does not sign the POST (ownership is proved once, by the GET challenge
+        # above). So an unconditional insert let 16,879 notifications accumulate,
+        # not one of which concerned a user of this instance: 99.5% of every row in
+        # the database, for events that changed nothing.
+        #
+        # A notification that disconnected nothing has no audit value. Acknowledge it
+        # -- eBay must get its 2xx or it retries -- and keep nothing.
+        if disconnected:
+            record = EbayAccountDeletion(
+                notification_id=info["notification_id"] or None,
+                topic=info["topic"] or None,
+                username=info["username"] or None,
+                ebay_user_id=info["user_id"] or None,
+                event_date=info["event_date"] or None,
+                accounts_disconnected=disconnected,
+            )
+            db.add(record)
+            db.commit()
     finally:
         db.close()
 
