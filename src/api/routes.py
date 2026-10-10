@@ -3999,6 +3999,83 @@ def _serialise_group(db: Session, group_id: int) -> dict:
     }
 
 
+@api_router.post("/listings/bulk-cost")
+async def bulk_cost(body: dict, db: Session = Depends(get_db),
+                    _user: dict = Depends(check_auth)):
+    """Set the cost of goods on several listings at once.
+
+    Two modes, because both are real ways of buying stock:
+
+      ``each``   every selected listing cost the same -- 30 books at $2 each
+      ``total``  one amount paid for the lot, divided between them -- 30 books, $60
+
+    Tenant-scoped the same way as grouping: every id must belong to one of the
+    caller's teams, and a partial match is refused rather than quietly applying to
+    the ones that did.
+    """
+    from src.models import Listing
+
+    raw_ids = body.get("listing_ids") or []
+    try:
+        ids = sorted({int(i) for i in raw_ids})
+    except (TypeError, ValueError):
+        return JSONResponse(status_code=400,
+                            content={"ok": False,
+                                     "error": "listing_ids must be whole numbers."})
+    if not ids:
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "No listings were selected."})
+
+    mode = str(body.get("mode") or "each").strip().lower()
+    if mode not in ("each", "total"):
+        return JSONResponse(status_code=400,
+                            content={"ok": False,
+                                     "error": "mode must be 'each' or 'total'."})
+    try:
+        amount_cents = int(round(float(body.get("amount") or 0) * 100))
+    except (TypeError, ValueError):
+        return JSONResponse(status_code=400,
+                            content={"ok": False, "error": "amount must be a number."})
+    if amount_cents < 0:
+        return JSONResponse(status_code=400,
+                            content={"ok": False,
+                                     "error": "A negative cost is not a cost."})
+
+    user_team_ids = _user.get("team_ids") or []
+    if not user_team_ids:
+        return JSONResponse(status_code=404,
+                            content={"ok": False, "error": "No listings were found."})
+
+    rows = (db.query(Listing)
+            .filter(Listing.id.in_(ids), Listing.team_id.in_(user_team_ids))
+            .all())
+    # 404 rather than 403, matching the rest of the app: whether a listing exists on
+    # another team is not something a caller should be able to probe for.
+    if len(rows) != len(ids):
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False,
+                     "error": "Some of those listings were not found. Nothing was "
+                              "changed."})
+
+    # Divided, not apportioned with a remainder: a third of $1.00 is 33c and a cent
+    # goes unassigned, which is better than one listing silently costing a cent more
+    # than the others.
+    each = amount_cents if mode == "each" else int(round(amount_cents / len(rows)))
+    for row in rows:
+        row.purchase_price_cents = each
+    db.commit()
+
+    return {
+        "ok": True,
+        "updated": len(rows),
+        "mode": mode,
+        "per_listing_cents": each,
+        "total_cents": each * len(rows),
+        "entered_cents": amount_cents,
+    }
+
+
 @api_router.post("/listings/group")
 async def group_listings(body: dict, db: Session = Depends(get_db), _user: dict = Depends(check_auth)):
     """Link several listings as the same item across marketplaces.

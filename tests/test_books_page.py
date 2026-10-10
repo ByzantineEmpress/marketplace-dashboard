@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from src import books
 from src.api.main import app
 from src.database import SessionLocal, init_db
-from src.models import AuthSession, User
+from src.models import AuthSession, Listing, User
 
 
 class BooksPageTest(unittest.TestCase):
@@ -279,6 +279,168 @@ class DeletionNotificationTest(unittest.TestCase):
         self.assertLess(block.index("if disconnected:"), block.index("db.add(record)"))
         # And it must still acknowledge, or eBay retries forever.
         self.assertIn("acknowledged", block)
+
+
+class BulkCostTest(unittest.TestCase):
+    """Setting the cost of goods on several listings at once.
+
+    Two modes because both are real ways of buying stock: 30 books at $2 each, or
+    $60 paid for the lot and divided. The dividing case is where a wrong answer is
+    expensive -- it decides the profit on every one of them.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        init_db()
+
+    def setUp(self):
+        import secrets
+        from datetime import datetime, timedelta
+
+        from src.models import AuthSession, Team, TeamMembership, User
+
+        self.db = SessionLocal()
+        self.user = User(email=f"bulk.{secrets.token_hex(4)}@example.com",
+                         name="Bulk Tester", provider="google", is_admin=False)
+        self.db.add(self.user)
+        self.db.commit()
+
+        self.team = Team(name="Bulk Team",
+                         invite_code=__import__("secrets").token_urlsafe(16),
+                         created_by_email=self.user.email)
+        self.db.add(self.team)
+        self.db.commit()
+        self.db.add(TeamMembership(team_id=self.team.id, user_id=self.user.id,
+                               role="owner"))
+        self.db.commit()
+
+        self.listings = []
+        for n in range(30):
+            row = Listing(platform="ebay", platform_listing_id=f"bulk-{n}",
+                          title=f"Book {n}", team_id=self.team.id,
+                          purchase_price_cents=0)
+            self.db.add(row)
+            self.listings.append(row)
+        self.db.commit()
+        self.ids = [row.id for row in self.listings]
+
+        token = secrets.token_urlsafe(48)
+        self.db.add(AuthSession(token=token, user_id=self.user.id,
+                                expires_at=datetime.utcnow() + timedelta(hours=1)))
+        self.db.commit()
+        self._token = token
+
+    def tearDown(self):
+        import secrets as _s
+        uid, tid = self.user.id, self.team.id
+        self.db.rollback()
+        self.db.query(Listing).filter(Listing.team_id == tid).delete(
+            synchronize_session=False)
+        from src.models import AuthSession, Team, TeamMembership, User
+        self.db.query(TeamMembership).filter(
+            TeamMembership.team_id == tid).delete(synchronize_session=False)
+        self.db.query(AuthSession).filter(AuthSession.user_id == uid).delete(
+            synchronize_session=False)
+        self.db.query(Team).filter(Team.id == tid).delete(synchronize_session=False)
+        self.db.query(User).filter(User.id == uid).delete(synchronize_session=False)
+        self.db.commit()
+        self.db.close()
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        from src.api.main import app
+        client = TestClient(app)
+        client.cookies.set("auth_token", self._token)
+        return client
+
+    def _costs(self):
+        from src.models import Listing as L
+        self.db.expire_all()
+        return [r.purchase_price_cents for r in
+                self.db.query(L).filter(L.id.in_(self.ids)).all()]
+
+    def test_the_same_cost_lands_on_every_selected_listing(self):
+        """I select 30 books that all cost $2, so every one of them is $2."""
+        with self._client() as client:
+            res = client.post("/api/listings/bulk-cost",
+                              json={"listing_ids": self.ids, "mode": "each",
+                                    "amount": 2})
+        self.assertEqual(res.status_code, 200, res.text)
+        data = res.json()
+        self.assertEqual(data["updated"], 30)
+        self.assertEqual(data["per_listing_cents"], 200)
+        self.assertEqual(set(self._costs()), {200})
+
+    def test_a_total_is_divided_between_them(self):
+        """I paid $60 for the lot, so each of the 30 cost $2."""
+        with self._client() as client:
+            res = client.post("/api/listings/bulk-cost",
+                              json={"listing_ids": self.ids, "mode": "total",
+                                    "amount": 60})
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(res.json()["per_listing_cents"], 200)
+        self.assertEqual(set(self._costs()), {200})
+
+    def test_a_total_that_does_not_divide_does_not_invent_a_remainder(self):
+        """A third of a dollar is 33c and a cent goes unassigned, rather than one
+        listing silently costing more than the rest."""
+        with self._client() as client:
+            res = client.post("/api/listings/bulk-cost",
+                              json={"listing_ids": self.ids[:3], "mode": "total",
+                                    "amount": 1.00})
+        self.assertEqual(res.json()["per_listing_cents"], 33)
+        self.assertEqual(res.json()["total_cents"], 99)
+        self.assertEqual(res.json()["entered_cents"], 100)
+
+    def test_listings_on_another_team_are_refused(self):
+        """Tenant isolation, and refused rather than partly applied: applying to the
+        ones that matched would leave the caller believing all thirty changed."""
+        import secrets as _s
+        from src.models import Team as T, User as U
+
+        other_user = U(email=f"other.{_s.token_hex(4)}@example.com", name="Other",
+                       provider="google", is_admin=False)
+        self.db.add(other_user)
+        self.db.commit()
+        other_team = T(name="Other Team",
+                           invite_code=_s.token_urlsafe(16),
+                           created_by_email=other_user.email)
+        self.db.add(other_team)
+        self.db.commit()
+        stranger = Listing(platform="ebay", platform_listing_id="not-mine",
+                           title="Not mine", team_id=other_team.id,
+                           purchase_price_cents=0)
+        self.db.add(stranger)
+        self.db.commit()
+
+        try:
+            with self._client() as client:
+                res = client.post("/api/listings/bulk-cost",
+                                  json={"listing_ids": self.ids[:2] + [stranger.id],
+                                        "mode": "each", "amount": 5})
+            self.assertEqual(res.status_code, 404)
+            self.db.expire_all()
+            untouched = (self.db.query(Listing)
+                         .filter(Listing.id.in_(self.ids[:2])).all())
+            self.assertEqual([r.purchase_price_cents for r in untouched], [0, 0],
+                             "a partial match was applied anyway")
+        finally:
+            self.db.query(Listing).filter(Listing.id == stranger.id).delete(
+                synchronize_session=False)
+            self.db.query(T).filter(T.id == other_team.id).delete(
+                synchronize_session=False)
+            self.db.query(U).filter(U.id == other_user.id).delete(
+                synchronize_session=False)
+            self.db.commit()
+
+    def test_rubbish_is_refused(self):
+        for payload in ({"listing_ids": [], "mode": "each", "amount": 1},
+                        {"listing_ids": self.ids, "mode": "sideways", "amount": 1},
+                        {"listing_ids": self.ids, "mode": "each", "amount": -5},
+                        {"listing_ids": self.ids, "mode": "each", "amount": "abc"}):
+            with self._client() as client:
+                res = client.post("/api/listings/bulk-cost", json=payload)
+            self.assertEqual(res.status_code, 400, payload)
 
 
 class ScanTest(unittest.TestCase):
