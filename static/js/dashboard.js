@@ -1747,7 +1747,11 @@ document.addEventListener("DOMContentLoaded", () => {
             groupActionBar.style.display = state.groupingMode ? "flex" : "none";
         }
         if (groupModeBtn) {
-            groupModeBtn.textContent = state.groupingMode ? "✕ Exit Group Mode" : "🔗 Group Listings";
+            // Named for what it starts -- selecting -- rather than for one of the things
+        // you can then do with the selection. It sets cost of goods now too, and a
+        // button called "Group Listings" gives no hint of that.
+        groupModeBtn.textContent = state.groupingMode
+            ? "✕ Exit selection" : "☑️ Select listings";
             groupModeBtn.classList.toggle("is-active", state.groupingMode);
         }
         if (groupSelectionCount) {

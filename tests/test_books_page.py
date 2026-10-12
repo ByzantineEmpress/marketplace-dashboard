@@ -300,6 +300,26 @@ class BulkCostUITest(unittest.TestCase):
         # rather than a separate toolbar elsewhere on the page.
         self.assertLess(html.index("group-action-bar"), html.index("bulk-cost-amount"))
 
+    def test_the_selection_button_is_named_for_what_it_does(self):
+        """It starts a selection that can set cost of goods OR group, so a label
+        naming only one of those gives no hint of the other."""
+        import pathlib
+        root = pathlib.Path(__file__).resolve().parent.parent
+        html = (root / "templates" / "dashboard.html").read_text(encoding="utf-8")
+        js = (root / "static" / "js" / "dashboard.js").read_text(encoding="utf-8")
+
+        button = html.split('id="group-mode-btn"')[1].split("</button>")[0]
+        self.assertIn("Select listings", button)
+        self.assertNotIn("Group Listings", button)
+
+        # And the label the JS swaps in when the mode is toggled.
+        self.assertIn("Select listings", js)
+        self.assertIn("Exit selection", js)
+        # The old wording survives only in the comment explaining the change.
+        for line in js.split("\n"):
+            if "Group Listings" in line:
+                self.assertIn(line.lstrip()[:2], ("//", "#"), line)
+
     def test_both_modes_and_a_live_preview_are_wired(self):
         import pathlib
         js = pathlib.Path(__file__).resolve().parent.parent.joinpath(
