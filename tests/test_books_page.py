@@ -281,6 +281,48 @@ class DeletionNotificationTest(unittest.TestCase):
         self.assertIn("acknowledged", block)
 
 
+class BulkCostUITest(unittest.TestCase):
+    """The dashboard controls for bulk cost of goods."""
+
+    def test_the_selection_bar_carries_the_cost_controls(self):
+        """Read from the template: /dashboard needs a session, so this checks the
+        markup the page is built from rather than plumbing an authenticated client
+        through for a markup assertion."""
+        import pathlib
+        html = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "templates", "dashboard.html").read_text(encoding="utf-8")
+        for element in ("bulk-cost-amount", "bulk-cost-apply", "bulk-cost-preview",
+                        "bulk-cost-mode-each", "bulk-cost-mode-total"):
+            self.assertIn(element, html, element)
+        # In the selection bar that already exists, not a second mechanism.
+        self.assertIn("group-action-bar", html)
+        # And the controls come after the selection bar opens, so they are inside it
+        # rather than a separate toolbar elsewhere on the page.
+        self.assertLess(html.index("group-action-bar"), html.index("bulk-cost-amount"))
+
+    def test_both_modes_and_a_live_preview_are_wired(self):
+        import pathlib
+        js = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "static", "js", "dashboard.js").read_text(encoding="utf-8")
+        self.assertIn("/api/listings/bulk-cost", js)
+        # The preview is the point of the dividing mode.
+        self.assertIn("bulk-cost-preview", js)
+        self.assertIn("each", js)
+        self.assertIn("total", js)
+        # It must update when the selection changes, not only when the amount does.
+        ui = js.split("function updateGroupingUI()")[1].split("function toggleGroupSelection")[0]
+        self.assertIn("bulkCostPreview()", ui)
+        # And the preview has to use the same half-up rounding the server does.
+        preview = js.split("function bulkCostPreview()")[1].split("function setBulkCostMessage")[0]
+        self.assertIn("Math.round", preview)
+
+    @staticmethod
+    def _client():
+        from fastapi.testclient import TestClient
+        from src.api.main import app
+        return TestClient(app)
+
+
 class BulkCostTest(unittest.TestCase):
     """Setting the cost of goods on several listings at once.
 
@@ -380,6 +422,17 @@ class BulkCostTest(unittest.TestCase):
         self.assertEqual(res.status_code, 200, res.text)
         self.assertEqual(res.json()["per_listing_cents"], 200)
         self.assertEqual(set(self._costs()), {200})
+
+    def test_the_rounding_matches_the_pages_preview(self):
+        """$1.00 over 8 listings. Python rounds halves to even and JavaScript rounds
+        them up, so a naive round() stored 12c while the page promised 13c. The
+        preview is what the seller agrees to, so the stored figure has to match it."""
+        with self._client() as client:
+            res = client.post("/api/listings/bulk-cost",
+                              json={"listing_ids": self.ids[:8], "mode": "total",
+                                    "amount": 1.00})
+        self.assertEqual(res.json()["per_listing_cents"], 13)
+        self.assertEqual(set(self._costs()[:1]), {13})
 
     def test_a_total_that_does_not_divide_does_not_invent_a_remainder(self):
         """A third of a dollar is 33c and a cent goes unassigned, rather than one

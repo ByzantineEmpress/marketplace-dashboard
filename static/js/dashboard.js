@@ -1756,7 +1756,140 @@ document.addEventListener("DOMContentLoaded", () => {
         if (groupConfirmBtn) {
             groupConfirmBtn.disabled = count < 2;
         }
+        bulkCostPreview();
     }
+
+    // -- Bulk cost of goods ---------------------------------------------------
+    //
+    // Buying a box of books is the normal case, and entering the cost one listing at
+    // a time is what makes that unbearable. Two modes, because both are real ways of
+    // buying: thirty books at $2 each, or $60 paid for the lot and divided.
+    //
+    // The running preview is the important part. For the dividing case the per-book
+    // figure is what the seller is actually agreeing to, and seeing it before it is
+    // applied beats discovering it in the profit column afterwards.
+
+    let bulkCostMode = "each";
+
+    function bulkCostEls() {
+        return {
+            amount: document.getElementById("bulk-cost-amount"),
+            apply: document.getElementById("bulk-cost-apply"),
+            preview: document.getElementById("bulk-cost-preview"),
+            msg: document.getElementById("bulk-cost-msg"),
+            each: document.getElementById("bulk-cost-mode-each"),
+            total: document.getElementById("bulk-cost-mode-total"),
+        };
+    }
+
+    function money(cents) {
+        return "$" + (cents / 100).toFixed(2);
+    }
+
+    function bulkCostPreview() {
+        const el = bulkCostEls();
+        const count = state.selectedIds.size;
+        const typed = el.amount ? parseFloat(el.amount.value) : NaN;
+        // Negative and absent are both "nothing to do yet", not an error state.
+        const usable = !isNaN(typed) && typed >= 0;
+
+        if (el.each) el.each.classList.toggle("is-active", bulkCostMode === "each");
+        if (el.total) el.total.classList.toggle("is-active", bulkCostMode === "total");
+
+        if (el.apply) {
+            el.apply.disabled = count < 1 || !usable;
+            el.apply.textContent = count === 1 ? "Set cost" : `Set cost on ${count}`;
+        }
+        if (!el.preview) return;
+
+        if (!count) {
+            el.preview.textContent = "Select listings above, then set a cost.";
+            return;
+        }
+        if (!usable) {
+            el.preview.textContent = "";
+            return;
+        }
+        if (bulkCostMode === "each") {
+            const cents = Math.round(typed * 100);
+            el.preview.textContent =
+                `${count} \u00d7 ${money(cents)} = ${money(cents * count)} in total`;
+        } else {
+            // Mirrors the server's rounding exactly, so the figure promised here is
+            // the figure that lands on the cards.
+            const each = Math.round(Math.round(typed * 100) / count);
+            el.preview.textContent = count === 1
+                ? `${money(Math.round(typed * 100))} on the one listing`
+                : `${money(Math.round(typed * 100))} \u00f7 ${count} = ${money(each)} each`;
+        }
+    }
+
+    function setBulkCostMessage(text, isError) {
+        const el = bulkCostEls();
+        if (!el.msg) return;
+        el.msg.textContent = text || "";
+        el.msg.className = "bulk-cost-msg" + (text
+            ? (isError ? " is-error" : " is-ok") : "");
+    }
+
+    async function applyBulkCost() {
+        const el = bulkCostEls();
+        const count = state.selectedIds.size;
+        const typed = el.amount ? parseFloat(el.amount.value) : NaN;
+        if (!count || isNaN(typed) || typed < 0) return;
+
+        const btn = el.apply;
+        const original = btn ? btn.textContent : "";
+        if (btn) { btn.disabled = true; btn.textContent = "Applying\u2026"; }
+        setBulkCostMessage("");
+
+        try {
+            const res = await fetch("/api/listings/bulk-cost", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    listing_ids: Array.from(state.selectedIds),
+                    mode: bulkCostMode,
+                    amount: typed,
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.ok) {
+                throw new Error(data.error || `Could not set the cost (HTTP ${res.status})`);
+            }
+            setBulkCostMessage(
+                `${data.updated} listing${data.updated === 1 ? "" : "s"} set to `
+                + `${money(data.per_listing_cents)} each.`, false);
+            // The cards carry the old cost until they are reloaded.
+            loadListings();
+        } catch (err) {
+            setBulkCostMessage(err.message, true);
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = original; }
+            bulkCostPreview();
+        }
+    }
+
+    (function wireBulkCost() {
+        const el = bulkCostEls();
+        ["each", "total"].forEach((mode) => {
+            const btn = document.getElementById(`bulk-cost-mode-${mode}`);
+            if (btn) {
+                btn.addEventListener("click", () => {
+                    bulkCostMode = mode;
+                    bulkCostPreview();
+                });
+            }
+        });
+        if (el.amount) {
+            el.amount.addEventListener("input", bulkCostPreview);
+            // Enter applies, which is what a number field invites.
+            el.amount.addEventListener("keydown", (event) => {
+                if (event.key === "Enter") { event.preventDefault(); applyBulkCost(); }
+            });
+        }
+        if (el.apply) el.apply.addEventListener("click", applyBulkCost);
+    })();
 
     function toggleGroupSelection(id, card) {
         if (state.selectedIds.has(id)) {

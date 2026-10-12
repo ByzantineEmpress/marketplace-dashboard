@@ -179,6 +179,29 @@
         <!-- Shown only in grouping selection mode -->
         <div class="group-action-bar" id="group-action-bar" style="display:none;">
             <span id="group-selection-count">0 selected</span>
+
+            {# Bulk cost of goods, in the selection bar that already exists rather than
+               a second selection mechanism. Two modes, because both are real ways of
+               buying stock: thirty books at $2 each, or $60 paid for the lot. #}
+            <div class="bulk-cost">
+                <div class="bulk-cost-modes" role="group" aria-label="How to apply the cost">
+                    <button type="button" class="bulk-cost-mode is-active"
+                            id="bulk-cost-mode-each" data-mode="each">Same each</button>
+                    <button type="button" class="bulk-cost-mode"
+                            id="bulk-cost-mode-total" data-mode="total">Split a total</button>
+                </div>
+                <span class="bulk-cost-symbol">$</span>
+                <input type="number" id="bulk-cost-amount" class="bulk-cost-amount"
+                       step="0.01" min="0" inputmode="decimal" placeholder="0.00"
+                       aria-label="Cost of goods amount">
+                <button class="btn btn--sm btn--primary" id="bulk-cost-apply" disabled>
+                    Set cost
+                </button>
+                {# The running figure is the point: for the dividing case you want to see
+                   the per-book number before it is applied, not afterwards. #}
+                <span class="bulk-cost-preview" id="bulk-cost-preview"></span>
+            </div>
+            <span class="bulk-cost-msg" id="bulk-cost-msg"></span>
             <button class="btn btn--sm btn--primary" id="group-confirm-btn" disabled>Group Selected</button>
             <button class="btn btn--sm btn--outline" id="group-cancel-btn">Cancel</button>
         </div>

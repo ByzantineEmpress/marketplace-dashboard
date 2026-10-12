@@ -3297,3 +3297,58 @@ body[data-card-view="table"] .listing-grid {
 .pc-shutter:active { background: #fff; }
 .bp-photo-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .bp-photo-actions .btn { min-height: 44px; }
+
+/* -- Bulk cost of goods, in the selection bar ---------------------------- */
+.bulk-cost {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-left: 10px;
+    margin-left: 4px;
+    border-left: 1px solid var(--border);
+    flex-wrap: wrap;
+}
+.bulk-cost-modes {
+    display: flex;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+.bulk-cost-mode {
+    border: 0;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 5px 10px;
+    cursor: pointer;
+}
+.bulk-cost-mode.is-active {
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+}
+.bulk-cost-symbol { color: var(--text-muted); font-size: 13px; }
+.bulk-cost-amount {
+    width: 88px;
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+}
+/* The preview is the reassurance, so it reads as a sentence rather than a number. */
+.bulk-cost-preview {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+.bulk-cost-msg { font-size: 12px; }
+.bulk-cost-msg.is-error { color: var(--danger-text); }
+.bulk-cost-msg.is-ok { color: var(--success-text); }
+@media (max-width: 640px) {
+    .bulk-cost { border-left: 0; padding-left: 0; margin-left: 0; width: 100%; }
+    .bulk-cost-amount { flex: 1; min-width: 92px; font-size: 16px; }
+    .bulk-cost-mode { padding: 8px 12px; }
+}

@@ -4061,7 +4061,11 @@ async def bulk_cost(body: dict, db: Session = Depends(get_db),
     # Divided, not apportioned with a remainder: a third of $1.00 is 33c and a cent
     # goes unassigned, which is better than one listing silently costing a cent more
     # than the others.
-    each = amount_cents if mode == "each" else int(round(amount_cents / len(rows)))
+    # Half-up on integer cents, not round(): Python rounds halves to even, so $1.00
+    # over 8 would store 12c while the page's preview (JavaScript, half-up) promised
+    # 13c. The preview has to match what is stored.
+    each = (amount_cents if mode == "each"
+            else (amount_cents + len(rows) // 2) // len(rows))
     for row in rows:
         row.purchase_price_cents = each
     db.commit()
