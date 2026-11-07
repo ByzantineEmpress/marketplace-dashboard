@@ -1,15 +1,22 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="bp">
+<div class="page">
 
-    <div class="bp-head">
-        <h1>List a Book on eBay</h1>
-        <p class="bp-sub">
-            Photograph the barcode, or type the ISBN. Everything below is filled
-            from the catalogue and is yours to correct before anything is created.
-        </p>
-    </div>
+    <header class="page-head">
+        <div>
+            <h1>List a Book on eBay</h1>
+            <p class="page-sub">
+                Photograph the barcode, or type the ISBN. Everything below is filled
+                from the catalogue and is yours to correct before anything is created.
+            </p>
+        </div>
+        {# The next step after listing is reviewing it, so that door is on this page
+           rather than only in the navigation bar. #}
+        <div class="page-head-actions">
+            <a href="/books/drafts" class="btn btn--outline">View drafts</a>
+        </div>
+    </header>
 
     {# Step 1: get an ISBN, by photo or by hand. #}
     <section class="bp-card">

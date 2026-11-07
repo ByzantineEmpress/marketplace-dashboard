@@ -281,6 +281,49 @@ class DeletionNotificationTest(unittest.TestCase):
         self.assertIn("acknowledged", block)
 
 
+class SiteCohesionTest(unittest.TestCase):
+    """The pages used to be four separate products sharing a colour scheme: each
+    invented its own header classes, the navigation mixed tasks with account
+    controls, two links highlighted at once, and the dashboard linked nowhere."""
+
+    @staticmethod
+    def _read(rel):
+        import pathlib
+        return pathlib.Path(__file__).resolve().parent.parent.joinpath(rel).read_text(
+            encoding="utf-8")
+
+    def test_every_tool_page_uses_the_shared_header(self):
+        for name in ("books.html", "book_drafts.html", "book_draft_edit.html",
+                     "marketplace_settings.html"):
+            html = self._read("templates/" + name)
+            self.assertIn("page-head", html, name)
+            self.assertIn("page-sub", html, name)
+            # The bespoke headers are gone, not merely supplemented.
+            for legacy in ('class="bp-head"', 'class="bd-head"'):
+                self.assertNotIn(legacy, html, name + " still has " + legacy)
+
+    def test_the_navigation_is_grouped_and_the_account_is_separated(self):
+        nav = self._read("templates/base.html")
+        self.assertIn("nav-group", nav)
+        self.assertIn("nav-group--account", nav)
+        # A developer reference does not belong between task links.
+        links_block = nav.split('class="nav-links"')[1].split("</nav>")[0]
+        self.assertNotIn("/api/docs", links_block)
+        self.assertIn("/api/docs", nav)          # still reachable, in the footer
+
+    def test_no_two_nav_links_share_an_active_state(self):
+        """Both book links used to test for 'books', so both highlighted together."""
+        nav = self._read("templates/base.html")
+        import re
+        keys = re.findall(r"active == '([a-z-]+)'", nav)
+        self.assertEqual(len(keys), len(set(keys)), "duplicate active key: " + str(keys))
+
+    def test_the_dashboard_offers_a_way_to_every_main_task(self):
+        page = self._read("templates/dashboard.html")
+        for target in ("/books", "/books/drafts", "/marketplace-settings"):
+            self.assertIn('href="' + target + '"', page)
+
+
 class BulkCostUITest(unittest.TestCase):
     """The dashboard controls for bulk cost of goods."""
 

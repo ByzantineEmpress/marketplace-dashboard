@@ -1,17 +1,20 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="bd">
+<div class="page">
 
-    <div class="bd-head">
+    <header class="page-head">
         <div>
             <h1>Book Drafts</h1>
-            <p class="bd-sub">
+            <p class="page-sub">
                 Your unpublished eBay offers. Nothing here is on sale yet.
             </p>
         </div>
-        <a href="/books" class="btn btn--primary">List another book</a>
-    </div>
+        <div class="page-head-actions">
+            <a href="/dashboard" class="btn btn--outline">Dashboard</a>
+            <a href="/books" class="btn btn--primary">List another book</a>
+        </div>
+    </header>
 
     <div class="bd-note">
         <strong>Why this page exists.</strong> eBay's own drafts list does not show

@@ -14,14 +14,22 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="dashboard">
+<div class="page">
+    <header class="page-head">
+        <div>
+            <h1>My Marketplace Accounts</h1>
+            <p class="page-sub">
+                Connect the marketplaces <strong>you</strong> sell on. These credentials
+                belong to your account only &mdash; nobody else on this instance can see
+                them or sync with them.
+            </p>
+        </div>
+        <div class="page-head-actions">
+            <a href="/dashboard" class="btn btn--outline">Dashboard</a>
+        </div>
+    </header>
+
     <div class="login-card" style="max-width: 720px; margin: 0 auto;">
-        <h1>My Marketplace Accounts</h1>
-        <p class="section-desc" style="margin-bottom: 14px;">
-            Connect the marketplaces <strong>you</strong> sell on. These credentials
-            belong to your account only &mdash; nobody else on this instance can see
-            them or sync with them.
-        </p>
         <p class="section-desc" style="margin-bottom: 14px;">
             <strong>Google Books</strong> is the exception below: it is not a
             marketplace and has nothing to connect. It is a lookup key used by the

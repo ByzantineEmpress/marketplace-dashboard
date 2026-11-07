@@ -40,27 +40,36 @@
             <span class="nav-title">Marketplace Dashboard</span>
         </div>
         <div class="nav-links" id="nav-links">
-            {% if identity %}
-            <span class="nav-identity" title="Signed in as">{{ identity }}</span>
-            <button type="button" id="signout-btn" class="nav-signout" title="Sign out of this browser">Sign out</button>
-            {% endif %}
-            <a href="/dashboard" class="nav-link{% if active == 'dashboard' %} active{% endif %}">Dashboard</a>
-            {% if identity %}
-            {# Per-user: everyone links their own marketplace accounts. This is
-               deliberately outside the admin check below, since needing an
-               administrator to do it was the original bug. #}
-            <a href="/marketplace-settings" class="nav-link{% if active == 'marketplace' %} active{% endif %}">My Accounts</a>
-            <a href="/books" class="nav-link{% if active == 'books' %} active{% endif %}">List a Book</a>
-            <a href="/books/drafts" class="nav-link{% if active == 'books' %} active{% endif %}">Book Drafts</a>
-            {% endif %}
+            {# Grouped by task, and ordered by it: what you came to do, then the
+               admin tools, then your own account. A flat row of eight links -- with
+               sign-out and API docs in the middle of it -- made the site read as a
+               set of unrelated tools rather than one place to work. #}
+            <div class="nav-group">
+                <a href="/dashboard" class="nav-link{% if active == 'dashboard' %} active{% endif %}">Dashboard</a>
+                {% if identity %}
+                <a href="/books" class="nav-link{% if active == 'sell-book' %} active{% endif %}">List a Book</a>
+                <a href="/books/drafts" class="nav-link{% if active == 'drafts' %} active{% endif %}">Book Drafts</a>
+                {% endif %}
+            </div>
             {% if is_admin is not defined or is_admin %}
-            <a href="/admin" class="nav-link{% if active == 'admin' %} active{% endif %}">Admin</a>
+            <div class="nav-group">
+                <a href="/admin" class="nav-link{% if active == 'admin' %} active{% endif %}">Admin</a>
+            </div>
             {% endif %}
-            <a href="/api/docs" class="nav-link nav-link--api" target="_blank" rel="noopener">API Docs</a>
-            <button type="button" id="theme-toggle" class="theme-toggle" title="Toggle dark/light mode" aria-label="Toggle theme">
-                <svg id="theme-icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-                <svg id="theme-icon-moon" viewBox="0 0 24 24" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-            </button>
+            <div class="nav-group nav-group--account">
+                {% if identity %}
+                {# Per-user: everyone links their own marketplace accounts. This is
+                   deliberately outside the admin check above, since needing an
+                   administrator to do it was the original bug. #}
+                <a href="/marketplace-settings" class="nav-link{% if active == 'marketplace' %} active{% endif %}">My Accounts</a>
+                <span class="nav-identity" title="Signed in as">{{ identity }}</span>
+                <button type="button" id="signout-btn" class="nav-signout" title="Sign out of this browser">Sign out</button>
+                {% endif %}
+                <button type="button" id="theme-toggle" class="theme-toggle" title="Toggle dark/light mode" aria-label="Toggle theme">
+                    <svg id="theme-icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                    <svg id="theme-icon-moon" viewBox="0 0 24 24" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                </button>
+            </div>
         </div>
         <button type="button" class="nav-burger" id="nav-burger" aria-label="Open menu" aria-expanded="false" aria-controls="nav-links">
             <span></span><span></span><span></span>
@@ -115,7 +124,10 @@
     <!-- ========== Footer ========== -->
     <footer class="footer">
         <p>v0.2 — Built with Python + FastAPI + SQLite ·
-            <a href="/privacy" style="color: var(--text-muted); text-decoration: underline;">Privacy Policy</a>
+            <a href="/privacy" style="color: var(--text-muted); text-decoration: underline;">Privacy Policy</a> ·
+            {# A developer reference, not something you came here to do. It sat between
+               "Book Drafts" and the theme toggle, which is no place for it. #}
+            <a href="/api/docs" target="_blank" rel="noopener" style="color: var(--text-muted); text-decoration: underline;">API Docs</a>
         </p>
     </footer>
 

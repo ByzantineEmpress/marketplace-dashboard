@@ -3352,3 +3352,113 @@ body[data-card-view="table"] .listing-grid {
     .bulk-cost-amount { flex: 1; min-width: 92px; font-size: 16px; }
     .bulk-cost-mode { padding: 8px 12px; }
 }
+
+/* -- Shared page shell ---------------------------------------------------- */
+/*
+   Every tool page invented its own header and container: .bp-head, .bd-head,
+   .login-card inside .dashboard, and so on. They looked like four products because
+   they were built as four. This is the one shell they share.
+*/
+.page {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 22px 16px 64px;
+    /* Same flex column the per-page containers used, so children keep their
+       spacing instead of stacking flush against each other. */
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.page-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+.page-head h1 {
+    margin: 0;
+    font-size: 23px;
+    font-weight: 680;
+    letter-spacing: -0.015em;
+    line-height: 1.25;
+    color: var(--text);
+}
+.page-sub {
+    margin: 5px 0 0;
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--text-muted);
+    max-width: 64ch;
+}
+.page-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+/* A step marker, so a multi-step page says where you are rather than making you
+   infer it from the form. */
+.page-step {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--accent-text);
+    background: var(--accent-soft);
+    border-radius: 999px;
+    padding: 3px 10px;
+    margin-bottom: 8px;
+}
+
+/* -- Navigation groups ---------------------------------------------------- */
+.nav-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+.nav-group + .nav-group {
+    margin-left: 6px;
+    padding-left: 10px;
+    border-left: 1px solid var(--border);
+}
+/* Your account and theme sit at the far end: reachable, never competing with the
+   things you came to do. */
+.nav-group--account { margin-left: auto; }
+@media (max-width: 860px) {
+    .nav-group + .nav-group { border-left: 0; padding-left: 0; margin-left: 0; }
+    .nav-group--account { margin-left: 0; }
+}
+@media (max-width: 640px) {
+    .page { padding: 18px 14px 44px; }
+    .page-head h1 { font-size: 20px; }
+}
+
+/* -- Dashboard quick actions --------------------------------------------- */
+.quick-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+.quick-actions .btn { min-height: 38px; }
+
+/* -- Dashboard shell ------------------------------------------------------ */
+/*
+   .dashboard was the one page wrapper with no style at all, so the listing grid
+   spanned the full 1400px .main-content while every form page sat in a 900-960px
+   column: the content width changed as you moved between pages, which is a large
+   part of why the site read as separate tools.
+
+   Wide is right for a grid of listing cards -- it is a deliberate difference from
+   the form pages, not an accident -- so it keeps the width and gains the same
+   centring and padding everything else has.
+*/
+.dashboard {
+    width: 100%;
+    max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+}

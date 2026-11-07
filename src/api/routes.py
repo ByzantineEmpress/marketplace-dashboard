@@ -397,7 +397,7 @@ async def books_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="books.html",
-        context={"identity": user["name"], "active": "books",
+        context={"identity": user["name"], "active": "sell-book",
                  "title": "List a Book",
                  "package_presets": get_adapter("ebay").BOOK_PACKAGE_PRESETS},
     )
@@ -417,7 +417,7 @@ async def book_drafts_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="book_drafts.html",
-        context={"identity": user["name"], "active": "books",
+        context={"identity": user["name"], "active": "drafts",
                  "title": "Book Drafts"},
     )
 
@@ -431,7 +431,7 @@ async def book_draft_edit_page(request: Request, offer_id: str):
     return templates.TemplateResponse(
         request=request,
         name="book_draft_edit.html",
-        context={"identity": user["name"], "active": "books",
+        context={"identity": user["name"], "active": "drafts",
                  "title": "Edit Draft", "offer_id": offer_id},
     )
 

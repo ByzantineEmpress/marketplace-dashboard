@@ -1,14 +1,19 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="bp" id="be-root" data-offer-id="{{ offer_id }}">
+<div class="page" id="be-root" data-offer-id="{{ offer_id }}">
 
-    <div class="bp-head">
-        <h1>Edit Draft</h1>
-        <p class="bp-sub">
-            Changes are saved to the draft only. Nothing is published from this page.
-        </p>
-    </div>
+    <header class="page-head">
+        <div>
+            <h1>Edit Draft</h1>
+            <p class="page-sub">
+                Changes are saved to the draft only. Nothing is published from this page.
+            </p>
+        </div>
+        <div class="page-head-actions">
+            <a href="/books/drafts" class="btn btn--outline">Back to drafts</a>
+        </div>
+    </header>
 
     <p class="bp-status" id="be-status"></p>
 

@@ -5,6 +5,15 @@
 
 {% block content %}
 <div class="dashboard">
+    {# The dashboard was an island: it linked to no other page at all, so the only
+       way anywhere was the navigation bar. These are the three things you actually
+       do next, and they belong on the page you land on. #}
+    <div class="quick-actions">
+        <a href="/books" class="btn btn--primary">List a Book</a>
+        <a href="/books/drafts" class="btn btn--outline">Book Drafts</a>
+        <a href="/marketplace-settings" class="btn btn--outline">My Accounts</a>
+    </div>
+
     <!-- Metrics header & time filter -->
     <div class="metrics-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
         <div style="display: flex; align-items: center; gap: 8px;">
