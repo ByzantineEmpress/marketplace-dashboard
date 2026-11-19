@@ -219,7 +219,7 @@ class MarketplaceApiTest(unittest.TestCase):
         # 3. Invalid email rejected with redirect error
         res_invalid = self.client.post(
             "/auth/google/dev-login",
-            data={"email": "notanemail", "name": "Fake"},
+            data={"email": "notanemail", "name": "Fake", "csrf_token": self.client.cookies.get("form_csrf")},
             follow_redirects=False,
         )
         self.assertEqual(res_invalid.status_code, 303)
@@ -231,7 +231,7 @@ class MarketplaceApiTest(unittest.TestCase):
             config.GOOGLE_ALLOWED_EMAILS = ["allowed@example.com"]
             res_denied = self.client.post(
                 "/auth/google/dev-login",
-                data={"email": "denied@example.com", "name": "Denied"},
+                data={"email": "denied@example.com", "name": "Denied", "csrf_token": self.client.cookies.get("form_csrf")},
                 follow_redirects=False,
             )
             self.assertEqual(res_denied.status_code, 303)
@@ -243,7 +243,7 @@ class MarketplaceApiTest(unittest.TestCase):
         test_email = "test.developer@example.com"
         res_login = self.client.post(
             "/auth/google/dev-login",
-            data={"email": test_email, "name": "Test Developer"},
+            data={"email": test_email, "name": "Test Developer", "csrf_token": self.client.cookies.get("form_csrf")},
             follow_redirects=False,
         )
         self.assertEqual(res_login.status_code, 303)
@@ -379,9 +379,10 @@ class MarketplaceApiTest(unittest.TestCase):
         invited_email = "newmember@example.com"
         # Ensure cookie is kept in client session
         self.client.cookies.set("pending_invite", new_invite_code)
+        self.client.get("/auth/google/dev-picker")
         login_res = self.client.post(
             "/auth/google/dev-login",
-            data={"email": invited_email, "name": "New Member"},
+            data={"email": invited_email, "name": "New Member", "csrf_token": self.client.cookies.get("form_csrf")},
             follow_redirects=False,
         )
         self.assertEqual(login_res.status_code, 303)

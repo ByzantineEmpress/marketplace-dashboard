@@ -69,6 +69,21 @@ class CsrfTokenExtension(Extension):
 templates = Jinja2Templates(directory="templates")
 templates.env.add_extension(CsrfTokenExtension)
 
+
+def _set_form_csrf_cookie(response, token: str):
+    response.set_cookie("form_csrf", token, httponly=True, samesite="strict",
+                        secure=config.REQUIRE_HTTPS, max_age=3600, path="/")
+    return response
+
+
+def _require_form_csrf(request: Request, body) -> None:
+    cookie = request.cookies.get("form_csrf", "")
+    submitted = body.get("csrf_token", "")
+    if (not isinstance(submitted, str) or len(submitted) != 32 or len(cookie) != 32
+            or not submitted.isascii() or not cookie.isascii()
+            or not secrets.compare_digest(cookie, submitted)):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
 # ------------------------------------------------------------------ #
 #  Database helper — every route that needs a DB gets one.
 # ------------------------------------------------------------------ #
@@ -291,7 +306,7 @@ async def login_page(request: Request):
     error = request.query_params.get("error", "")
     invited_to = request.query_params.get("invited_to", "")
     csrf_token = secrets.token_hex(16)
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request=request,
         name="login.html",
         context={
@@ -304,6 +319,7 @@ async def login_page(request: Request):
             "csrf_token": csrf_token,
         },
     )
+    return _set_form_csrf_cookie(response, csrf_token)
 
 
 @page_router.get("/signup")
@@ -314,17 +330,19 @@ async def signup_page(request: Request):
     /onboarding then asks whether to start a workspace or request to join one.
     """
     import secrets
-    return templates.TemplateResponse(
+    csrf_token = secrets.token_hex(16)
+    response = templates.TemplateResponse(
         request=request,
         name="signup.html",
         context={
             "error": request.query_params.get("error", ""),
             "invited_to": request.query_params.get("invited_to", ""),
             "google_enabled": bool(config.GOOGLE_CLIENT_ID or config.GOOGLE_DEV_MODE),
-            "csrf_token": secrets.token_hex(16),
+            "csrf_token": csrf_token,
             "min_password_length": MIN_PASSWORD_LENGTH,
         },
     )
+    return _set_form_csrf_cookie(response, csrf_token)
 
 
 @page_router.get("/join/{invite_code}")
@@ -529,11 +547,12 @@ async def google_dev_picker(request: Request):
     import secrets
     error = request.query_params.get("error", "")
     csrf_token = secrets.token_hex(16)
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request=request,
         name="google_dev_picker.html",
         context={"error": error, "csrf_token": csrf_token},
     )
+    return _set_form_csrf_cookie(response, csrf_token)
 
 
 @page_router.post("/auth/google/dev-login")
@@ -542,6 +561,7 @@ async def google_dev_login(request: Request):
     if not config.GOOGLE_DEV_MODE:
         raise HTTPException(status_code=403, detail="Google dev mode is disabled")
     form = await request.form()
+    _require_form_csrf(request, form)
     email = (form.get("email") or "").strip().lower()
     name = (form.get("name") or "").strip() or email.split("@")[0].capitalize()
 
@@ -1052,6 +1072,9 @@ async def login(request: Request):
     except Exception:
         body = {}
 
+    if not is_json:
+        _require_form_csrf(request, body)
+
     username = str(body.get("username", "")).strip()
     password = str(body.get("password", ""))
 
@@ -1146,6 +1169,9 @@ async def signup(request: Request):
         body = await request.json() if is_json else dict(await request.form())
     except Exception:
         body = {}
+
+    if not is_json:
+        _require_form_csrf(request, body)
 
     def failure(message: str, status: int = 400):
         if is_json:

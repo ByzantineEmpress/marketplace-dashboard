@@ -428,9 +428,10 @@ class EmailVerificationTest(unittest.TestCase):
 
     def test_failed_form_login_explains_what_to_try(self):
         """A generic 401 is unhelpful; the form path should guide the user."""
+        self.client.get("/login")
         res = self.client.post(
             "/api/auth/login",
-            data={"username": "nobody@example.com", "password": "wrong"},
+            data={"username": "nobody@example.com", "password": "wrong", "csrf_token": self.client.cookies.get("form_csrf")},
             follow_redirects=False,
         )
         self.assertEqual(res.status_code, 303)

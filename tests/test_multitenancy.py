@@ -252,9 +252,10 @@ class MultiTenancyTest(unittest.TestCase):
         their own workspace, never inside Alice's or Bob's.
         """
         new_email = f"clara_{secrets.token_hex(4)}@test.com"
+        self.client.get("/auth/google/dev-picker")
         res = self.client.post(
             "/auth/google/dev-login",
-            data={"email": new_email, "name": "Clara"},
+            data={"email": new_email, "name": "Clara", "csrf_token": self.client.cookies.get("form_csrf")},
             follow_redirects=False,
         )
         # New accounts are routed to the onboarding chooser, not the dashboard.
@@ -313,7 +314,8 @@ class MultiTenancyTest(unittest.TestCase):
         self.client.get(f"/join/{self.team_a.invite_code}")
 
         # Complete sign-in
-        res = self.client.post("/auth/google/dev-login", data={"email": david_email, "name": "David"})
+        self.client.get("/auth/google/dev-picker")
+        res = self.client.post("/auth/google/dev-login", data={"email": david_email, "name": "David", "csrf_token": self.client.cookies.get("form_csrf")})
         self.assertEqual(res.status_code, 200)
 
         david_user = self.db.query(User).filter(User.email == david_email).first()
